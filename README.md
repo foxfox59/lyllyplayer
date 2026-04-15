@@ -2,6 +2,8 @@
 
 © MuiluFox 2026
 
+**[See it in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**
+
 A multi-function desktop audio player with minimal external requirements: **ffmpeg** for any audio output, and **yt-dlp** for Youtube functionality.
 Supports login cookies from browser if you have **node.js**, but not required for playback in most cases.  
 Supports either pasting a direct Youtube playlist ID/URL or searching from Youtube.  
