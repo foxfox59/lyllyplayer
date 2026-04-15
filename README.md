@@ -13,6 +13,10 @@ This is partially an experiment in how far can I push things before the codebase
 Also a test of patience - many things would have been faster fixed by hand but I deliberately chose not to.
 **Exit now or accept that.**
 
+## Some screenshots of the app in action 
+
+**[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)**
+
 ## Quick preface before the machine overlords take over
 
 Hi!
