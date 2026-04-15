@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Version>1.1.0</Version>
+    <AssemblyTitle>LyllyPlayer</AssemblyTitle>
+    <Product>LyllyPlayer</Product>
+    <Company>LyllyPlayer</Company>
+    <Description>LyllyPlayer music player</Description>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
+    <OutputType>WinExe</OutputType>
+    <!-- net8.0-windows: WPF on Windows 10+. Local build/run uses the shared runtime if installed (no bundled runtime). -->
+    <!-- Shipping to bare Windows (no .NET SDK/runtime): only dotnet publish with Win10-SelfContained.pubxml or repo-root publish-win10-selfcontained.cmd. -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>LyllyPlayer</AssemblyName>
+    <RootNamespace>LyllyPlayer</RootNamespace>
+    <ApplicationIcon>Assets\LyllyPlayer.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Keep DPI behavior declared in app.manifest; suppress SDK warning about alternative configuration paths. -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+
+  <!-- Debug: separate obj/bin trees (avoids MSB3026 when something locks the default bin\Debug\… output).
+       UseAppHost=true so the output includes LyllyPlayer.exe — `dotnet run` and Task Manager show the app name, not only ".NET Host". -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <UseAppHost>true</UseAppHost>
+    <OutputPath>bin\DebugDev\net8.0-windows\</OutputPath>
+    <IntermediateOutputPath>obj\DebugDev\net8.0-windows\</IntermediateOutputPath>
+  </PropertyGroup>
+
+  <!-- Release (no PublishProfile): native apphost + same assembly metadata as Debug. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' And '$(PublishProfile)' == ''">
+    <UseAppHost>true</UseAppHost>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="2.0.1" />
+    <PackageReference Include="NAudio" Version="2.3.0" />
+    <PackageReference Include="taglib-sharp-netstandard2.0" Version="2.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Ensure .ico is packaged so Window Icon can load it -->
+    <Resource Include="Assets\LyllyPlayer.ico" />
+    <Resource Include="Assets\Background.png" />
+    <Resource Include="Assets\icon-128.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\icon-128.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

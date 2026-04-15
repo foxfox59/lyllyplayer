@@ -1,0 +1,1137 @@
+<Application x:Class="LyllyPlayer.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+             xmlns:local="clr-namespace:LyllyPlayer"
+             xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+             ShutdownMode="OnMainWindowClose"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <!-- Global look & feel -->
+        <!-- Provide fallbacks in case Consolas isn't available. -->
+        <FontFamily x:Key="App.MonoFont">Consolas, Cascadia Mono, Courier New</FontFamily>
+        <!-- Thin window borders: updated at runtime (see ApplyWindowBorderFromSettings). -->
+        <sys:Boolean x:Key="App.Theme.WindowChromeSnapsToDevicePixels">True</sys:Boolean>
+        <sys:Boolean x:Key="App.Theme.WindowChromeRoundedClipEnabled">True</sys:Boolean>
+        <sys:Double x:Key="App.Theme.WindowChromeStrokeWidth">0</sys:Double>
+
+        <!-- Window background brush (applies to all windows; can be overridden at runtime) -->
+        <ImageBrush x:Key="App.Brush.DefaultWindowBgImage"
+                    ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"
+                    Stretch="Fill"
+                    AlignmentX="Center"
+                    AlignmentY="Center"/>
+
+        <!-- Current background brush used by windows (updated via settings) -->
+        <ImageBrush x:Key="App.Brush.WindowBgImage"
+                    ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"
+                    Stretch="Fill"
+                    AlignmentX="Center"
+                    AlignmentY="Center"/>
+
+        <!-- Raw image background (no scrim). Used for 'From image' color sampling. -->
+        <ImageBrush x:Key="App.Brush.WindowBgImageRaw"
+                    ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"
+                    Stretch="Fill"
+                    AlignmentX="Center"
+                    AlignmentY="Center"/>
+
+        <!-- Global UI scale (used by window template) -->
+        <ScaleTransform x:Key="App.UiScaleTransform" ScaleX="1.0" ScaleY="1.0"/>
+
+        <!-- Window frame border (updated from theme settings; 0 = none) -->
+        <Thickness x:Key="App.Theme.WindowBorderThickness">0</Thickness>
+        <!-- Uniform chrome stroke (WPF draws consistent inner/outer joins); top band covered by title bar padding. -->
+        <Thickness x:Key="App.Theme.WindowBorderThicknessNoTop">0</Thickness>
+        <Thickness x:Key="App.Theme.WindowChromeContentMargin">0</Thickness>
+        <!-- Title bar chrome: top Padding + horizontal ContentMargin (see ApplyWindowBorderFromSettings). -->
+        <Thickness x:Key="App.Theme.WindowChromeBodyInsetMargin">0</Thickness>
+        <Thickness x:Key="App.Theme.WindowChromeInsetMargin">0</Thickness>
+        <Thickness x:Key="App.Theme.WindowBorderThicknessNegativeSides">0</Thickness>
+        <Thickness x:Key="App.Theme.WindowChromeTitleBarPadding">0</Thickness>
+        <Thickness x:Key="App.Theme.WindowChromeTitleBarContentMargin">12,0,12,0</Thickness>
+        <Thickness x:Key="App.Theme.WindowBorderThicknessNoBottom">0</Thickness>
+        <CornerRadius x:Key="App.Theme.WindowCornerRadiusOuter">8</CornerRadius>
+        <CornerRadius x:Key="App.Theme.WindowCornerRadiusOuterTopOnly">8,8,0,0</CornerRadius>
+        <CornerRadius x:Key="App.Theme.WindowCornerRadiusOuterBottomOnly">0,0,8,8</CornerRadius>
+        <CornerRadius x:Key="App.Theme.WindowCornerRadiusInner">8</CornerRadius>
+        <CornerRadius x:Key="App.Theme.WindowCornerRadiusInnerTopOnly">8,8,0,0</CornerRadius>
+        <CornerRadius x:Key="App.Theme.WindowCornerRadiusInnerBottomOnly">0,0,8,8</CornerRadius>
+
+        <!-- Legacy palette keys (kept for compatibility; prefer SystemColors keys below) -->
+        <SolidColorBrush x:Key="App.Brush.WindowBg" Color="#FF121212"/>
+        <SolidColorBrush x:Key="App.Brush.PanelBg" Color="#CC1B1B1B"/>
+        <SolidColorBrush x:Key="App.Brush.ControlBg" Color="#CC232323"/>
+        <SolidColorBrush x:Key="App.Brush.ControlBgHover" Color="#D62B2B2B"/>
+        <SolidColorBrush x:Key="App.Brush.ControlBgPressed" Color="#E0303030"/>
+        <SolidColorBrush x:Key="App.Brush.Border" Color="#FF3A3A3A"/>
+        <SolidColorBrush x:Key="App.Brush.Text" Color="#FFE6E6E6"/>
+        <SolidColorBrush x:Key="App.Brush.SubtleText" Color="#FFB8B8B8"/>
+        <!-- Subtle selection / accent (keep it dark to avoid "neon" selection) -->
+        <SolidColorBrush x:Key="App.Brush.Selection" Color="#FF2A2A2C"/>
+        <SolidColorBrush x:Key="App.Brush.SelectionBorder" Color="#FF5C5C5E"/>
+        <SolidColorBrush x:Key="App.Brush.Accent" Color="#FF4A6B8C"/>
+        <SolidColorBrush x:Key="App.Brush.NowPlaying" Color="#FF0F243A"/>
+        <SolidColorBrush x:Key="App.Brush.NowPlayingBorder" Color="#FF4A6B8C"/>
+        <Color x:Key="App.Color.Glow">#FF4A6B8C</Color>
+
+        <!-- Map common system brushes used by existing XAML -->
+        <!-- Define actual brushes for these keys to avoid BAML runtime issues. -->
+        <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#FF121212"/>
+        <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#CC232323"/>
+        <SolidColorBrush x:Key="{x:Static SystemColors.ControlLightBrushKey}" Color="#CC1B1B1B"/>
+        <SolidColorBrush x:Key="{x:Static SystemColors.ControlDarkBrushKey}" Color="#FF3A3A3A"/>
+        <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#FFE6E6E6"/>
+        <SolidColorBrush x:Key="{x:Static SystemColors.GrayTextBrushKey}" Color="#FFB8B8B8"/>
+
+        <!-- Defaults (so we can restore after dynamic theme changes) -->
+        <SolidColorBrush x:Key="App.Brush.DefaultControlLight" Color="#CC1B1B1B"/>
+        <SolidColorBrush x:Key="App.Brush.DefaultControlDark" Color="#FF3A3A3A"/>
+        <SolidColorBrush x:Key="App.Brush.DefaultGrayText" Color="#FFB8B8B8"/>
+        <SolidColorBrush x:Key="App.Brush.DefaultHighlight" Color="#FF2A2A2C"/>
+        <SolidColorBrush x:Key="App.Brush.DefaultHighlightText" Color="#FFE6E6E6"/>
+        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#FF2A2A2C"/>
+        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFE6E6E6"/>
+        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#FF2A2A2C"/>
+        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="#FFE6E6E6"/>
+        <!-- HotTrack / menu highlight: Aero defaults are bright blue; override to match app palette. -->
+        <SolidColorBrush x:Key="App.Brush.DefaultHotTrack" Color="#FF2B2B2B"/>
+        <SolidColorBrush x:Key="App.Brush.DefaultMenuHighlight" Color="#FF2A2A2C"/>
+        <SolidColorBrush x:Key="{x:Static SystemColors.HotTrackBrushKey}" Color="#FF2B2B2B"/>
+        <SolidColorBrush x:Key="{x:Static SystemColors.MenuHighlightBrushKey}" Color="#FF2A2A2C"/>
+
+        <!-- Semantic theme brushes (dynamic; updated at runtime for 'From image') -->
+        <SolidColorBrush x:Key="App.Theme.Foreground" Color="#FFE6E6E6"/>
+        <SolidColorBrush x:Key="App.Theme.ForegroundSubtle" Color="#FFB8B8B8"/>
+        <!-- Spectrum frequency grid: dark, low-contrast rules (runtime theme replaces with palette-aware color). -->
+        <SolidColorBrush x:Key="App.Theme.SpectrumGridLine" Color="#FF4A4A4A"/>
+        <SolidColorBrush x:Key="App.Theme.SpectrumPanelBackground" Color="#CC0A0A0A"/>
+        <SolidColorBrush x:Key="App.Theme.Surface" Color="#CC1B1B1B"/>
+        <SolidColorBrush x:Key="App.Theme.SurfaceRaised" Color="#CC232323"/>
+        <SolidColorBrush x:Key="App.Theme.Border" Color="#FF3A3A3A"/>
+        <!-- Window frame border (active/inactive) -->
+        <SolidColorBrush x:Key="App.Theme.WindowBorderActive" Color="#FF3A3A3A"/>
+        <SolidColorBrush x:Key="App.Theme.WindowBorderInactive" Color="#FF2E2E2E"/>
+        <SolidColorBrush x:Key="App.Theme.Hover" Color="#D62B2B2B"/>
+        <SolidColorBrush x:Key="App.Theme.Pressed" Color="#E0303030"/>
+        <SolidColorBrush x:Key="App.Theme.Accent" Color="#FF4A6B8C"/>
+        <SolidColorBrush x:Key="App.Theme.AccentText" Color="#FFE6E6E6"/>
+        <Color x:Key="App.Theme.AccentColor">#FF4A6B8C</Color>
+        <SolidColorBrush x:Key="App.Theme.Selection" Color="#FF2A2A2C"/>
+        <SolidColorBrush x:Key="App.Theme.SelectionBorder" Color="#FF5C5C5E"/>
+        <SolidColorBrush x:Key="App.Theme.SelectionText" Color="#FFE6E6E6"/>
+        <!-- TextBox/caret selection: stronger contrast vs SurfaceRaised than list Selection (runtime theme replaces). -->
+        <SolidColorBrush x:Key="App.Theme.TextSelection" Color="#FF303F50"/>
+        <SolidColorBrush x:Key="App.Theme.TextSelectionText" Color="#FFE6E6E6"/>
+        <!-- Opaque surfaces for popups/menus (avoid click-through when user sets background alpha low). -->
+        <SolidColorBrush x:Key="App.Theme.PopupSurface" Color="#FF1B1B1B"/>
+        <SolidColorBrush x:Key="App.Theme.PopupSurfaceRaised" Color="#FF232323"/>
+
+        <!-- Custom title bar -->
+        <SolidColorBrush x:Key="App.Theme.TitleBarActive" Color="#CC1B1B1B"/>
+        <SolidColorBrush x:Key="App.Theme.TitleBarInactive" Color="#CC1B1B1B"/>
+        <SolidColorBrush x:Key="App.Theme.TitleBarTextActive" Color="#FFE6E6E6"/>
+        <SolidColorBrush x:Key="App.Theme.TitleBarTextInactive" Color="#FFB8B8B8"/>
+
+        <!-- Default text + monospace -->
+        <Style TargetType="{x:Type TextElement}">
+            <Setter Property="FontFamily" Value="{StaticResource App.MonoFont}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+        </Style>
+        <Style TargetType="{x:Type TextBlock}">
+            <Setter Property="FontFamily" Value="{StaticResource App.MonoFont}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+        </Style>
+        <Style TargetType="{x:Type Label}">
+            <Setter Property="FontFamily" Value="{StaticResource App.MonoFont}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+        </Style>
+        <!-- Make *all* UI elements slightly transparent (borders/panels too).
+             Window is explicitly overridden to stay fully opaque. -->
+        <Style TargetType="{x:Type FrameworkElement}">
+            <Setter Property="Opacity" Value="1.0"/>
+        </Style>
+        <!-- Replaces WPF default dotted blue focus with theme SelectionBorder -->
+        <Style x:Key="App.FocusVisual.Theme">
+            <Setter Property="Control.Template">
+                <Setter.Value>
+                    <ControlTemplate>
+                        <Rectangle Margin="2"
+                                   SnapsToDevicePixels="True"
+                                   Stroke="{DynamicResource App.Theme.SelectionBorder}"
+                                   StrokeThickness="1"
+                                   StrokeDashArray="1 2"
+                                   RadiusX="2"
+                                   RadiusY="2"
+                                   Fill="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="{x:Type Control}">
+            <Setter Property="FontFamily" Value="{StaticResource App.MonoFont}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+        </Style>
+        <!-- Transparent window + opaque inner Border matches rounded chrome (opaque HWND clips corners when AllowsTransparency is false). -->
+        <Style TargetType="{x:Type Window}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="FontFamily" Value="{StaticResource App.MonoFont}"/>
+            <Setter Property="Opacity" Value="1.0"/>
+            <Setter Property="WindowStyle" Value="None"/>
+            <!-- Default: all windows are fixed-size. PlaylistWindow opts into CanResize. -->
+            <Setter Property="ResizeMode" Value="NoResize"/>
+            <Setter Property="AllowsTransparency" Value="True"/>
+            <Setter Property="shell:WindowChrome.WindowChrome">
+                <Setter.Value>
+                    <shell:WindowChrome
+                        CaptionHeight="0"
+                        ResizeBorderThickness="0"
+                        CornerRadius="8"
+                        GlassFrameThickness="0"
+                        UseAeroCaptionButtons="False" />
+                </Setter.Value>
+            </Setter>
+            <!-- Each window supplies its own chrome in Content (avoids a second title strip here). -->
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Window}">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="8" SnapsToDevicePixels="True">
+                            <AdornerDecorator>
+                                <ContentPresenter/>
+                            </AdornerDecorator>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Flat buttons -->
+        <Style TargetType="{x:Type Button}">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <!-- Use a UI font for good Unicode glyph coverage (↻, …, etc.) -->
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="Background" Value="{DynamicResource App.Theme.SurfaceRaised}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.Theme.Hover}"/>
+                                <Setter TargetName="Bd" Property="Effect">
+                                    <Setter.Value>
+                                        <DropShadowEffect Color="#80484848"
+                                                          BlurRadius="14"
+                                                          ShadowDepth="0"
+                                                          Opacity="0.45"/>
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.Theme.Pressed}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Custom chrome caption buttons: square template so adjacent controls do not leave anti-aliased gaps. -->
+        <Style x:Key="App.ChromeTitleBarButton" TargetType="{x:Type Button}">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <!-- Transparent: title bar paint comes from ChromeBar; hover/pressed still tint in template. -->
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderThickness="0"
+                                CornerRadius="0"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.Theme.Hover}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.Theme.Pressed}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Same chrome template, but for ToggleButton (Always-on-top etc). -->
+        <Style x:Key="App.ChromeTitleBarToggleButton" TargetType="{x:Type ToggleButton}">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ToggleButton}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderThickness="0"
+                                CornerRadius="0"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.Theme.Hover}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.Theme.Pressed}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Flat toggle buttons (used by Shuffle) -->
+        <!-- IMPORTANT: Keyed so it doesn't affect ComboBox internals. -->
+        <Style x:Key="App.FlatToggleButton" TargetType="{x:Type ToggleButton}">
+            <!-- Skip Aero2 theme ToggleButton chrome (system blue when checked). -->
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <Setter Property="FontFamily" Value="Segoe UI"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="Background" Value="{DynamicResource App.Theme.SurfaceRaised}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ToggleButton}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.Theme.Hover}"/>
+                                <Setter TargetName="Bd" Property="Effect">
+                                    <Setter.Value>
+                                        <DropShadowEffect Color="#80484848"
+                                                          BlurRadius="14"
+                                                          ShadowDepth="0"
+                                                          Opacity="0.45"/>
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.Theme.Pressed}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <!-- IsChecked on the control (not template inner): DynamicResource tracks App.Theme.* brush replacement. -->
+            <Style.Triggers>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.Selection}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.SelectionBorder}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource App.Theme.SelectionText}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Tabs (OptionsWindow): full template so Aero2 TabControl strip does not paint system accent over headers. -->
+        <Style TargetType="{x:Type TabControl}">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type TabControl}">
+                        <Grid KeyboardNavigation.TabNavigation="Local" SnapsToDevicePixels="True">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <TabPanel x:Name="HeaderPanel"
+                                      Grid.Row="0"
+                                      Background="Transparent"
+                                      IsItemsHost="True"
+                                      KeyboardNavigation.TabIndex="1"
+                                      Margin="0,0,0,-1"/>
+                            <Border Grid.Row="1"
+                                    Background="{DynamicResource App.Theme.Surface}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="0,0,4,4"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter x:Name="PART_SelectedContentHost"
+                                                  Margin="0"
+                                                  ContentSource="SelectedContent"
+                                                  SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                            </Border>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Stretch horizontally so * columns fill tab width; keep vertical Top — VerticalContentAlignment=Stretch fights scroll extent and feels erratic. -->
+        <Style TargetType="{x:Type ScrollViewer}">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Top"/>
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+
+        <Style x:Key="App.ScrollBar.Page" TargetType="{x:Type RepeatButton}">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type RepeatButton}">
+                        <Rectangle Fill="{TemplateBinding Background}"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ScrollBar thumbs are defined inline in the ScrollBar templates below so they can truly fill the bar thickness. -->
+
+        <ControlTemplate x:Key="App.Template.ScrollBar.Vertical" TargetType="{x:Type ScrollBar}">
+            <Border x:Name="Chrome"
+                    Width="12"
+                    MinWidth="12"
+                    Background="{DynamicResource App.Theme.PopupSurface}"
+                    CornerRadius="4"
+                    SnapsToDevicePixels="True"
+                    Margin="2,0,0,0">
+                <Track x:Name="PART_Track"
+                       Focusable="False"
+                       IsDirectionReversed="True"
+                       Margin="0">
+                    <Track.DecreaseRepeatButton>
+                        <RepeatButton Command="{x:Static ScrollBar.PageUpCommand}" Style="{StaticResource App.ScrollBar.Page}"/>
+                    </Track.DecreaseRepeatButton>
+                    <Track.Thumb>
+                        <Thumb x:Name="Thumb"
+                               OverridesDefaultStyle="True"
+                               Focusable="False"
+                               IsTabStop="False"
+                               HorizontalAlignment="Stretch"
+                               MinHeight="18">
+                            <Thumb.Template>
+                                <ControlTemplate TargetType="{x:Type Thumb}">
+                                    <Border x:Name="ThumbBd"
+                                            Background="{DynamicResource App.Theme.ForegroundSubtle}"
+                                            Opacity="0.35"
+                                            CornerRadius="4"
+                                            SnapsToDevicePixels="True"/>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="ThumbBd" Property="Opacity" Value="0.55"/>
+                                        </Trigger>
+                                        <Trigger Property="IsDragging" Value="True">
+                                            <Setter TargetName="ThumbBd" Property="Opacity" Value="0.75"/>
+                                        </Trigger>
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter TargetName="ThumbBd" Property="Opacity" Value="0.18"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Thumb.Template>
+                        </Thumb>
+                    </Track.Thumb>
+                    <Track.IncreaseRepeatButton>
+                        <RepeatButton Command="{x:Static ScrollBar.PageDownCommand}" Style="{StaticResource App.ScrollBar.Page}"/>
+                    </Track.IncreaseRepeatButton>
+                </Track>
+            </Border>
+        </ControlTemplate>
+
+        <ControlTemplate x:Key="App.Template.ScrollBar.Horizontal" TargetType="{x:Type ScrollBar}">
+            <Border x:Name="Chrome"
+                    Height="12"
+                    MinHeight="12"
+                    Background="{DynamicResource App.Theme.PopupSurface}"
+                    CornerRadius="4"
+                    SnapsToDevicePixels="True"
+                    Margin="0,2,0,0">
+                <Track x:Name="PART_Track"
+                       Focusable="False"
+                       IsDirectionReversed="False"
+                       Margin="0">
+                    <Track.DecreaseRepeatButton>
+                        <RepeatButton Command="{x:Static ScrollBar.PageLeftCommand}" Style="{StaticResource App.ScrollBar.Page}"/>
+                    </Track.DecreaseRepeatButton>
+                    <Track.Thumb>
+                        <Thumb x:Name="Thumb"
+                               OverridesDefaultStyle="True"
+                               Focusable="False"
+                               IsTabStop="False"
+                               VerticalAlignment="Stretch"
+                               MinWidth="24">
+                            <Thumb.Template>
+                                <ControlTemplate TargetType="{x:Type Thumb}">
+                                    <Border x:Name="ThumbBd"
+                                            Background="{DynamicResource App.Theme.ForegroundSubtle}"
+                                            Opacity="0.35"
+                                            CornerRadius="4"
+                                            SnapsToDevicePixels="True"/>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="ThumbBd" Property="Opacity" Value="0.55"/>
+                                        </Trigger>
+                                        <Trigger Property="IsDragging" Value="True">
+                                            <Setter TargetName="ThumbBd" Property="Opacity" Value="0.75"/>
+                                        </Trigger>
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter TargetName="ThumbBd" Property="Opacity" Value="0.18"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Thumb.Template>
+                        </Thumb>
+                    </Track.Thumb>
+                    <Track.IncreaseRepeatButton>
+                        <RepeatButton Command="{x:Static ScrollBar.PageRightCommand}" Style="{StaticResource App.ScrollBar.Page}"/>
+                    </Track.IncreaseRepeatButton>
+                </Track>
+            </Border>
+        </ControlTemplate>
+
+        <Style TargetType="{x:Type ScrollBar}">
+            <Setter Property="Stylus.IsFlicksEnabled" Value="False"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Width" Value="12"/>
+            <Setter Property="MinWidth" Value="12"/>
+            <Setter Property="Template" Value="{StaticResource App.Template.ScrollBar.Vertical}"/>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Height" Value="12"/>
+                    <Setter Property="MinHeight" Value="12"/>
+                    <Setter Property="Width" Value="Auto"/>
+                    <Setter Property="MinWidth" Value="0"/>
+                    <Setter Property="Template" Value="{StaticResource App.Template.ScrollBar.Horizontal}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="{x:Type TabItem}">
+            <!-- Skip Aero2 TabItem template (selected header uses system highlight blue). -->
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="Background" Value="{DynamicResource App.Theme.SurfaceRaised}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type TabItem}">
+                        <!-- TabPanel draws later headers on top of earlier ones; the right stroke of Border is often covered.
+                             Keep Border for fill + top/left/bottom, and draw the right edge on top. -->
+                        <Grid x:Name="TabHeaderRoot" SnapsToDevicePixels="True">
+                            <Border x:Name="Bd"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="1,1,0,1"
+                                    CornerRadius="4,4,0,0"
+                                    SnapsToDevicePixels="True">
+                                <ContentPresenter x:Name="ContentSite"
+                                                  ContentSource="Header"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  Margin="{TemplateBinding Padding}"/>
+                            </Border>
+                            <Rectangle x:Name="RightEdge"
+                                       Width="1"
+                                       HorizontalAlignment="Right"
+                                       VerticalAlignment="Stretch"
+                                       Margin="0,4,0,0"
+                                       Fill="{TemplateBinding BorderBrush}"
+                                       IsHitTestVisible="False"
+                                       SnapsToDevicePixels="True"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="TabHeaderRoot" Property="Opacity" Value="0.9"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="TabHeaderRoot" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.Selection}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.SelectionBorder}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource App.Theme.SelectionText}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Flat inputs -->
+        <Style TargetType="{x:Type CheckBox}">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="Background" Value="{DynamicResource App.Theme.SurfaceRaised}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type CheckBox}">
+                        <DockPanel LastChildFill="True">
+                            <Border x:Name="Box"
+                                    Width="16"
+                                    Height="16"
+                                    CornerRadius="3"
+                                    BorderThickness="1"
+                                    BorderBrush="{Binding BorderBrush, RelativeSource={RelativeSource TemplatedParent}}"
+                                    Background="{Binding Background, RelativeSource={RelativeSource TemplatedParent}}"
+                                    Margin="0,0,8,0"
+                                    VerticalAlignment="Center">
+                                <Grid>
+                                    <Path x:Name="Tick"
+                                          Data="M 2 8 L 6.2 12.2 L 14 3.5"
+                                          Stroke="{DynamicResource App.Theme.SelectionText}"
+                                          StrokeThickness="2"
+                                          StrokeEndLineCap="Round"
+                                          StrokeStartLineCap="Round"
+                                          Visibility="Collapsed"/>
+                                </Grid>
+                            </Border>
+                            <ContentPresenter VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </DockPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Tick" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.Hover}"/>
+                </Trigger>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.Selection}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.SelectionBorder}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource App.Theme.SelectionText}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="{x:Type RadioButton}">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="Background" Value="{DynamicResource App.Theme.SurfaceRaised}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type RadioButton}">
+                        <DockPanel LastChildFill="True">
+                            <Border x:Name="Outer"
+                                    Width="16"
+                                    Height="16"
+                                    CornerRadius="8"
+                                    BorderThickness="1"
+                                    BorderBrush="{Binding BorderBrush, RelativeSource={RelativeSource TemplatedParent}}"
+                                    Background="{Binding Background, RelativeSource={RelativeSource TemplatedParent}}"
+                                    Margin="0,0,8,0"
+                                    VerticalAlignment="Center"
+                                    SnapsToDevicePixels="True">
+                                <Ellipse x:Name="Dot"
+                                         Width="8"
+                                         Height="8"
+                                         HorizontalAlignment="Center"
+                                         VerticalAlignment="Center"
+                                         Fill="{DynamicResource App.Theme.SelectionText}"
+                                         Visibility="Collapsed"/>
+                            </Border>
+                            <ContentPresenter VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"/>
+                        </DockPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Dot" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.Hover}"/>
+                </Trigger>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.Selection}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.SelectionBorder}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource App.Theme.SelectionText}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Flat TextBox: default WPF template uses system brushes (esp. when disabled) and ignores dynamic theme. -->
+        <Style TargetType="{x:Type TextBox}">
+            <!-- Implicit TextBox style does not merge implicit Control style — set mono explicitly (Buttons still use Segoe). -->
+            <Setter Property="FontFamily" Value="{StaticResource App.MonoFont}"/>
+            <Setter Property="Background" Value="{DynamicResource App.Theme.SurfaceRaised}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="SelectionBrush" Value="{DynamicResource App.Theme.TextSelection}"/>
+            <Setter Property="SelectionTextBrush" Value="{DynamicResource App.Theme.TextSelectionText}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <!-- Vertical Disabled: no vertical scroll / wheel consumption (avoids fighting parent ScrollViewers). Hidden still allows wheel. -->
+            <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="HorizontalScrollBarVisibility" Value="Hidden"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type TextBox}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost"
+                                          Margin="{TemplateBinding Padding}"
+                                          Focusable="False"
+                                          PanningMode="None"
+                                          HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"
+                                          VerticalScrollBarVisibility="{TemplateBinding VerticalScrollBarVisibility}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource App.Theme.SelectionBorder}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="{x:Type ComboBoxItem}">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="Background" Value="{DynamicResource App.Theme.PopupSurfaceRaised}"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,5"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ComboBoxItem}">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsHighlighted" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.Hover}"/>
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.Selection}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.SelectionBorder}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource App.Theme.SelectionText}"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.45"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="{x:Type ComboBox}">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <Setter Property="Background" Value="{DynamicResource App.Theme.SurfaceRaised}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+            <Setter Property="MinHeight" Value="26"/>
+            <!-- Don't let layout/overlays break interaction -->
+            <Setter Property="IsEnabled" Value="True"/>
+            <Setter Property="IsHitTestVisible" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ComboBox}">
+                        <Grid SnapsToDevicePixels="True">
+                            <Popup x:Name="PART_Popup"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   Placement="Bottom"
+                                   Focusable="False"
+                                   AllowsTransparency="True"
+                                   PopupAnimation="Slide">
+                                <Grid MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                      MinWidth="{Binding ActualWidth, ElementName=ComboBorder}">
+                                    <Border x:Name="DropDownBorder"
+                                            Background="{DynamicResource App.Theme.PopupSurface}"
+                                            BorderBrush="{DynamicResource App.Theme.Border}"
+                                            BorderThickness="1"
+                                            CornerRadius="4"
+                                            Margin="0,2,0,0">
+                                        <ScrollViewer Margin="2" SnapsToDevicePixels="True">
+                                            <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                        </ScrollViewer>
+                                    </Border>
+                                </Grid>
+                            </Popup>
+                            <Border x:Name="ComboBorder"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="4">
+                                <Grid>
+                                    <ToggleButton x:Name="ToggleButton"
+                                                  Focusable="False"
+                                                  IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                                  ClickMode="Press"
+                                                  Background="Transparent"
+                                                  BorderThickness="0"
+                                                  HorizontalAlignment="Stretch"
+                                                  VerticalAlignment="Stretch">
+                                        <ToggleButton.Template>
+                                            <ControlTemplate TargetType="{x:Type ToggleButton}">
+                                                <Border Background="Transparent"/>
+                                            </ControlTemplate>
+                                        </ToggleButton.Template>
+                                    </ToggleButton>
+                                    <Grid Margin="6,2,4,2" IsHitTestVisible="False">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="22"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ContentPresenter x:Name="ContentSite"
+                                                          Grid.Column="0"
+                                                          IsHitTestVisible="False"
+                                                          Content="{TemplateBinding SelectionBoxItem}"
+                                                          VerticalAlignment="Center"
+                                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                          SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                                        <Border Grid.Column="1"
+                                                Background="{DynamicResource App.Theme.SurfaceRaised}"
+                                                BorderBrush="{DynamicResource App.Theme.Border}"
+                                                BorderThickness="1,0,0,0"
+                                                CornerRadius="0,3,3,0"
+                                                Margin="0,-2,-4,-2"
+                                                Padding="0,2">
+                                            <Path Data="M0,0 L4,4 L8,0"
+                                                  Stroke="{DynamicResource App.Theme.Foreground}"
+                                                  StrokeThickness="1.25"
+                                                  Stretch="None"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  Fill="{x:Null}"
+                                                  StrokeStartLineCap="Round"
+                                                  StrokeEndLineCap="Round"
+                                                  StrokeLineJoin="Round"/>
+                                        </Border>
+                                    </Grid>
+                                </Grid>
+                            </Border>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="ComboBorder" Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Invisible hit targets for slider track (theme-aware sliders below). -->
+        <Style x:Key="App.RepeatButton.SliderTrack" TargetType="{x:Type RepeatButton}">
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type RepeatButton}">
+                        <Rectangle Fill="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <ControlTemplate x:Key="App.Template.SliderHorizontal" TargetType="{x:Type Slider}">
+            <Border Background="Transparent"
+                    SnapsToDevicePixels="True"
+                    Padding="{TemplateBinding Padding}"
+                    HorizontalAlignment="Stretch">
+                <Grid SnapsToDevicePixels="True" HorizontalAlignment="Stretch">
+                    <Rectangle Height="4"
+                               RadiusX="2"
+                               RadiusY="2"
+                               Fill="{DynamicResource App.Theme.ForegroundSubtle}"
+                               Opacity="0.45"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Stretch"
+                               Margin="8,0"/>
+                    <Track x:Name="PART_Track"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Stretch"
+                           Margin="8,0">
+                        <Track.DecreaseRepeatButton>
+                            <RepeatButton Command="{x:Static Slider.DecreaseLarge}" Style="{StaticResource App.RepeatButton.SliderTrack}"/>
+                        </Track.DecreaseRepeatButton>
+                        <Track.Thumb>
+                            <Thumb x:Name="Thumb"
+                                   Width="10"
+                                   Height="16"
+                                   Focusable="False"
+                                   VerticalAlignment="Center"
+                                   OverridesDefaultStyle="True">
+                                <Thumb.Template>
+                                    <ControlTemplate TargetType="{x:Type Thumb}">
+                                        <!-- Keep thumb readable even when theme chrome alpha is low. -->
+                                        <Border Background="{DynamicResource App.Theme.PopupSurfaceRaised}"
+                                                BorderBrush="{DynamicResource App.Theme.ForegroundSubtle}"
+                                                BorderThickness="1"
+                                                CornerRadius="3"
+                                                SnapsToDevicePixels="True"/>
+                                    </ControlTemplate>
+                                </Thumb.Template>
+                            </Thumb>
+                        </Track.Thumb>
+                        <Track.IncreaseRepeatButton>
+                            <RepeatButton Command="{x:Static Slider.IncreaseLarge}" Style="{StaticResource App.RepeatButton.SliderTrack}"/>
+                        </Track.IncreaseRepeatButton>
+                    </Track>
+                </Grid>
+            </Border>
+        </ControlTemplate>
+
+        <!-- Seek bar: same track as default, thumb as narrow as practical (device pixels). -->
+        <ControlTemplate x:Key="App.Template.SliderSeekHorizontal" TargetType="{x:Type Slider}">
+            <Border Background="Transparent"
+                    SnapsToDevicePixels="True"
+                    Padding="{TemplateBinding Padding}"
+                    HorizontalAlignment="Stretch">
+                <Grid SnapsToDevicePixels="True" HorizontalAlignment="Stretch">
+                    <Rectangle Height="4"
+                               RadiusX="2"
+                               RadiusY="2"
+                               Fill="{DynamicResource App.Theme.ForegroundSubtle}"
+                               Opacity="0.45"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Stretch"
+                               Margin="4,0"/>
+                    <Track x:Name="PART_Track"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Stretch"
+                           Margin="4,0">
+                        <Track.DecreaseRepeatButton>
+                            <RepeatButton Command="{x:Static Slider.DecreaseLarge}" Style="{StaticResource App.RepeatButton.SliderTrack}"/>
+                        </Track.DecreaseRepeatButton>
+                        <Track.Thumb>
+                            <Thumb x:Name="Thumb"
+                                   Width="2"
+                                   MinWidth="2"
+                                   MaxWidth="2"
+                                   Height="12"
+                                   Focusable="False"
+                                   VerticalAlignment="Center"
+                                   OverridesDefaultStyle="True">
+                                <Thumb.Template>
+                                    <ControlTemplate TargetType="{x:Type Thumb}">
+                                        <Border Width="2"
+                                                MinWidth="2"
+                                                MaxWidth="2"
+                                                Height="12"
+                                                Background="{DynamicResource App.Theme.Foreground}"
+                                                BorderThickness="0"
+                                                SnapsToDevicePixels="True"
+                                                UseLayoutRounding="True"/>
+                                    </ControlTemplate>
+                                </Thumb.Template>
+                            </Thumb>
+                        </Track.Thumb>
+                        <Track.IncreaseRepeatButton>
+                            <RepeatButton Command="{x:Static Slider.IncreaseLarge}" Style="{StaticResource App.RepeatButton.SliderTrack}"/>
+                        </Track.IncreaseRepeatButton>
+                    </Track>
+                </Grid>
+            </Border>
+        </ControlTemplate>
+
+        <!-- VU meters: Aero default track ignores App.Theme; use PART_* template so trough + fill follow dynamic tint. -->
+        <Style x:Key="App.ProgressBar.Vu" TargetType="{x:Type ProgressBar}">
+            <Setter Property="OverridesDefaultStyle" Value="True"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="Height" Value="10"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background" Value="{DynamicResource App.Theme.Surface}"/>
+            <!-- Foreground = level fill; use theme Foreground (not GrayText from implicit Control style). -->
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ProgressBar}">
+                        <Border x:Name="PART_Track"
+                                CornerRadius="2"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{DynamicResource App.Theme.Border}"
+                                BorderThickness="1"
+                                SnapsToDevicePixels="True">
+                            <Grid>
+                                <Border x:Name="PART_Indicator"
+                                        HorizontalAlignment="Left"
+                                        CornerRadius="1"
+                                        Margin="1"
+                                        Background="{TemplateBinding Foreground}"
+                                        SnapsToDevicePixels="True"/>
+                            </Grid>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="{x:Type Slider}">
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="MinHeight" Value="22"/>
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <!-- Click track = jump thumb to pointer (consistent across main + modal windows). -->
+            <Setter Property="IsMoveToPointEnabled" Value="True"/>
+            <Setter Property="Template" Value="{StaticResource App.Template.SliderHorizontal}"/>
+        </Style>
+
+        <Style x:Key="App.Slider.Seek" TargetType="{x:Type Slider}">
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Setter Property="MinHeight" Value="18"/>
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <!-- Play scrub: code-behind maps X→time on the full bar (pixel-accurate); disable built-in jump. -->
+            <Setter Property="IsMoveToPointEnabled" Value="False"/>
+            <Setter Property="Template" Value="{StaticResource App.Template.SliderSeekHorizontal}"/>
+        </Style>
+        <Style TargetType="{x:Type ListBox}">
+            <Setter Property="Background" Value="{DynamicResource App.Theme.Surface}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
+        </Style>
+
+        <!-- Subtle list selection highlight -->
+        <Style TargetType="{x:Type ListBoxItem}">
+            <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.Hover}"/>
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.Selection}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.SelectionBorder}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource App.Theme.SelectionText}"/>
+                </Trigger>
+                <MultiTrigger>
+                    <MultiTrigger.Conditions>
+                        <Condition Property="IsSelected" Value="True"/>
+                        <Condition Property="IsKeyboardFocusWithin" Value="False"/>
+                    </MultiTrigger.Conditions>
+                    <Setter Property="Opacity" Value="0.85"/>
+                </MultiTrigger>
+            </Style.Triggers>
+        </Style>
+    </Application.Resources>
+</Application>
+

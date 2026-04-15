@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Reproducible builds when committing from CI or release tags -->
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>

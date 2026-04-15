@@ -1,0 +1,823 @@
+<Window x:Class="LyllyPlayer.Windows.OptionsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:local="clr-namespace:LyllyPlayer"
+        Title="LyllyPlayer — Options"
+        Icon="pack://application:,,,/Assets/LyllyPlayer.ico"
+        Background="Transparent"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        AllowsTransparency="True"
+        Width="640"
+        Height="480"
+        MinWidth="640"
+        MinHeight="480"
+        MaxWidth="640"
+        MaxHeight="480"
+        ShowInTaskbar="False"
+        WindowStartupLocation="Manual">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0"
+                            ResizeBorderThickness="0"
+                            CornerRadius="8"
+                            GlassFrameThickness="0"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+
+    <Grid SnapsToDevicePixels="{DynamicResource App.Theme.WindowChromeSnapsToDevicePixels}"
+          UseLayoutRounding="True"
+          local:RoundedChromeClip.IsEnabled="True">
+        <Border Background="{DynamicResource App.Brush.WindowBg}"
+                BorderThickness="0"
+                CornerRadius="{DynamicResource App.Theme.WindowCornerRadiusOuter}"/>
+        <Grid Margin="{DynamicResource App.Theme.WindowChromeContentMargin}">
+            <Border SnapsToDevicePixels="{DynamicResource App.Theme.WindowChromeSnapsToDevicePixels}"
+                    UseLayoutRounding="True"
+                    Background="{DynamicResource App.Brush.WindowBgImage}"
+                    CornerRadius="{DynamicResource App.Theme.WindowCornerRadiusOuter}"/>
+            <local:WindowChromeFrameRing Panel.ZIndex="5"
+                                         SnapsToDevicePixels="True"
+                                         StrokeWidth="{DynamicResource App.Theme.WindowChromeStrokeWidth}"
+                                         OuterCornerRadius="8">
+                <local:WindowChromeFrameRing.Style>
+                    <Style TargetType="{x:Type local:WindowChromeFrameRing}">
+                        <Setter Property="RingBrush" Value="{DynamicResource App.Theme.WindowBorderActive}"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                                <Setter Property="RingBrush" Value="{DynamicResource App.Theme.WindowBorderInactive}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </local:WindowChromeFrameRing.Style>
+            </local:WindowChromeFrameRing>
+            <Grid Background="Transparent"
+                  Panel.ZIndex="10"
+                  LayoutTransform="{DynamicResource App.UiScaleTransform}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+        <!-- Custom top bar -->
+        <Border x:Name="ChromeBar"
+                Grid.Row="0"
+                VerticalAlignment="Top"
+                Margin="{DynamicResource App.Theme.WindowBorderThicknessNegativeSides}"
+                Padding="{DynamicResource App.Theme.WindowChromeTitleBarPadding}"
+                CornerRadius="{DynamicResource App.Theme.WindowCornerRadiusOuterTopOnly}"
+                SnapsToDevicePixels="{DynamicResource App.Theme.WindowChromeSnapsToDevicePixels}"
+                UseLayoutRounding="True"
+                ClipToBounds="True"
+                Panel.ZIndex="999"
+                MouseLeftButtonDown="ChromeBar_OnMouseLeftButtonDown">
+            <Border.Style>
+                <Style TargetType="{x:Type Border}">
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.TitleBarActive}"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                            <Setter Property="Background" Value="{DynamicResource App.Theme.TitleBarInactive}"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <Grid Height="28"
+                  Margin="{DynamicResource App.Theme.WindowChromeTitleBarContentMargin}"
+                  Background="Transparent">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Title, RelativeSource={RelativeSource AncestorType=Window}}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis">
+                    <TextBlock.Style>
+                        <Style TargetType="{x:Type TextBlock}" BasedOn="{StaticResource {x:Type TextBlock}}">
+                            <Setter Property="Foreground" Value="{DynamicResource App.Theme.TitleBarTextActive}"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                                    <Setter Property="Foreground" Value="{DynamicResource App.Theme.TitleBarTextInactive}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <Button x:Name="ChromeCloseButton" Grid.Column="1"
+                        Width="34"
+                        Height="24"
+                        Margin="0,2,0,2"
+                        Padding="0"
+                        FontFamily="{StaticResource App.MonoFont}"
+                        FontSize="12"
+                        Content="[X]"
+                        Click="ChromeCloseButton_OnClick">
+                    <Button.Style>
+                        <Style TargetType="{x:Type Button}" BasedOn="{StaticResource App.ChromeTitleBarButton}">
+                            <Setter Property="Foreground" Value="{DynamicResource App.Theme.TitleBarTextActive}"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                                    <Setter Property="Foreground" Value="{DynamicResource App.Theme.TitleBarTextInactive}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="{DynamicResource App.Theme.WindowChromeBodyInsetMargin}">
+        <Border Margin="12,12,12,10"
+                CornerRadius="6"
+                Padding="10"
+                Background="{DynamicResource {x:Static SystemColors.ControlLightBrushKey}}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TabControl x:Name="OptionsTabControl"
+                            Grid.Row="0"
+                            SelectionChanged="OptionsTabControl_OnSelectionChanged">
+                    <TabItem Header="Tools">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <Grid Margin="6">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="4"
+                                           x:Name="ToolsPathNoticeTextBlock"
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,10"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"
+                                           FontSize="11"/>
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="yt-dlp:" VerticalAlignment="Top" Margin="0,6,8,0"/>
+                                <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,8,10">
+                                    <TextBox x:Name="YtDlpPathTextBox" Height="30" IsReadOnly="True"/>
+                                    <TextBlock x:Name="YtDlpSourceTextBlock" FontSize="11" Margin="2,2,0,0"
+                                               Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                </StackPanel>
+                                <Button Grid.Row="1" Grid.Column="2" x:Name="YtDlpBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="YtDlpBrowseButton_OnClick"/>
+                                <Button Grid.Row="1" Grid.Column="3" x:Name="YtDlpUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="YtDlpUsePathButton_OnClick"/>
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="ffmpeg:" VerticalAlignment="Top" Margin="0,6,8,0"/>
+                                <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,8,10">
+                                    <TextBox x:Name="FfmpegPathTextBox" Height="30" IsReadOnly="True"/>
+                                    <TextBlock x:Name="FfmpegSourceTextBlock" FontSize="11" Margin="2,2,0,0"
+                                               Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                </StackPanel>
+                                <Button Grid.Row="2" Grid.Column="2" x:Name="FfmpegBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="FfmpegBrowseButton_OnClick"/>
+                                <Button Grid.Row="2" Grid.Column="3" x:Name="FfmpegUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="FfmpegUsePathButton_OnClick"/>
+
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="Node.js:" VerticalAlignment="Top" Margin="0,6,8,0"/>
+                                <StackPanel Grid.Row="3" Grid.Column="1" Margin="0,0,8,10">
+                                    <TextBox x:Name="NodePathTextBox" Height="30" IsReadOnly="True"/>
+                                    <TextBlock x:Name="NodeSourceTextBlock" FontSize="11" Margin="2,2,0,0"
+                                               Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                </StackPanel>
+                                <Button Grid.Row="3" Grid.Column="2" x:Name="NodeBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="NodeBrowseButton_OnClick"/>
+                                <Button Grid.Row="3" Grid.Column="3" x:Name="NodeUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="NodeUsePathButton_OnClick"/>
+
+                                <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4"
+                                           TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"
+                                           Text="Node.js is not required for basic use — only for Advanced YouTube options (browser cookies / signed-in playback). Leave unset unless you need that."/>
+                            </Grid>
+                        </ScrollViewer>
+                    </TabItem>
+
+                    <TabItem Header="System">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <Grid Margin="6">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Cache MB:" VerticalAlignment="Center" Margin="0,0,8,10"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" x:Name="CacheMaxMbTextBox" Height="30" Margin="0,0,0,10" VerticalContentAlignment="Center"/>
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Playlist auto-refresh:" VerticalAlignment="Center" Margin="0,0,8,10"/>
+                                <ComboBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                                          x:Name="PlaylistAutoRefreshComboBox"
+                                          Height="30"
+                                          Margin="0,0,0,10"
+                                          IsEnabled="True"
+                                          IsHitTestVisible="True"
+                                          PreviewMouseLeftButtonDown="PlaylistAutoRefreshComboBox_OnPreviewMouseLeftButtonDown"
+                                          SelectionChanged="PlaylistAutoRefreshComboBox_OnSelectionChanged">
+                                    <ComboBoxItem Content="Disabled" IsSelected="True"/>
+                                    <ComboBoxItem Content="1 minute"/>
+                                    <ComboBoxItem Content="5 minutes"/>
+                                    <ComboBoxItem Content="30 minutes"/>
+                                </ComboBox>
+
+                                <CheckBox Grid.Row="2"
+                                          Grid.Column="0"
+                                          Grid.ColumnSpan="3"
+                                          x:Name="GlobalMediaKeysCheckBox"
+                                          Content="Enable global media keys"
+                                          Margin="0,10,0,0"
+                                          VerticalAlignment="Top"
+                                          Checked="GlobalMediaKeysCheckBox_OnChecked"
+                                          Unchecked="GlobalMediaKeysCheckBox_OnUnchecked"/>
+                            </Grid>
+                        </ScrollViewer>
+                    </TabItem>
+
+                    <TabItem Header="Audio">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      Background="Transparent">
+                            <StackPanel Margin="6" Background="Transparent">
+                                <TextBlock Text="Output device"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Select the audio output device. Applied when you click Apply; if something is already playing, output switches without restarting the track."/>
+                                <ComboBox x:Name="AudioOutputDeviceComboBox"
+                                          Height="30"
+                                          HorizontalAlignment="Stretch"
+                                          Margin="0,0,0,16"
+                                          SelectionChanged="AudioOutputDeviceComboBox_OnSelectionChanged"/>
+
+                                <TextBlock Text="YouTube stream quality"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Controls yt-dlp’s -f selector for YouTube (stream URL, pipe decode, and disk cache). Auto picks the best audio; High prefers WebM then M4A; Medium/Low prefer lower-bitrate formats. After you change this and Apply, the current resolve/cache is cleared — replay the track or use Next so a new stream is chosen. Cached files on disk are kept per quality."/>
+                                <ComboBox x:Name="AudioQualityComboBox"
+                                          Height="30"
+                                          HorizontalAlignment="Left"
+                                          MinWidth="160"
+                                          Margin="0,0,0,0"
+                                          SelectionChanged="AudioQualityComboBox_OnSelectionChanged">
+                                    <ComboBoxItem Content="Auto" Tag="Auto"/>
+                                    <ComboBoxItem Content="High (WebM/Opus)" Tag="High"/>
+                                    <ComboBoxItem Content="Medium (≤ 128 kbps)" Tag="Medium"/>
+                                    <ComboBoxItem Content="Low (≤ 64 kbps)" Tag="Low"/>
+                                </ComboBox>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+
+                    <TabItem Header="Theme">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <Grid Margin="6">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <DockPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" Margin="0,0,0,10" LastChildFill="False">
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                        <Button x:Name="SaveThemeButton" MinWidth="92" Margin="0,0,8,0" Content="Save theme..." Click="SaveThemeButton_OnClick"/>
+                                        <Button x:Name="LoadThemeButton" MinWidth="92" Content="Load theme..." Click="LoadThemeButton_OnClick"/>
+                                    </StackPanel>
+                                </DockPanel>
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Background:" VerticalAlignment="Center" Margin="0,0,8,10"/>
+                                <!-- Inner grid: keeps Browse from sharing/starving the same * column as the combo (avoids overlap). -->
+                                <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,10" VerticalAlignment="Center" MinHeight="30">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" MinWidth="120"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox Grid.Column="0"
+                                              x:Name="BackgroundModeComboBox"
+                                              Height="30"
+                                              Margin="0,0,8,0"
+                                              HorizontalAlignment="Stretch"
+                                              MinWidth="160"
+                                              VerticalAlignment="Center"
+                                              SelectionChanged="BackgroundModeComboBox_OnSelectionChanged">
+                                        <ComboBoxItem Content="None"/>
+                                        <ComboBoxItem Content="Default" IsSelected="True"/>
+                                        <ComboBoxItem Content="Custom"/>
+                                    </ComboBox>
+                                    <Button Grid.Column="1"
+                                            x:Name="BackgroundBrowseButton"
+                                            Content="Browse…"
+                                            MinWidth="0"
+                                            Padding="10,4"
+                                            Height="30"
+                                            HorizontalAlignment="Left"
+                                            VerticalAlignment="Center"
+                                            Click="BackgroundBrowseButton_OnClick"/>
+                                </Grid>
+
+                                <TextBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
+                                         x:Name="CustomBackgroundPathTextBox"
+                                         Height="30"
+                                         Margin="0,0,0,10"
+                                         VerticalContentAlignment="Center"
+                                         IsReadOnly="True"/>
+
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="Background image:" VerticalAlignment="Center" Margin="0,0,8,10"/>
+                                <ComboBox Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2"
+                                          x:Name="BackgroundImageStretchComboBox"
+                                          Height="30"
+                                          Margin="0,0,0,10"
+                                          SelectionChanged="BackgroundImageStretchComboBox_OnSelectionChanged">
+                                    <ComboBoxItem Content="Stretch" Tag="Stretch"/>
+                                    <ComboBoxItem Content="Best fit" Tag="BestFit" IsSelected="True"
+                                                  ToolTip="Keeps aspect ratio and covers the window; may crop edges (no empty side or top/bottom bars)."/>
+                                    <ComboBoxItem Content="Tile" Tag="Tile"/>
+                                </ComboBox>
+
+                                <TextBlock Grid.Row="4" Grid.Column="0" Text="Color scheme:" VerticalAlignment="Center" Margin="0,0,8,10"/>
+                                <!-- One span so the mode combo gets all space minus fixed swatch + pick (outer * was split with pick column and starved the combo). -->
+                                <Grid Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2" VerticalAlignment="Center" MinHeight="30" Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" MinWidth="120"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox Grid.Column="0"
+                                              x:Name="BackgroundColorModeComboBox"
+                                              Height="30"
+                                              Margin="0,0,10,0"
+                                              MinWidth="200"
+                                              VerticalAlignment="Center"
+                                              HorizontalAlignment="Stretch"
+                                              SelectionChanged="BackgroundColorModeComboBox_OnSelectionChanged">
+                                        <ComboBoxItem Content="Default"/>
+                                        <ComboBoxItem Content="From image" IsSelected="True"/>
+                                        <ComboBoxItem Content="Windows theme"/>
+                                        <ComboBoxItem Content="Custom"/>
+                                    </ComboBox>
+                                    <Border x:Name="CustomBackgroundColorPreviewBorder"
+                                            Grid.Column="1"
+                                            Width="52"
+                                            Height="28"
+                                            Margin="0,0,10,0"
+                                            VerticalAlignment="Center"
+                                            CornerRadius="3"
+                                            BorderThickness="1"
+                                            BorderBrush="{DynamicResource App.Theme.Border}"
+                                            Background="Transparent"
+                                            ToolTip="Current custom color (Theme → Custom + pick…)"/>
+                                    <Button Grid.Column="2"
+                                            x:Name="BackgroundColorPickButton"
+                                            Content="pick..."
+                                            MinWidth="0"
+                                            Padding="12,4"
+                                            HorizontalAlignment="Left"
+                                            Height="30"
+                                            VerticalAlignment="Center"
+                                            Click="BackgroundColorPickButton_OnClick"/>
+                                </Grid>
+
+                                <!-- DockPanel: slider must fill space between label and value (Grid * column was not growing). -->
+                                <DockPanel Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="3" Margin="0,0,0,10" LastChildFill="True">
+                                    <TextBlock DockPanel.Dock="Left"
+                                               Text="Overall UI opacity:"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,8,0"
+                                               ToolTip="Controls transparency for the main window backdrop and themed surfaces (cards, borders, title bar tint), not only the background image."/>
+                                    <TextBlock DockPanel.Dock="Right"
+                                               x:Name="BackgroundAlphaValueTextBlock"
+                                               VerticalAlignment="Center"
+                                               Margin="8,0,0,0"
+                                               MinWidth="48"
+                                               TextAlignment="Right"
+                                               FontFamily="{StaticResource App.MonoFont}"
+                                               Text="50%"/>
+                                    <Slider x:Name="BackgroundAlphaSlider"
+                                            Minimum="0"
+                                            Maximum="255"
+                                            Value="128"
+                                            VerticalAlignment="Center"
+                                            Margin="0,0,8,0"
+                                            ValueChanged="BackgroundAlphaSlider_OnValueChanged"/>
+                                </DockPanel>
+
+                                <DockPanel Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="3" Margin="0,0,0,10" LastChildFill="True">
+                                    <TextBlock DockPanel.Dock="Left" Text="Background scrim:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <TextBlock DockPanel.Dock="Right"
+                                               x:Name="BackgroundScrimValueTextBlock"
+                                               VerticalAlignment="Center"
+                                               Margin="8,0,0,0"
+                                               MinWidth="48"
+                                               TextAlignment="Right"
+                                               FontFamily="{StaticResource App.MonoFont}"
+                                               Text="50%"/>
+                                    <Slider x:Name="BackgroundScrimSlider"
+                                            Minimum="0"
+                                            Maximum="80"
+                                            Value="50"
+                                            IsSnapToTickEnabled="True"
+                                            TickFrequency="5"
+                                            VerticalAlignment="Center"
+                                            Margin="0,0,8,0"
+                                            ValueChanged="BackgroundScrimSlider_OnValueChanged"/>
+                                </DockPanel>
+
+                                <TextBlock Grid.Row="7" Grid.Column="0" Text="Theme:" VerticalAlignment="Center" Margin="0,0,8,10"/>
+                                <ComboBox Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="2"
+                                          x:Name="ThemeModeComboBox"
+                                          Height="30"
+                                          Margin="0,0,0,10"
+                                          SelectionChanged="ThemeModeComboBox_OnSelectionChanged">
+                                    <ComboBoxItem Content="Auto" IsSelected="True"
+                                                  ToolTip="If a background image is loaded, light vs dark follows its average brightness (after dropping the brightest highlights). Otherwise follows Windows Settings → Personalization → Colors → “Choose your mode” for apps (registry AppsUseLightTheme)."/>
+                                    <ComboBoxItem Content="Light"/>
+                                    <ComboBoxItem Content="Dark"/>
+                                </ComboBox>
+
+                                <TextBlock Grid.Row="8" Grid.Column="0" Text="Title:" VerticalAlignment="Center" Margin="0,0,8,10"/>
+                                <ComboBox Grid.Row="8" Grid.Column="1"
+                                          x:Name="AppTitleModeComboBox"
+                                          Height="30"
+                                          Width="120"
+                                          MinWidth="120"
+                                          Margin="0,0,8,10"
+                                          HorizontalAlignment="Left"
+                                          SelectionChanged="AppTitleModeComboBox_OnSelectionChanged">
+                                    <ComboBoxItem Content="Default" IsSelected="True"/>
+                                    <ComboBoxItem Content="Current song"/>
+                                    <ComboBoxItem Content="Custom"/>
+                                </ComboBox>
+                                <TextBox Grid.Row="8" Grid.Column="2"
+                                         x:Name="CustomAppTitleTextBox"
+                                         Width="320"
+                                         MaxWidth="320"
+                                         HorizontalAlignment="Left"
+                                         Height="30"
+                                         Margin="0,0,0,10"
+                                         VerticalContentAlignment="Center"
+                                         TextWrapping="NoWrap"
+                                         IsReadOnly="True"
+                                         TextChanged="CustomAppTitleTextBox_OnTextChanged"/>
+
+                                <TextBlock Grid.Row="9" Grid.Column="0" Text="Window border:" VerticalAlignment="Center" Margin="0,0,8,10"/>
+                                <Grid Grid.Row="9" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox Grid.Column="0"
+                                              x:Name="WindowBorderModeComboBox"
+                                              Height="30"
+                                              Margin="0,0,12,0"
+                                              VerticalAlignment="Center"
+                                              HorizontalAlignment="Left"
+                                              MinWidth="120"
+                                              SelectionChanged="WindowBorderModeComboBox_OnSelectionChanged">
+                                        <ComboBoxItem Content="None"/>
+                                        <ComboBoxItem Content="1px" IsSelected="True"/>
+                                    </ComboBox>
+                                    <DockPanel x:Name="WindowBorderCustomPxPanel"
+                                               Grid.Column="1"
+                                               VerticalAlignment="Center"
+                                               LastChildFill="True"
+                                               Visibility="Collapsed">
+                                        <TextBlock DockPanel.Dock="Right"
+                                                   x:Name="WindowBorderCustomPxValueTextBlock"
+                                                   VerticalAlignment="Center"
+                                                   Margin="8,0,0,0"
+                                                   MinWidth="52"
+                                                   TextAlignment="Right"
+                                                   FontFamily="{StaticResource App.MonoFont}"
+                                                   Text="2 px"/>
+                                        <Slider x:Name="WindowBorderCustomPxSlider"
+                                                Minimum="1"
+                                                Maximum="24"
+                                                Value="2"
+                                                IsSnapToTickEnabled="True"
+                                                TickFrequency="1"
+                                                VerticalAlignment="Center"
+                                                Margin="0,0,8,0"
+                                                MinWidth="80"
+                                                ValueChanged="WindowBorderCustomPxSlider_OnValueChanged"/>
+                                    </DockPanel>
+                                </Grid>
+
+                                <DockPanel Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="3" LastChildFill="True">
+                                    <TextBlock DockPanel.Dock="Left" Text="Scale:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <TextBlock DockPanel.Dock="Right"
+                                               x:Name="UiScaleValueTextBlock"
+                                               VerticalAlignment="Center"
+                                               Margin="8,0,0,0"
+                                               MinWidth="48"
+                                               TextAlignment="Right"
+                                               FontFamily="{StaticResource App.MonoFont}"
+                                               Text="100%"/>
+                                    <Slider x:Name="UiScaleSlider"
+                                            Minimum="50"
+                                            Maximum="200"
+                                            Value="100"
+                                            IsSnapToTickEnabled="True"
+                                            TickFrequency="10"
+                                            VerticalAlignment="Center"
+                                            Margin="0,0,8,0"
+                                            ValueChanged="UiScaleSlider_OnValueChanged"/>
+                                </DockPanel>
+                            </Grid>
+                        </ScrollViewer>
+                    </TabItem>
+
+                    <TabItem Header="Search">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <Grid Margin="6">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Default results:" VerticalAlignment="Center" Margin="0,0,8,10"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="SearchDefaultCountTextBox" Height="30" Margin="0,0,0,10" VerticalContentAlignment="Center" LostFocus="SearchDefaultCountTextBox_OnLostFocus"/>
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Min length:" VerticalAlignment="Center" Margin="0,0,8,10"/>
+                                <ComboBox Grid.Row="1" Grid.Column="1"
+                                          x:Name="SearchMinLengthComboBox"
+                                          Height="30"
+                                          Margin="0,0,0,10"
+                                          SelectionChanged="SearchMinLengthComboBox_OnSelectionChanged">
+                                    <ComboBoxItem Content="Any" IsSelected="True"/>
+                                    <ComboBoxItem Content="30 sec"/>
+                                    <ComboBoxItem Content="1 min"/>
+                                    <ComboBoxItem Content="2 min"/>
+                                </ComboBox>
+                            </Grid>
+                        </ScrollViewer>
+                    </TabItem>
+
+                    <TabItem Header="Local">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="6">
+                                <CheckBox x:Name="IncludeSubfoldersOnFolderLoadCheckBox"
+                                          Content="Include sub-folders by default"
+                                          Margin="0,0,0,10"
+                                          Checked="IncludeSubfoldersOnFolderLoadCheckBox_OnChecked"
+                                          Unchecked="IncludeSubfoldersOnFolderLoadCheckBox_OnUnchecked"/>
+
+                                <CheckBox x:Name="ReadMetadataOnLoadCheckBox"
+                                          Content="Read metadata on load (slow!)"
+                                          Margin="0,0,0,10"
+                                          Checked="ReadMetadataOnLoadCheckBox_OnChecked"
+                                          Unchecked="ReadMetadataOnLoadCheckBox_OnUnchecked"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+
+                    <TabItem Header="Advanced">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      Background="Transparent">
+                            <StackPanel Margin="6" Background="Transparent">
+                                <Border x:Name="AdvancedNodeGatingBorder"
+                                        Padding="10"
+                                        Margin="0,0,0,12"
+                                        CornerRadius="4"
+                                        Background="{DynamicResource App.Theme.SurfaceRaised}"
+                                        BorderBrush="{DynamicResource App.Theme.Border}"
+                                        BorderThickness="1"
+                                        Visibility="Collapsed">
+                                    <TextBlock TextWrapping="Wrap"
+                                               Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                               Text="To use Advanced YouTube options (browser cookies / signed-in content), resolve Node.js on the Tools tab (install Node or browse to node.exe). Basic playback and normal playlists do not require Node."/>
+                                </Border>
+
+                                <TextBlock Text="YouTube EJS solvers"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Prefer from GitHub may download solver code on first use. Bundled only uses yt-dlp’s embedded files (more offline-friendly)."/>
+                                <StackPanel x:Name="EjsSourcePanel" Margin="0,0,0,16" Background="Transparent">
+                                    <RadioButton x:Name="EjsGithubRadio" GroupName="EjsSource" Margin="0,0,0,4"
+                                                 Content="Prefer from GitHub (ejs:github)"
+                                                 Checked="EjsGithubRadio_OnChecked"/>
+                                    <RadioButton x:Name="EjsBundledRadio" GroupName="EjsSource"
+                                                 Content="Use yt-dlp bundled only (no remote EJS)"
+                                                 Checked="EjsBundledRadio_OnChecked"/>
+                                </StackPanel>
+
+                                <TextBlock Text="YouTube cookies from browser"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Passes --cookies-from-browser to yt-dlp with the value you enter (see yt-dlp --help). Close the browser if the cookie database is locked. Using cookies exposes your browser session to yt-dlp."/>
+                                <StackPanel x:Name="CookiesPanel" Margin="0,0,0,8" Background="Transparent">
+                                    <CheckBox x:Name="YoutubeCookiesCheckBox"
+                                              Content="Use cookies from browser for YouTube"
+                                              Margin="0,0,0,8"
+                                              Foreground="{DynamicResource App.Theme.Foreground}"
+                                              Checked="YoutubeCookiesCheckBox_OnChecked"
+                                              Unchecked="YoutubeCookiesCheckBox_OnUnchecked"/>
+                                    <TextBox x:Name="YoutubeCookiesTextBox"
+                                             MinHeight="28"
+                                             VerticalContentAlignment="Center"
+                                             Margin="0,0,0,4"
+                                             ToolTip="Example: chrome, edge, firefox, or chrome:ProfileName"
+                                             TextChanged="YoutubeCookiesTextBox_OnTextChanged"/>
+                                </StackPanel>
+
+                                <TextBlock Text="Playlist"
+                                           FontWeight="SemiBold"
+                                           Margin="0,16,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Applies when you cancel a YouTube search (Cancel) or cancel a playlist refresh from the playlist window. When off, the playlist is restored to how it was before that operation. Stop search still keeps partial results."/>
+                                <CheckBox x:Name="KeepIncompletePlaylistOnCancelCheckBox"
+                                          Content="Keep incomplete playlist on cancel"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="KeepIncompletePlaylistOnCancelCheckBox_OnChecked"
+                                          Unchecked="KeepIncompletePlaylistOnCancelCheckBox_OnUnchecked"/>
+
+                                <TextBlock Text="Window"
+                                           FontWeight="SemiBold"
+                                           Margin="0,16,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <CheckBox x:Name="AlwaysOnTopPlaylistWindowCheckBox"
+                                          Content="Also keep Playlist window on top (when TOP is enabled)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          ToolTip="When TOP is enabled on the main window, keep Playlist window topmost as well."
+                                          Checked="AlwaysOnTopPlaylistWindowCheckBox_OnChecked"
+                                          Unchecked="AlwaysOnTopPlaylistWindowCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="AlwaysOnTopOptionsWindowCheckBox"
+                                          Content="Also keep Options window on top (when TOP is enabled)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          ToolTip="When TOP is enabled on the main window, keep Options window topmost as well."
+                                          Checked="AlwaysOnTopOptionsWindowCheckBox_OnChecked"
+                                          Unchecked="AlwaysOnTopOptionsWindowCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="CompactHidesAuxWindowsCheckBox"
+                                          Content="Compact mode hides Playlist and Options"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          ToolTip="When you switch to compact mode, close Playlist and Options windows (restored when leaving compact)."
+                                          Checked="CompactHidesAuxWindowsCheckBox_OnChecked"
+                                          Unchecked="CompactHidesAuxWindowsCheckBox_OnUnchecked"/>
+
+                                <TextBlock Text="App icon"
+                                           FontWeight="SemiBold"
+                                           Margin="0,16,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Choose where the app icon appears: on the taskbar, in the notification area (system tray), or both."/>
+                                <StackPanel x:Name="AppIconVisibilityPanel" Margin="0,0,0,8" Background="Transparent">
+                                    <RadioButton x:Name="AppIconTaskbarAndTrayRadio"
+                                                 GroupName="AppIconVisibility"
+                                                 Margin="0,0,0,4"
+                                                 Content="Taskbar and notification area"
+                                                 Checked="AppIconTaskbarAndTrayRadio_OnChecked"/>
+                                    <RadioButton x:Name="AppIconTaskbarOnlyRadio"
+                                                 GroupName="AppIconVisibility"
+                                                 Margin="0,0,0,4"
+                                                 Content="Taskbar only"
+                                                 Checked="AppIconTaskbarOnlyRadio_OnChecked"/>
+                                    <RadioButton x:Name="AppIconTrayOnlyRadio"
+                                                 GroupName="AppIconVisibility"
+                                                 Content="Notification area only"
+                                                 Checked="AppIconTrayOnlyRadio_OnChecked"/>
+                                </StackPanel>
+
+                                <TextBlock Text="Diagnostics"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock Text="Log detail (app.log + log window)"
+                                           Margin="0,0,0,4"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Default hides INFO. Basic keeps playback/cache/resolve messages. Verbose includes diagnostics (timing, window bounds, yt-dlp retries)."/>
+                                <ComboBox x:Name="AppLogLevelComboBox"
+                                          MinWidth="320"
+                                          Height="30"
+                                          Margin="0,0,0,10"
+                                          HorizontalAlignment="Left"
+                                          SelectionChanged="AppLogLevelComboBox_OnSelectionChanged">
+                                    <ComboBoxItem Content="Errors and warnings only (default)"
+                                                  Tag="ErrorsAndWarnings"/>
+                                    <ComboBoxItem Content="Basic — key playback &amp; cache INFO"
+                                                  Tag="Basic"/>
+                                    <ComboBoxItem Content="Verbose — all INFO"
+                                                  Tag="Verbose"/>
+                                </ComboBox>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <TextBlock Text="app.log max size (MB)"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,10,0"
+                                               Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                    <TextBox x:Name="AppLogMaxMbTextBox"
+                                             Width="72"
+                                             Height="30"
+                                             VerticalContentAlignment="Center"
+                                             ToolTip="When the log file would exceed this size, older lines are removed (recent entries kept). Range 1–200. Default 50."/>
+                                </StackPanel>
+                                <Button x:Name="OpenLogButton"
+                                        Content="Logs&#x2026;"
+                                        MinWidth="92"
+                                        Height="30"
+                                        HorizontalAlignment="Left"
+                                        Margin="0,0,0,0"
+                                        Click="OpenLogButton_OnClick"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+                </TabControl>
+
+                <Border Grid.Row="1"
+                        Margin="0,10,0,0"
+                        Padding="0,10,0,0"
+                        Background="Transparent"
+                        BorderBrush="{DynamicResource App.Theme.Border}"
+                        BorderThickness="0,1,0,0">
+                    <DockPanel LastChildFill="False">
+                        <TextBlock DockPanel.Dock="Left"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Text="OK applies changes and closes."
+                                   Foreground="{DynamicResource App.Theme.ForegroundSubtle}"/>
+
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <Button x:Name="OkButton"
+                                    MinWidth="92"
+                                    Margin="0,0,8,0"
+                                    Content="OK"
+                                    Click="OkButton_OnClick"/>
+                            <Button x:Name="CancelButton"
+                                    MinWidth="92"
+                                    Margin="0,0,8,0"
+                                    Content="Cancel"
+                                    Click="CancelButton_OnClick"/>
+                            <Button x:Name="ApplyButton"
+                                    MinWidth="92"
+                                    Content="Apply"
+                                    Click="ApplyButton_OnClick"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+            </Grid>
+        </Border>
+        </Grid>
+        </Grid>
+        </Grid>
+    </Grid>
+</Window>
+

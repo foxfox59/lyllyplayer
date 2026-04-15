@@ -1,0 +1,83 @@
+# Dark AI secrets
+.cursor/
+
+# Build outputs
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]uild/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+artifacts-test/
+
+# Visual Studio / MSBuild
+.vs/
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.pidb
+*.svclog
+*.cachefile
+*.VC.db
+*.VC.VC.opendb
+*.psess
+*.vsp
+*.vspx
+*.sap
+
+# Test / coverage
+[Tt]est[Rr]esult*/
+*.coverage
+*.coveragexml
+
+# NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+
+# Publish output (when not using artifacts/)
+**/publish/
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS / Linux (for contributors)
+.DS_Store
+
+# JetBrains Rider / IntelliJ
+.idea/
+*.sln.iml
+
+# VS Code (uncomment if you prefer not to commit workspace settings)
+.vscode/
+
+# Logs and temp
+*.log
+*.tmp
+*.temp
+~$*
+
+# Secrets / local overrides
+**/secrets.json
+**/appsettings.*.local.json
+*.pfx
