@@ -2,15 +2,23 @@
 
 © MuiluFox 2026
 
-A multi-function desktop media player with minimal external requirements: **ffmpeg** for any audio output, and **yt-dlp** for Youtube functionality.
-Supports login cookies from browser if you have **node.js**, but not required for playback in most cases.
-
-**LyllyPlayer will always be free. If you are getting asked to pay for it (other than donations here), someone is ripping you off.**
-I am a software developer, so I have some qualifications to supervise and suggest solutions, but unless otherwise specified:
-**all of the actual code is AI slop.** 
-All I touch manually is the documentation.
-This is partially an experiment in how far can I push things before the codebase gets too complicated for the AI to track.
-Also a test of patience - many things would have been faster fixed by hand but I deliberately chose not to.
+A multi-function desktop audio player with minimal external requirements: **ffmpeg** for any audio output, and **yt-dlp** for Youtube functionality.
+Supports login cookies from browser if you have **node.js**, but not required for playback in most cases.  
+Supports either pasting a direct Youtube playlist ID/URL or searching from Youtube.  
+  
+Imports .m3u playlists. Generates playlists from supported local audio file folders (.mp3, .wav, .flac, .m4a, .aac, .ogg, .opus, .wma, .aiff, .aif, .aifc). Can save and load playlists for later use.
+Tested also with simple icecast/shoutcast streams either via .m3u playlist or direct URL.    
+Support for limited custom skins (basically a picture on top of the UI, either stretched, tiled or best fit) with a default, automatic, custom or Windows themed color tint. Can be switched between light/dark modes (although the feature is crude)  
+  
+**and so much more!** (not really that much, those were the main features :D)  
+  
+**LyllyPlayer will always be free. If you are getting asked to pay for it (other than donations here), someone is ripping you off.**  
+  
+I am a software developer, so I have some qualifications to supervise and suggest solutions, but unless otherwise specified:  
+**all of the actual code is AI slop.**  
+  
+All I touch manually is the documentation. This is partially an experiment in how far can I push things before the codebase gets too complicated for the AI to track. Also a test of patience - many things would have been faster fixed by hand but I deliberately chose not to.  
+  
 **Exit now or accept that.**
 
 ## Some screenshots of the app in action 
