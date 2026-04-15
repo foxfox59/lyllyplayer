@@ -14,4 +14,4 @@
 
 ## Skinned, 100% UI scale, compact view 
 
-![Skinned compact](/docs./_media/skinned_compact.png)
+![Skinned compact](/docs/_media/skinned_compact.png)
