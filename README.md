@@ -9,6 +9,7 @@ Supports either pasting a direct Youtube playlist ID/URL or searching from Youtu
 Imports .m3u playlists. Generates playlists from supported local audio file folders (.mp3, .wav, .flac, .m4a, .aac, .ogg, .opus, .wma, .aiff, .aif, .aifc). Can save and load playlists for later use.
 Tested also with simple icecast/shoutcast streams either via .m3u playlist or direct URL.    
 Support for limited custom skins (basically a picture on top of the UI, either stretched, tiled or best fit) with a default, automatic, custom or Windows themed color tint. Can be switched between light/dark modes (although the feature is crude)  
+Simple visualizer: off, VU bars, or a frequency spectrum  
   
 **and so much more!** (not really that much, those were the main features :D)  
   
@@ -49,7 +50,7 @@ In case you find it useful and want to give a little something, feel free to, bu
 ### Q&A
 
 - Why?
-  - Got fed up with trying to find an easy to use Youtube playlist app that doesn't require finding obscure plugins, fiddling with Youtube tokens and sacrificing 16 spefifically colored chickens to Santa on a partially cloudy January night at exactly 22:42. Now you open LyllyPlayer, paste the playlist url and hit play. Boom.
+  - Got fed up with trying to find an easy to use Youtube playlist app that doesn't require finding obscure plugins, fiddling with Youtube tokens and sacrificing 16 specifically colored chickens to Santa on a partially cloudy January night at exactly 22:42. Now you open LyllyPlayer, paste the playlist url and hit play. Boom.
 - Does this work with Youtube Music Premium?
   - I have no idea. Try at your own risk. No responsibility is taken as I have zero idea how Youtube takes to third party agents scraping their API.
 
