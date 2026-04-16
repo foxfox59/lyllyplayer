@@ -61,7 +61,7 @@ Ideas for later — **not** commitments and nothing to depend on for now:
 
 - Optimize memory usage (or change whole implementation away from WPF)
 - Ultra-compact mode
-- Improve theme color auto selection
+- Improve theme color auto selection and transparency consistency
 - Improve background best fit and/or make the area user selectable
 - Improve window snapping (currently feels jittery at best)
 - Playlist enhancements (sorting, queue, adding files/URLs to existing playlists, etc)
