@@ -54,7 +54,7 @@ In case you find it useful and want to give a little something, feel free to, bu
 - Why?
   - Got fed up with trying to find an easy to use Youtube playlist app that doesn't require finding obscure plugins, fiddling with Youtube tokens and sacrificing 16 specifically colored chickens to Santa on a partially cloudy January night at exactly 22:42. Now you open LyllyPlayer, paste the playlist url and hit play. Boom.
 - Does this work with Youtube Music Premium?
-  - I have no idea. Try at your own risk. No responsibility is taken as I have zero idea how Youtube takes to third party agents scraping their API.
+  - I have no idea. Try at your own risk. No responsibility is taken as I have zero idea how Youtube takes to third party agents using their API without a developer token.
 
 ## TODO (planned, no timeline, best effort)
 
@@ -63,13 +63,14 @@ Ideas for later — **not** commitments and nothing to depend on for now:
 - Optimize memory usage
 - Improve theme color auto selection
 - Improve window snapping
-- Playlist enhancements (sorting, queue, adding files/URLs to existing playlists, etc).
-- Linux builds — desktop player on Linux (would mean a non-WPF UI stack or a separate port; current codebase targets Windows / WPF).
-- Android release — mobile variant (separate app surface and packaging from the current Windows project).
-- I18N - currently only in English, add support for multiple languages and make sure themes don't break.
-- External visualization support (at least MilkDrop). 
-- Custom layouts, even wild shapes like old Media Player.
-  - Custom border width was a thing, but it's too much of a headache to fix with AI so it's disabled for now (and it's not really a very useful option anyway).
+- Playlist enhancements (sorting, queue, adding files/URLs to existing playlists, etc)
+- Improve search (search for playlists instead of individual songs/videos)
+- Linux builds — desktop player on Linux (would mean a non-WPF UI stack or a separate port; current codebase targets Windows / WPF)
+- Android release — mobile variant (separate app surface and packaging from the current Windows project)
+- I18N - currently only in English, add support for multiple languages and make sure themes don't break
+- External visualization support (at least MilkDrop)
+- Custom layouts, even wild shapes like old Media Player
+  - Custom border width was a thing, but it's too much of a headache to fix with AI so it's disabled for now (and it's not really a very useful option anyway)
   
 I'll let the AI do its thing now. Hope you enjoy this little player. If you feel like it and/or find any bugs, especially ones that crash or make you have a bad time, please feel free to report them, I'll see what I can do.
 
