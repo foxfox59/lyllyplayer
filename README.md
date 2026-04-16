@@ -59,13 +59,15 @@ In case you find it useful and want to give a little something, feel free to, bu
 
 Ideas for later — **not** commitments and nothing to depend on for now:
 
-- Optimize memory usage
+- Optimize memory usage (or change whole implementation away from WPF)
+- Ultra-compact mode
 - Improve theme color auto selection
-- Improve window snapping
+- Improve background best fit and/or make the area user selectable
+- Improve window snapping (currently feels jittery at best)
 - Playlist enhancements (sorting, queue, adding files/URLs to existing playlists, etc)
-- Improve search (search for playlists instead of individual songs/videos)
-- Linux builds — desktop player on Linux (would mean a non-WPF UI stack or a separate port; current codebase targets Windows / WPF)
-- Android release — mobile variant (separate app surface and packaging from the current Windows project)
+- Improve search (add ability to search for playlists in addition to individual songs/videos)
+- Linux builds — desktop player on Linux (would require significant changes)
+- Android release — mobile variant (requested feature by testers, would require very significant changes)
 - I18N - currently only in English, add support for multiple languages and make sure themes don't break
 - External visualization support (at least MilkDrop)
 - Custom layouts, even wild shapes like old Media Player
