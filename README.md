@@ -1,8 +1,9 @@
 # LyllyPlayer
 
-© MuiluFox 2026
-
-**[See it in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**
+© MuiluFox 2026  
+**LyllyPlayer should always be completely free to download and use. If you are getting asked to pay for it (other than [donations](https://www.paypal.me/MuiluFox) here), someone is ripping you off.**  
+  
+**[See it in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**  
 
 A multi-function desktop audio player with minimal external requirements: **ffmpeg** for any audio output, and **yt-dlp** for Youtube functionality.
 Supports login cookies from browser if you have **node.js**, but not required for playback in most cases.  
@@ -15,11 +16,9 @@ Simple visualizer: off, VU bars, or a frequency spectrum
   
 **and so much more!** (not really that much, those were the main features :D)  
   
-**LyllyPlayer will always be free. If you are getting asked to pay for it (other than donations here), someone is ripping you off.**  
-  
 I am a software developer, so I have some qualifications to supervise and suggest solutions, but unless otherwise specified:  
-**all of the actual code is AI slop.**  
   
+**all of the actual code is AI slop.**  
 All I touch manually is the documentation. This is partially an experiment in how far can I push things before the codebase gets too complicated for the AI to track. Also a test of patience - many things would have been faster fixed by hand but I deliberately chose not to.  
   
 **Exit now or accept that.**
@@ -73,9 +72,9 @@ Ideas for later — **not** commitments and nothing to depend on for now:
   - Custom border width was a thing, but it's too much of a headache to fix with AI so it's disabled for now (and it's not really a very useful option anyway)
   
 I'll let the AI do its thing now. Hope you enjoy this little player. If you feel like it and/or find any bugs, especially ones that crash or make you have a bad time, please feel free to report them, I'll see what I can do.
-
+  
 ---
-
+  
 Desktop media player (currently) for **Windows 10 and later** (64-bit), built with **.NET 8** and **WPF**. It plays **YouTube playlists and searches** (via [yt-dlp](https://github.com/yt-dlp/yt-dlp)), **local folders** and **M3U/M3U8** playlists, optional **metadata** via **ffmpeg**, and saves/restores playlist state between sessions.
 
 External tools (**ffmpeg**, **yt-dlp**) are not bundled; install them separately and configure paths in the app or ensure they are on `PATH`.
