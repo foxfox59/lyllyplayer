@@ -2,28 +2,37 @@
 
 © MuiluFox 2026  
 **LyllyPlayer should always be completely free to download and use. If you are getting asked to pay for it (other than [donations](https://www.paypal.me/MuiluFox) here), someone is ripping you off.**  
-  
+
 **[See it in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**  
+  
+---  
+  
+### What's new, pussycat?
+
+- 1.2.0, introduces the **ultra-compact mode**, a simple **theme designer** and slight transparency fixes for the foreground + title text  
+- 1.1.0, initial public release with no major bugs (fingers crossed)  
+
+---
 
 A multi-function desktop audio player with minimal external requirements: **ffmpeg** for any audio output, and **yt-dlp** for Youtube functionality.
 Supports login cookies from browser if you have **node.js**, but not required for playback in most cases.  
 Supports either pasting a direct Youtube playlist ID/URL or searching from Youtube.  
-  
+
 Imports .m3u playlists. Generates playlists from supported local audio file folders (.mp3, .wav, .flac, .m4a, .aac, .ogg, .opus, .wma, .aiff, .aif, .aifc). Can save and load playlists for later use.
-Tested also with simple icecast/shoutcast streams either via .m3u playlist or direct URL.    
+Tested also with simple icecast/shoutcast streams either via .m3u playlist or direct URL.  
 Support for limited custom skins (basically a picture on top of the UI, either stretched, tiled or best fit) with a default, automatic, custom or Windows themed color tint. Can be switched between light/dark modes (although the feature is crude)  
 Simple visualizer: off, VU bars, or a frequency spectrum  
-  
+
 **and so much more!** (not really that much, those were the main features :D)  
-  
+
 I am a software developer, so I have some qualifications to supervise and suggest solutions, but unless otherwise specified:  
-  
+
 **all of the actual code is AI slop.**  
 All I touch manually is the documentation. This is partially an experiment in how far can I push things before the codebase gets too complicated for the AI to track. Also a test of patience - many things would have been faster fixed by hand but I deliberately chose not to.  
-  
+
 **Exit now or accept that.**
 
-## Some screenshots of the app in action 
+## Some screenshots of the app in action
 
 **[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)**
 
@@ -60,10 +69,7 @@ In case you find it useful and want to give a little something, feel free to, bu
 Ideas for later — **not** commitments and nothing to depend on for now:
 
 - Optimize memory usage (or change whole implementation away from WPF)
-- Ultra-compact mode
-- Improve theme color auto selection and transparency consistency
-- Improve background best fit and/or make the area user selectable
-- Improve window snapping (currently feels jittery at best)
+- Improve window snapping (currently occasionally feels jittery)
 - Playlist enhancements (sorting, queue, adding files/URLs to existing playlists, etc)
 - Improve search (add ability to search for playlists in addition to individual songs/videos)
 - Lyrics display? Not a very high priority, but it might be amusing
@@ -73,11 +79,11 @@ Ideas for later — **not** commitments and nothing to depend on for now:
 - External visualization support (at least MilkDrop)
 - Custom layouts, even wild shapes like old Media Player
   - Custom border width was a thing, but it's too much of a headache to fix with AI so it's disabled for now (and it's not really a very useful option anyway)
-  
+
 I'll let the AI do its thing now. Hope you enjoy this little player. If you feel like it and/or find any bugs, especially ones that crash or make you have a bad time, please feel free to report them, I'll see what I can do.
-  
+
 ---
-  
+
 Desktop media player (currently) for **Windows 10 and later** (64-bit), built with **.NET 8** and **WPF**. It plays **YouTube playlists and searches** (via [yt-dlp](https://github.com/yt-dlp/yt-dlp)), **local folders** and **M3U/M3U8** playlists, optional **metadata** via **ffmpeg**, and saves/restores playlist state between sessions.
 
 External tools (**ffmpeg**, **yt-dlp**) are not bundled; install them separately and configure paths in the app or ensure they are on `PATH`.
@@ -94,6 +100,7 @@ External tools (**ffmpeg**, **yt-dlp**) are not bundled; install them separately
 | Runtime (dev) | .NET 8 Desktop Runtime (included with SDK for `dotnet run`)                 |
 | Mandatory     | ffmpeg (for any audio playback)                                             |
 | Optional      | yt-dlp (for any Youtube functionality), node.js (for Youtube cookies/login) |
+
 
 ## License
 

@@ -34,7 +34,7 @@
         <Grid Margin="{DynamicResource App.Theme.WindowChromeContentMargin}">
             <Border SnapsToDevicePixels="{DynamicResource App.Theme.WindowChromeSnapsToDevicePixels}"
                     UseLayoutRounding="True"
-                    Background="{DynamicResource App.Brush.WindowBgImage}"
+                    Background="{DynamicResource App.Brush.WindowBgImage.OptionsLog}"
                     CornerRadius="{DynamicResource App.Theme.WindowCornerRadiusOuter}"/>
             <local:WindowChromeFrameRing Panel.ZIndex="5"
                                          SnapsToDevicePixels="True"
@@ -355,16 +355,31 @@
                                          IsReadOnly="True"/>
 
                                 <TextBlock Grid.Row="3" Grid.Column="0" Text="Background image:" VerticalAlignment="Center" Margin="0,0,8,10"/>
-                                <ComboBox Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2"
-                                          x:Name="BackgroundImageStretchComboBox"
-                                          Height="30"
-                                          Margin="0,0,0,10"
-                                          SelectionChanged="BackgroundImageStretchComboBox_OnSelectionChanged">
-                                    <ComboBoxItem Content="Stretch" Tag="Stretch"/>
-                                    <ComboBoxItem Content="Best fit" Tag="BestFit" IsSelected="True"
-                                                  ToolTip="Keeps aspect ratio and covers the window; may crop edges (no empty side or top/bottom bars)."/>
-                                    <ComboBoxItem Content="Tile" Tag="Tile"/>
-                                </ComboBox>
+                                <Grid Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,10" VerticalAlignment="Center" MinHeight="30">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox Grid.Column="0"
+                                              x:Name="BackgroundImageStretchComboBox"
+                                              Height="30"
+                                              Margin="0,0,8,0"
+                                              SelectionChanged="BackgroundImageStretchComboBox_OnSelectionChanged">
+                                        <ComboBoxItem Content="Stretch" Tag="Stretch"/>
+                                        <ComboBoxItem Content="Best fit" Tag="BestFit" IsSelected="True"
+                                                      ToolTip="Keeps aspect ratio and covers the window; may crop edges (no empty side or top/bottom bars)."/>
+                                        <ComboBoxItem Content="Tile" Tag="Tile"/>
+                                        <ComboBoxItem Content="User defined" Tag="UserDefined"
+                                                      ToolTip="Pick the exact image area each window shows (Designer…)."/>
+                                    </ComboBox>
+                                    <Button Grid.Column="1"
+                                            x:Name="BackgroundDesignerButton"
+                                            Content="Designer…"
+                                            Height="30"
+                                            Padding="10,4"
+                                            IsEnabled="False"
+                                            Click="BackgroundDesignerButton_OnClick"/>
+                                </Grid>
 
                                 <TextBlock Grid.Row="4" Grid.Column="0" Text="Color scheme:" VerticalAlignment="Center" Margin="0,0,8,10"/>
                                 <!-- One span so the mode combo gets all space minus fixed swatch + pick (outer * was split with pick column and starved the combo). -->
@@ -707,6 +722,27 @@
                                           ToolTip="When you switch to compact mode, close Playlist and Options windows (restored when leaving compact)."
                                           Checked="CompactHidesAuxWindowsCheckBox_OnChecked"
                                           Unchecked="CompactHidesAuxWindowsCheckBox_OnUnchecked"/>
+
+                                <TextBlock Text="Compact layout"
+                                           FontWeight="SemiBold"
+                                           Margin="0,8,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Choose the layout used when Compact mode is enabled. Ultra compact stacks visualizer + PL on the first row, with transport + S + R + volume on the second row."/>
+                                <StackPanel x:Name="CompactLayoutPanel" Margin="0,0,0,8" Background="Transparent">
+                                    <RadioButton x:Name="CompactLayoutNormalRadio"
+                                                 GroupName="CompactLayout"
+                                                 Margin="0,0,0,4"
+                                                 Content="Normal compact"
+                                                 Checked="CompactLayoutNormalRadio_OnChecked"/>
+                                    <RadioButton x:Name="CompactLayoutUltraRadio"
+                                                 GroupName="CompactLayout"
+                                                 Content="Ultra compact"
+                                                 Checked="CompactLayoutUltraRadio_OnChecked"/>
+                                </StackPanel>
 
                                 <TextBlock Text="App icon"
                                            FontWeight="SemiBold"

@@ -64,6 +64,7 @@ public partial class OptionsWindow : Window
     private readonly Action<int> _setBackgroundScrimPercent;
     private readonly Func<string> _getBackgroundImageStretch;
     private readonly Action<string> _setBackgroundImageStretch;
+    private readonly Action? _openBackgroundDesigner;
     private readonly Func<string> _getAppTitleMode;
     private readonly Action<string> _setAppTitleMode;
     private readonly Func<string> _getCustomAppTitle;
@@ -88,6 +89,8 @@ public partial class OptionsWindow : Window
     private readonly Action<bool> _setAlwaysOnTopOptionsWindow;
     private readonly Func<bool> _getCompactModeHidesAuxWindows;
     private readonly Action<bool> _setCompactModeHidesAuxWindows;
+    private readonly Func<string> _getCompactModeLayout;
+    private readonly Action<string> _setCompactModeLayout;
     private readonly Func<bool> _getKeepIncompletePlaylistOnCancel;
     private readonly Action<bool> _setKeepIncompletePlaylistOnCancel;
     private readonly Func<string> _getAppIconVisibility;
@@ -106,6 +109,16 @@ public partial class OptionsWindow : Window
     private readonly Action<string> _setOptionsSelectedTab;
     private readonly Func<string> _getThemeMode;
     private readonly Action<string> _setThemeMode;
+    private readonly Func<LyllyPlayer.Settings.RectN?> _getBackgroundUserDefinedMainNormal;
+    private readonly Action<LyllyPlayer.Settings.RectN?> _setBackgroundUserDefinedMainNormal;
+    private readonly Func<LyllyPlayer.Settings.RectN?> _getBackgroundUserDefinedMainCompact;
+    private readonly Action<LyllyPlayer.Settings.RectN?> _setBackgroundUserDefinedMainCompact;
+    private readonly Func<LyllyPlayer.Settings.RectN?> _getBackgroundUserDefinedMainUltra;
+    private readonly Action<LyllyPlayer.Settings.RectN?> _setBackgroundUserDefinedMainUltra;
+    private readonly Func<LyllyPlayer.Settings.RectN?> _getBackgroundUserDefinedPlaylist;
+    private readonly Action<LyllyPlayer.Settings.RectN?> _setBackgroundUserDefinedPlaylist;
+    private readonly Func<LyllyPlayer.Settings.RectN?> _getBackgroundUserDefinedOptionsLog;
+    private readonly Action<LyllyPlayer.Settings.RectN?> _setBackgroundUserDefinedOptionsLog;
 
     private sealed class Draft
     {
@@ -123,6 +136,11 @@ public partial class OptionsWindow : Window
         public int BackgroundAlpha = SettingsStore.DefaultBackgroundAlpha;
         public int BackgroundScrimPercent = SettingsStore.DefaultBackgroundScrimPercent;
         public string BackgroundImageStretch = "Stretch";
+        public LyllyPlayer.Settings.RectN BackgroundUserDefinedMainNormal = LyllyPlayer.Settings.RectN.Full;
+        public LyllyPlayer.Settings.RectN BackgroundUserDefinedMainCompact = LyllyPlayer.Settings.RectN.Full;
+        public LyllyPlayer.Settings.RectN BackgroundUserDefinedMainUltra = LyllyPlayer.Settings.RectN.Full;
+        public LyllyPlayer.Settings.RectN BackgroundUserDefinedPlaylist = LyllyPlayer.Settings.RectN.Full;
+        public LyllyPlayer.Settings.RectN BackgroundUserDefinedOptionsLog = LyllyPlayer.Settings.RectN.Full;
         public string AppTitleMode = "Default";
         public string CustomAppTitle = "";
         public int UiScalePercent = 100;
@@ -138,6 +156,7 @@ public partial class OptionsWindow : Window
         public bool AlwaysOnTopPlaylistWindow;
         public bool AlwaysOnTopOptionsWindow;
         public bool CompactModeHidesAuxWindows;
+        public string CompactModeLayout = "Normal";
         public bool KeepIncompletePlaylistOnCancel;
         public string AppIconVisibility = "TaskbarOnly";
 
@@ -189,6 +208,17 @@ public partial class OptionsWindow : Window
         Action<int> setBackgroundScrimPercent,
         Func<string> getBackgroundImageStretch,
         Action<string> setBackgroundImageStretch,
+        Func<LyllyPlayer.Settings.RectN?> getBackgroundUserDefinedMainNormal,
+        Action<LyllyPlayer.Settings.RectN?> setBackgroundUserDefinedMainNormal,
+        Func<LyllyPlayer.Settings.RectN?> getBackgroundUserDefinedMainCompact,
+        Action<LyllyPlayer.Settings.RectN?> setBackgroundUserDefinedMainCompact,
+        Func<LyllyPlayer.Settings.RectN?> getBackgroundUserDefinedMainUltra,
+        Action<LyllyPlayer.Settings.RectN?> setBackgroundUserDefinedMainUltra,
+        Func<LyllyPlayer.Settings.RectN?> getBackgroundUserDefinedPlaylist,
+        Action<LyllyPlayer.Settings.RectN?> setBackgroundUserDefinedPlaylist,
+        Func<LyllyPlayer.Settings.RectN?> getBackgroundUserDefinedOptionsLog,
+        Action<LyllyPlayer.Settings.RectN?> setBackgroundUserDefinedOptionsLog,
+        Action openBackgroundDesigner,
         Func<string> getAppTitleMode,
         Action<string> setAppTitleMode,
         Func<string> getCustomAppTitle,
@@ -213,6 +243,8 @@ public partial class OptionsWindow : Window
         Action<bool> setAlwaysOnTopOptionsWindow,
         Func<bool> getCompactModeHidesAuxWindows,
         Action<bool> setCompactModeHidesAuxWindows,
+        Func<string> getCompactModeLayout,
+        Action<string> setCompactModeLayout,
         Func<bool> getKeepIncompletePlaylistOnCancel,
         Action<bool> setKeepIncompletePlaylistOnCancel,
         Func<string> getAppIconVisibility,
@@ -262,6 +294,17 @@ public partial class OptionsWindow : Window
         _setBackgroundScrimPercent = setBackgroundScrimPercent;
         _getBackgroundImageStretch = getBackgroundImageStretch;
         _setBackgroundImageStretch = setBackgroundImageStretch;
+        _getBackgroundUserDefinedMainNormal = getBackgroundUserDefinedMainNormal;
+        _setBackgroundUserDefinedMainNormal = setBackgroundUserDefinedMainNormal;
+        _getBackgroundUserDefinedMainCompact = getBackgroundUserDefinedMainCompact;
+        _setBackgroundUserDefinedMainCompact = setBackgroundUserDefinedMainCompact;
+        _getBackgroundUserDefinedMainUltra = getBackgroundUserDefinedMainUltra;
+        _setBackgroundUserDefinedMainUltra = setBackgroundUserDefinedMainUltra;
+        _getBackgroundUserDefinedPlaylist = getBackgroundUserDefinedPlaylist;
+        _setBackgroundUserDefinedPlaylist = setBackgroundUserDefinedPlaylist;
+        _getBackgroundUserDefinedOptionsLog = getBackgroundUserDefinedOptionsLog;
+        _setBackgroundUserDefinedOptionsLog = setBackgroundUserDefinedOptionsLog;
+        _openBackgroundDesigner = openBackgroundDesigner;
         _getAppTitleMode = getAppTitleMode;
         _setAppTitleMode = setAppTitleMode;
         _getCustomAppTitle = getCustomAppTitle;
@@ -286,6 +329,8 @@ public partial class OptionsWindow : Window
         _setAlwaysOnTopOptionsWindow = setAlwaysOnTopOptionsWindow;
         _getCompactModeHidesAuxWindows = getCompactModeHidesAuxWindows;
         _setCompactModeHidesAuxWindows = setCompactModeHidesAuxWindows;
+        _getCompactModeLayout = getCompactModeLayout;
+        _setCompactModeLayout = setCompactModeLayout;
         _getKeepIncompletePlaylistOnCancel = getKeepIncompletePlaylistOnCancel;
         _setKeepIncompletePlaylistOnCancel = setKeepIncompletePlaylistOnCancel;
         _getAppIconVisibility = getAppIconVisibility;
@@ -372,6 +417,11 @@ public partial class OptionsWindow : Window
         try { _draft.BackgroundAlpha = Math.Clamp(_getBackgroundAlpha(), 0, 255); } catch { _draft.BackgroundAlpha = SettingsStore.DefaultBackgroundAlpha; }
         try { _draft.BackgroundScrimPercent = Math.Clamp(_getBackgroundScrimPercent(), 0, 80); } catch { _draft.BackgroundScrimPercent = SettingsStore.DefaultBackgroundScrimPercent; }
         try { _draft.BackgroundImageStretch = SettingsStore.NormalizeBackgroundImageStretch(_getBackgroundImageStretch()); } catch { _draft.BackgroundImageStretch = "Stretch"; }
+        try { _draft.BackgroundUserDefinedMainNormal = _getBackgroundUserDefinedMainNormal() ?? LyllyPlayer.Settings.RectN.Full; } catch { _draft.BackgroundUserDefinedMainNormal = LyllyPlayer.Settings.RectN.Full; }
+        try { _draft.BackgroundUserDefinedMainCompact = _getBackgroundUserDefinedMainCompact() ?? _draft.BackgroundUserDefinedMainNormal; } catch { _draft.BackgroundUserDefinedMainCompact = _draft.BackgroundUserDefinedMainNormal; }
+        try { _draft.BackgroundUserDefinedMainUltra = _getBackgroundUserDefinedMainUltra() ?? _draft.BackgroundUserDefinedMainNormal; } catch { _draft.BackgroundUserDefinedMainUltra = _draft.BackgroundUserDefinedMainNormal; }
+        try { _draft.BackgroundUserDefinedPlaylist = _getBackgroundUserDefinedPlaylist() ?? LyllyPlayer.Settings.RectN.Full; } catch { _draft.BackgroundUserDefinedPlaylist = LyllyPlayer.Settings.RectN.Full; }
+        try { _draft.BackgroundUserDefinedOptionsLog = _getBackgroundUserDefinedOptionsLog() ?? LyllyPlayer.Settings.RectN.Full; } catch { _draft.BackgroundUserDefinedOptionsLog = LyllyPlayer.Settings.RectN.Full; }
         try { _draft.AppTitleMode = string.IsNullOrWhiteSpace(_getAppTitleMode()) ? "Default" : _getAppTitleMode().Trim(); } catch { _draft.AppTitleMode = "Default"; }
         try { _draft.CustomAppTitle = _getCustomAppTitle() ?? ""; } catch { _draft.CustomAppTitle = ""; }
         try { _draft.UiScalePercent = Math.Clamp(_getUiScalePercent(), 50, 200); } catch { _draft.UiScalePercent = 100; }
@@ -395,6 +445,7 @@ public partial class OptionsWindow : Window
         try { _draft.AlwaysOnTopPlaylistWindow = _getAlwaysOnTopPlaylistWindow(); } catch { _draft.AlwaysOnTopPlaylistWindow = false; }
         try { _draft.AlwaysOnTopOptionsWindow = _getAlwaysOnTopOptionsWindow(); } catch { _draft.AlwaysOnTopOptionsWindow = false; }
         try { _draft.CompactModeHidesAuxWindows = _getCompactModeHidesAuxWindows(); } catch { _draft.CompactModeHidesAuxWindows = true; }
+        try { _draft.CompactModeLayout = SettingsStore.NormalizeCompactModeLayout(_getCompactModeLayout()); } catch { _draft.CompactModeLayout = "Normal"; }
         try { _draft.KeepIncompletePlaylistOnCancel = _getKeepIncompletePlaylistOnCancel(); } catch { _draft.KeepIncompletePlaylistOnCancel = false; }
         try { _draft.AppIconVisibility = SettingsStore.NormalizeAppIconVisibility(_getAppIconVisibility()); } catch { _draft.AppIconVisibility = "TaskbarOnly"; }
         try
@@ -534,6 +585,13 @@ public partial class OptionsWindow : Window
         try { AlwaysOnTopPlaylistWindowCheckBox.IsChecked = _draft.AlwaysOnTopPlaylistWindow; } catch { /* ignore */ }
         try { AlwaysOnTopOptionsWindowCheckBox.IsChecked = _draft.AlwaysOnTopOptionsWindow; } catch { /* ignore */ }
         try { CompactHidesAuxWindowsCheckBox.IsChecked = _draft.CompactModeHidesAuxWindows; } catch { /* ignore */ }
+        try
+        {
+            var m = SettingsStore.NormalizeCompactModeLayout(_draft.CompactModeLayout);
+            CompactLayoutNormalRadio.IsChecked = string.Equals(m, "Normal", StringComparison.OrdinalIgnoreCase);
+            CompactLayoutUltraRadio.IsChecked = string.Equals(m, "Ultra", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { /* ignore */ }
         try { KeepIncompletePlaylistOnCancelCheckBox.IsChecked = _draft.KeepIncompletePlaylistOnCancel; } catch { /* ignore */ }
 
         try
@@ -728,6 +786,12 @@ public partial class OptionsWindow : Window
 
         try { BackgroundScrimSlider.IsEnabled = !bgNone; } catch { /* ignore */ }
         try { BackgroundImageStretchComboBox.IsEnabled = !bgNone; } catch { /* ignore */ }
+        try
+        {
+            var userDefined = string.Equals(SettingsStore.NormalizeBackgroundImageStretch(_draft.BackgroundImageStretch), "UserDefined", StringComparison.OrdinalIgnoreCase);
+            BackgroundDesignerButton.IsEnabled = !bgNone && userDefined;
+        }
+        catch { /* ignore */ }
     }
 
     /// <summary>Normalized color mode is <c>Windows</c>; the combo shows <c>Windows theme</c>.</summary>
@@ -1297,6 +1361,11 @@ public partial class OptionsWindow : Window
         TryApply("Overall UI opacity", () => _setBackgroundAlpha(Math.Clamp(_draft.BackgroundAlpha, 0, 255)));
         TryApply("Background scrim", () => _setBackgroundScrimPercent(Math.Clamp(_draft.BackgroundScrimPercent, 0, 80)));
         TryApply("Background image stretch", () => _setBackgroundImageStretch(SettingsStore.NormalizeBackgroundImageStretch(_draft.BackgroundImageStretch)));
+        TryApply("Background crop (Main default)", () => _setBackgroundUserDefinedMainNormal(_draft.BackgroundUserDefinedMainNormal));
+        TryApply("Background crop (Main compact)", () => _setBackgroundUserDefinedMainCompact(_draft.BackgroundUserDefinedMainCompact));
+        TryApply("Background crop (Main ultra)", () => _setBackgroundUserDefinedMainUltra(_draft.BackgroundUserDefinedMainUltra));
+        TryApply("Background crop (Playlist)", () => _setBackgroundUserDefinedPlaylist(_draft.BackgroundUserDefinedPlaylist));
+        TryApply("Background crop (Options/Log)", () => _setBackgroundUserDefinedOptionsLog(_draft.BackgroundUserDefinedOptionsLog));
         TryApply("Title mode", () => _setAppTitleMode((_draft.AppTitleMode ?? "Default").Trim()));
         TryApply("Custom title", () => _setCustomAppTitle(_draft.CustomAppTitle ?? ""));
         TryApply("UI scale", () => _setUiScalePercent(Math.Clamp(_draft.UiScalePercent, 50, 200)));
@@ -1505,6 +1574,22 @@ public partial class OptionsWindow : Window
         try { _setCompactModeHidesAuxWindows(false); } catch { /* ignore */ }
     }
 
+    private void CompactLayoutNormalRadio_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.CompactModeLayout = "Normal";
+        try { _setCompactModeLayout("Normal"); } catch { /* ignore */ }
+    }
+
+    private void CompactLayoutUltraRadio_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.CompactModeLayout = "Ultra";
+        try { _setCompactModeLayout("Ultra"); } catch { /* ignore */ }
+    }
+
     private void AppIconTaskbarAndTrayRadio_OnChecked(object sender, RoutedEventArgs e)
     {
         if (_suppressBackgroundUiEvents)
@@ -1578,6 +1663,81 @@ public partial class OptionsWindow : Window
                 _draft.BackgroundImageStretch = SettingsStore.NormalizeBackgroundImageStretch(tag);
         }
         catch { /* ignore */ }
+        try { UpdateBackgroundImageDerivedControls(); } catch { /* ignore */ }
+    }
+
+    /// <summary>
+    /// Reads the currently selected Background image stretch Tag from the UI (not the draft snapshot).
+    /// Used to keep <see cref="MainWindow"/> in sync when the user opens the designer before clicking Options Apply.
+    /// </summary>
+    public string? TryGetBackgroundImageStretchUiTag()
+    {
+        try
+        {
+            if (BackgroundImageStretchComboBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+                return tag;
+        }
+        catch { /* ignore */ }
+        return null;
+    }
+
+    private void BackgroundDesignerButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _openBackgroundDesigner?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                System.Windows.MessageBox.Show(
+                    this,
+                    "Background designer failed to open.\n\n" + ex.Message,
+                    "Options",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            catch { /* ignore */ }
+        }
+    }
+
+    public void UpdateBackgroundDesignerDraft(LyllyPlayer.Settings.RectN mainNormal, LyllyPlayer.Settings.RectN mainCompact, LyllyPlayer.Settings.RectN mainUltra, LyllyPlayer.Settings.RectN playlist, LyllyPlayer.Settings.RectN optionsLog)
+    {
+        try
+        {
+            _draft.BackgroundUserDefinedMainNormal = mainNormal;
+            _draft.BackgroundUserDefinedMainCompact = mainCompact;
+            _draft.BackgroundUserDefinedMainUltra = mainUltra;
+            _draft.BackgroundUserDefinedPlaylist = playlist;
+            _draft.BackgroundUserDefinedOptionsLog = optionsLog;
+        }
+        catch { /* ignore */ }
+    }
+
+    public (LyllyPlayer.Settings.RectN mainNormal, LyllyPlayer.Settings.RectN mainCompact, LyllyPlayer.Settings.RectN mainUltra, LyllyPlayer.Settings.RectN playlist, LyllyPlayer.Settings.RectN optionsLog)
+        GetBackgroundDesignerDraft()
+    {
+        try
+        {
+            return (
+                _draft.BackgroundUserDefinedMainNormal,
+                _draft.BackgroundUserDefinedMainCompact,
+                _draft.BackgroundUserDefinedMainUltra,
+                _draft.BackgroundUserDefinedPlaylist,
+                _draft.BackgroundUserDefinedOptionsLog
+            );
+        }
+        catch
+        {
+            return (
+                LyllyPlayer.Settings.RectN.Full,
+                LyllyPlayer.Settings.RectN.Full,
+                LyllyPlayer.Settings.RectN.Full,
+                LyllyPlayer.Settings.RectN.Full,
+                LyllyPlayer.Settings.RectN.Full
+            );
+        }
     }
 
     private void BackgroundBrowseButton_OnClick(object sender, RoutedEventArgs e)
@@ -1865,6 +2025,11 @@ public partial class OptionsWindow : Window
         try { _setBackgroundAlpha(Math.Clamp(_draft.BackgroundAlpha, 0, 255)); } catch { /* ignore */ }
         try { _setBackgroundScrimPercent(Math.Clamp(_draft.BackgroundScrimPercent, 0, 80)); } catch { /* ignore */ }
         try { _setBackgroundImageStretch(SettingsStore.NormalizeBackgroundImageStretch(_draft.BackgroundImageStretch)); } catch { /* ignore */ }
+        try { _setBackgroundUserDefinedMainNormal(_draft.BackgroundUserDefinedMainNormal); } catch { /* ignore */ }
+        try { _setBackgroundUserDefinedMainCompact(_draft.BackgroundUserDefinedMainCompact); } catch { /* ignore */ }
+        try { _setBackgroundUserDefinedMainUltra(_draft.BackgroundUserDefinedMainUltra); } catch { /* ignore */ }
+        try { _setBackgroundUserDefinedPlaylist(_draft.BackgroundUserDefinedPlaylist); } catch { /* ignore */ }
+        try { _setBackgroundUserDefinedOptionsLog(_draft.BackgroundUserDefinedOptionsLog); } catch { /* ignore */ }
         try { _setAppTitleMode((_draft.AppTitleMode ?? "Default").Trim()); } catch { /* ignore */ }
         try { _setCustomAppTitle(_draft.CustomAppTitle ?? ""); } catch { /* ignore */ }
         try { _setUiScalePercent(Math.Clamp(_draft.UiScalePercent, 50, 200)); } catch { /* ignore */ }
@@ -1886,6 +2051,7 @@ public partial class OptionsWindow : Window
         try { _setAlwaysOnTopPlaylistWindow(_draft.AlwaysOnTopPlaylistWindow); } catch { /* ignore */ }
         try { _setAlwaysOnTopOptionsWindow(_draft.AlwaysOnTopOptionsWindow); } catch { /* ignore */ }
         try { _setCompactModeHidesAuxWindows(_draft.CompactModeHidesAuxWindows); } catch { /* ignore */ }
+        try { _setCompactModeLayout(SettingsStore.NormalizeCompactModeLayout(_draft.CompactModeLayout)); } catch { /* ignore */ }
         try { _setKeepIncompletePlaylistOnCancel(_draft.KeepIncompletePlaylistOnCancel); } catch { /* ignore */ }
         try { _setAppIconVisibility(SettingsStore.NormalizeAppIconVisibility(_draft.AppIconVisibility)); } catch { /* ignore */ }
         try { _setAudioQuality(_draft.AudioQuality ?? "Auto"); } catch { /* ignore */ }

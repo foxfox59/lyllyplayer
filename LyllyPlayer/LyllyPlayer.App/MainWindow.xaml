@@ -31,9 +31,10 @@
                 BorderThickness="0"
                 CornerRadius="{DynamicResource App.Theme.WindowCornerRadiusOuter}"/>
         <Grid Margin="{DynamicResource App.Theme.WindowChromeContentMargin}">
-            <Border SnapsToDevicePixels="{DynamicResource App.Theme.WindowChromeSnapsToDevicePixels}"
+            <Border x:Name="MainWindowImageBackgroundBorder"
+                    SnapsToDevicePixels="{DynamicResource App.Theme.WindowChromeSnapsToDevicePixels}"
                     UseLayoutRounding="True"
-                    Background="{DynamicResource App.Brush.WindowBgImage}"
+                    Background="{DynamicResource App.Brush.WindowBgImage.Main}"
                     CornerRadius="{DynamicResource App.Theme.WindowCornerRadiusOuter}"/>
             <local:WindowChromeFrameRing Panel.ZIndex="5"
                                          SnapsToDevicePixels="True"
@@ -247,21 +248,27 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <Border x:Name="VisualizerBorder"
-                            Grid.Row="0"
-                            Padding="10,8,10,0"
-                            Background="Transparent"
-                            MouseLeftButtonUp="VisualizerBorder_OnMouseLeftButtonUp"
-                            ToolTip="Click to cycle: VU meters → spectrum → off. In compact mode the strip sits between transport and volume.">
-                        <!-- Fixed-size inner area so VU / spectrum / off do not shift layout -->
-                        <Grid x:Name="VisualizerHostGrid" Height="26" VerticalAlignment="Center" Margin="0,0,0,0">
-                            <Grid x:Name="VuGrid" VerticalAlignment="Center">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Border x:Name="VisualizerBorder"
+                                Grid.Column="0"
+                                Padding="10,8,6,0"
+                                Background="Transparent"
+                                MouseLeftButtonUp="VisualizerBorder_OnMouseLeftButtonUp"
+                                ToolTip="Click to cycle: VU meters → spectrum → off. In compact mode the strip sits between transport and volume.">
+                            <!-- Fixed-size inner area so VU / spectrum / off do not shift layout -->
+                            <Grid x:Name="VisualizerHostGrid" Height="26" VerticalAlignment="Center" Margin="0,0,0,0">
+                                <Grid x:Name="VuGrid" VerticalAlignment="Center">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
 
                                 <TextBlock x:Name="VuMeterLeftLabel"
                                            Text="L"
@@ -310,6 +317,9 @@
                             </Border>
                         </Grid>
                     </Border>
+
+                        <!-- (Ultra compact) PL is shown on the transport row, not here. -->
+                    </Grid>
 
                     <Border x:Name="CardDividerAboveInfoBorder"
                             Grid.Row="1" Height="1" VerticalAlignment="Center" Background="{DynamicResource App.Theme.Border}" Margin="10,0,10,0" SnapsToDevicePixels="True"/>
@@ -506,6 +516,17 @@
                                     SmallChange="0.02"
                                     LargeChange="0.10"
                                     ValueChanged="VolumeSlider_OnValueChanged"/>
+                            <Button x:Name="CompactPlaylistButtonInline"
+                                    Width="34"
+                                    Height="22"
+                                    Margin="8,0,0,0"
+                                    Padding="0"
+                                    Content="PL"
+                                    FontFamily="{StaticResource App.MonoFont}"
+                                    FontSize="12"
+                                    VerticalAlignment="Center"
+                                    Visibility="Collapsed"
+                                    Click="CompactPlaylistButton_OnClick"/>
                         </StackPanel>
                     </Grid>
                 </Grid>

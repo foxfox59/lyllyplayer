@@ -23,7 +23,25 @@
                     AlignmentY="Center"/>
 
         <!-- Current background brush used by windows (updated via settings) -->
+        <!-- Legacy key: kept for compatibility; most windows should use the per-window keys below. -->
         <ImageBrush x:Key="App.Brush.WindowBgImage"
+                    ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"
+                    Stretch="Fill"
+                    AlignmentX="Center"
+                    AlignmentY="Center"/>
+
+        <!-- Per-window background brushes (updated via settings) -->
+        <ImageBrush x:Key="App.Brush.WindowBgImage.Main"
+                    ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"
+                    Stretch="Fill"
+                    AlignmentX="Center"
+                    AlignmentY="Center"/>
+        <ImageBrush x:Key="App.Brush.WindowBgImage.Playlist"
+                    ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"
+                    Stretch="Fill"
+                    AlignmentX="Center"
+                    AlignmentY="Center"/>
+        <ImageBrush x:Key="App.Brush.WindowBgImage.OptionsLog"
                     ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"
                     Stretch="Fill"
                     AlignmentX="Center"
@@ -101,8 +119,9 @@
         <SolidColorBrush x:Key="{x:Static SystemColors.MenuHighlightBrushKey}" Color="#FF2A2A2C"/>
 
         <!-- Semantic theme brushes (dynamic; updated at runtime for 'From image') -->
-        <SolidColorBrush x:Key="App.Theme.Foreground" Color="#FFE6E6E6"/>
-        <SolidColorBrush x:Key="App.Theme.ForegroundSubtle" Color="#FFB8B8B8"/>
+        <!-- Slightly translucent text/ink to match the app's soft, layered look (spectrum curve style). -->
+        <SolidColorBrush x:Key="App.Theme.Foreground" Color="#CFE6E6E6"/>
+        <SolidColorBrush x:Key="App.Theme.ForegroundSubtle" Color="#A6B8B8B8"/>
         <!-- Spectrum frequency grid: dark, low-contrast rules (runtime theme replaces with palette-aware color). -->
         <SolidColorBrush x:Key="App.Theme.SpectrumGridLine" Color="#FF4A4A4A"/>
         <SolidColorBrush x:Key="App.Theme.SpectrumPanelBackground" Color="#CC0A0A0A"/>
@@ -130,8 +149,9 @@
         <!-- Custom title bar -->
         <SolidColorBrush x:Key="App.Theme.TitleBarActive" Color="#CC1B1B1B"/>
         <SolidColorBrush x:Key="App.Theme.TitleBarInactive" Color="#CC1B1B1B"/>
-        <SolidColorBrush x:Key="App.Theme.TitleBarTextActive" Color="#FFE6E6E6"/>
-        <SolidColorBrush x:Key="App.Theme.TitleBarTextInactive" Color="#FFB8B8B8"/>
+        <!-- Title bar text should follow the same translucency rules as normal foreground (runtime theme updates these too). -->
+        <SolidColorBrush x:Key="App.Theme.TitleBarTextActive" Color="#CFE6E6E6"/>
+        <SolidColorBrush x:Key="App.Theme.TitleBarTextInactive" Color="#A6B8B8B8"/>
 
         <!-- Default text + monospace -->
         <Style TargetType="{x:Type TextElement}">

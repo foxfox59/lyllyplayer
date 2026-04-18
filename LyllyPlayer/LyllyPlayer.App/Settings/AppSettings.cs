@@ -64,6 +64,11 @@ public sealed record AppSettings(
     int? BackgroundScrimPercent,
     /// <summary>Stretch (fill) | BestFit (uniform cover, may crop) | Tile — image window background layout.</summary>
     string? BackgroundImageStretch,
+    RectN? BackgroundUserDefinedMainNormal,
+    RectN? BackgroundUserDefinedMainCompact,
+    RectN? BackgroundUserDefinedMainUltra,
+    RectN? BackgroundUserDefinedPlaylist,
+    RectN? BackgroundUserDefinedOptionsLog,
     string? AppTitleMode,
     string? CustomAppTitle,
     /// <summary>Where the app icon is shown: TaskbarAndTray | TaskbarOnly | TrayOnly.</summary>
@@ -86,6 +91,8 @@ public sealed record AppSettings(
     int? AppLogMaxMb,
     /// <summary>When true, main window hides options/playlist row and shuffle/repeat for a minimal playback strip.</summary>
     bool? MainWindowCompact,
+    /// <summary>Compact layout variant: Normal | Ultra.</summary>
+    string? CompactModeLayout,
     /// <summary>When true, entering compact mode closes Playlist and Options windows (restored when leaving compact).</summary>
     bool? CompactModeHidesAuxWindows,
     /// <summary>When true, Cancel on YouTube search or playlist refresh keeps partial results; when false, restores the pre-operation playlist.</summary>

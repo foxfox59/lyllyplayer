@@ -441,6 +441,40 @@ public partial class MainWindow : Window
     private double OptionsSnapThresholdPx => BaseOptionsSnapThresholdPx * UiScale;
     private double OptionsSnapUnsnapPx => BaseOptionsSnapUnsnapPx * UiScale;
 
+    /// <summary>
+    /// Left/right snap requires vertical overlap between main and aux. A fixed 64px band matches tall default chrome;
+    /// Ultra-compact main height is often under 64 DIP, so overlap can never exceed the threshold and side snap never triggers.
+    /// </summary>
+    private static double SideSnapVerticalOverlapThresholdPx(double mainOuterHeightDip)
+    {
+        if (mainOuterHeightDip <= 0 || double.IsNaN(mainOuterHeightDip) || double.IsInfinity(mainOuterHeightDip))
+            return 64;
+        return Math.Min(64.0, Math.Max(8.0, mainOuterHeightDip - 2.0));
+    }
+
+    /// <summary>
+    /// Vertical overlap for left/right snap tests only (not for positioning). Ultra-compact main is a short strip;
+    /// a tall playlist is often aligned to a side with its top <i>below</i> the strip (near <see cref="mainBottom"/>),
+    /// so raw intersection is empty. Inflate the test band, with more reach <i>downward</i> than upward.
+    /// </summary>
+    private static double ComputeSideSnapVerticalOverlapDip(
+        double mainTop, double mainBottom, double auxTop, double auxBottom)
+    {
+        var mainH = mainBottom - mainTop;
+        if (mainH <= 0 || double.IsNaN(mainH) || double.IsInfinity(mainH))
+            return Math.Min(mainBottom, auxBottom) - Math.Max(mainTop, auxTop);
+
+        if (mainH >= 96)
+            return Math.Min(mainBottom, auxBottom) - Math.Max(mainTop, auxTop);
+
+        var inflateUp = Math.Clamp(80 - mainH * 0.5, 24, 72);
+        // Playlist body usually hangs below the control strip; allow a generous band under mainBottom.
+        var inflateDown = Math.Clamp(320 - mainH, 140, 420);
+        var effTop = mainTop - inflateUp;
+        var effBottom = mainBottom + inflateDown;
+        return Math.Min(effBottom, auxBottom) - Math.Max(effTop, auxTop);
+    }
+
     private const double ChromeDragPendingMoveThresholdDip = 4.0;
     /// <summary>Hold-still fallback so a drag can start without movement (double-click uses ClickCount, not this timer).</summary>
     private static readonly TimeSpan ChromeDragPendingHoldDelay = TimeSpan.FromMilliseconds(120);
@@ -456,6 +490,7 @@ public partial class MainWindow : Window
     /// <summary>Minimal main layout: no options/playlist row; hide shuffle/repeat and playlist title in the card.</summary>
     private bool _mainWindowCompact;
     private bool _compactModeHidesAuxWindows = true;
+    private string _compactModeLayout = "Normal";
 
     /// <summary>Restore <see cref="PlaylistWindow"/> when leaving compact (seeded at startup from settings or when windows were open).</summary>
     private bool _playlistWindowWasOpenBeforeCompact;
@@ -486,6 +521,45 @@ public partial class MainWindow : Window
     private int _backgroundAlpha = SettingsStore.DefaultBackgroundAlpha;
     private int _backgroundScrimPercent = SettingsStore.DefaultBackgroundScrimPercent;
     private string _backgroundImageStretch = "BestFit";
+    private RectN? _backgroundUserDefinedMainNormal;
+    private RectN? _backgroundUserDefinedMainCompact;
+    private RectN? _backgroundUserDefinedMainUltra;
+    private RectN? _backgroundUserDefinedPlaylist;
+    private RectN? _backgroundUserDefinedOptionsLog;
+    private LyllyPlayer.Windows.BackgroundDesignerWindow? _backgroundDesignerWindow;
+    // Cached, measured window aspects (width/height) for background designer locking.
+    // These are updated after layout settles so UserDefined crops match the real window footprint.
+    private double _measuredMainDefaultAspect;
+    private double _measuredMainCompactAspect;
+    private double _measuredMainUltraAspect;
+
+    // Coalesce deferred UserDefined crop refresh (avoid updating Viewbox before SizeToContent commits).
+    private int _userDefinedMainCropRefreshGen;
+    private bool? _lastAppliedMainCompactForUserDefined;
+    private bool _userDefinedMainCropRefreshAfterSizePending;
+    private int _userDefinedMainCropForceRenderFrames;
+    private bool _userDefinedMainCropRenderHooked;
+
+    /// <summary>
+    /// When Playlist/Options are open, main-window resize + snap sync can fire many layout passes in quick succession.
+    /// Each pass used to queue another Render-priority crop refresh, repeatedly mutating shared App brush resources and
+    /// making the jerk scale with how many windows are bound to those resources. Debounce to a single refresh.
+    /// </summary>
+    private DispatcherTimer? _userDefinedMainBgDebounceTimer;
+
+    /// <summary>
+    /// When leaving compact with UserDefined wallpaper, skip <see cref="TryRestoreAuxiliaryWindowsAfterCompact"/>
+    /// in <see cref="ApplyCompactAuxiliaryWindowState"/> and run it after <see cref="ApplyBackgroundFromSettings"/>
+    /// on ContextIdle (whether aux stayed open during compact or were closed by compact-hide policy).
+    /// </summary>
+    private bool _pendingTryRestoreAfterLeaveCompactUserDefinedBg;
+
+    /// <summary>
+    /// Fingerprint of the bitmap backing UserDefined crops (path/uri + last-write/size when available).
+    /// Used to detect stale <see cref="ImageBrush.ImageSource"/> after exports/replacements on disk.
+    /// </summary>
+    private string? _appliedUserDefinedBackgroundFingerprint;
+
     private string _appTitleMode = "Default";
     private string _customAppTitle = "";
     private string _appIconVisibility = "TaskbarOnly";
@@ -556,6 +630,7 @@ public partial class MainWindow : Window
         _startupSettings = SettingsStore.Load(out _settingsStartupLoadInfo);
         _mainWindowCompact = _startupSettings.MainWindowCompact ?? false;
         _compactModeHidesAuxWindows = _startupSettings.CompactModeHidesAuxWindows ?? true;
+        _compactModeLayout = SettingsStore.NormalizeCompactModeLayout(_startupSettings.CompactModeLayout);
         if (_mainWindowCompact)
         {
             _playlistWindowWasOpenBeforeCompact = _startupSettings.PlaylistWindowOpen ?? false;
@@ -651,6 +726,11 @@ public partial class MainWindow : Window
         _windowBorderCustomPx = Math.Clamp(_startupSettings.WindowBorderCustomPx ?? 2, 1, 24);
         _optionsSelectedTab = SettingsStore.NormalizeOptionsWindowSelectedTab(_startupSettings.OptionsWindowSelectedTab);
         _cacheMaxMb = Math.Clamp(_startupSettings.CacheMaxMb ?? 512, 16, 102400);
+        _backgroundUserDefinedMainNormal = _startupSettings.BackgroundUserDefinedMainNormal;
+        _backgroundUserDefinedMainCompact = _startupSettings.BackgroundUserDefinedMainCompact;
+        _backgroundUserDefinedMainUltra = _startupSettings.BackgroundUserDefinedMainUltra;
+        _backgroundUserDefinedPlaylist = _startupSettings.BackgroundUserDefinedPlaylist;
+        _backgroundUserDefinedOptionsLog = _startupSettings.BackgroundUserDefinedOptionsLog;
         ApplyBackgroundFromSettings();
         ApplyBackgroundColorsFromSettings();
         ApplyAlwaysOnTopFromSettings();
@@ -1026,6 +1106,11 @@ public partial class MainWindow : Window
         Deactivated += (_, _) => { };
         Closing += (_, _) =>
         {
+            try
+            {
+                // no-op (legacy: used to un-hide UserDefined wallpaper)
+            }
+            catch { /* ignore */ }
             DetachMainWindowShellStyleHook();
             _isShuttingDown = true;
             try { _persistTimer.Stop(); } catch { /* ignore */ }
@@ -1319,25 +1404,58 @@ public partial class MainWindow : Window
 
     private void ApplyMainWindowCompactMode()
     {
+        var leavingCompact = (_lastAppliedMainCompactForUserDefined ?? _mainWindowCompact) && !_mainWindowCompact;
+        var deferFullLeaveCompactUserDefinedBg =
+            leavingCompact && ShouldApplyUserDefinedBackgroundForMain();
+
+        try { _userDefinedMainBgDebounceTimer?.Stop(); } catch { /* ignore */ }
+
+        if (_mainWindowCompact && _pendingTryRestoreAfterLeaveCompactUserDefinedBg)
+            _pendingTryRestoreAfterLeaveCompactUserDefinedBg = false;
+
         try
         {
+            // Apply Default UserDefined brushes before expanding chrome / SizeToContent so the first expanded
+            // layout pass does not paint Compact/Ultra Viewbox at Default aspect (zoom / wrong crop flash).
+            if (deferFullLeaveCompactUserDefinedBg)
+            {
+                try
+                {
+                    ApplyBackgroundFromSettings();
+                    ApplyBackgroundColorsFromSettings();
+                }
+                catch { /* ignore */ }
+                try
+                {
+                    if (MainWindowImageBackgroundBorder is not null
+                        && System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"] is System.Windows.Media.Brush b)
+                        MainWindowImageBackgroundBorder.Background = b;
+                }
+                catch { /* ignore */ }
+            }
+
+            var ultra = _mainWindowCompact && string.Equals(_compactModeLayout, "Ultra", StringComparison.OrdinalIgnoreCase);
             var fullChromeVis = _mainWindowCompact ? Visibility.Collapsed : Visibility.Visible;
             MainToolsRowGrid.Visibility = fullChromeVis;
             PlaylistTitleTextBlock.Visibility = fullChromeVis;
             ShuffleToggle.Visibility = fullChromeVis;
             RepeatButton.Visibility = fullChromeVis;
-            try { CompactShuffleToggleButton.Visibility = _mainWindowCompact ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
-            try { CompactRepeatButton.Visibility = _mainWindowCompact ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
-            try { CompactPlaylistButton.Visibility = _mainWindowCompact ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
+            try { CompactShuffleToggleButton.Visibility = (_mainWindowCompact && !ultra) ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
+            try { CompactRepeatButton.Visibility = (_mainWindowCompact && !ultra) ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
+            try { CompactPlaylistButton.Visibility = (_mainWindowCompact && !ultra) ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
+            try { CompactPlaylistButtonInline.Visibility = ultra ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
 
             ChromeCompactLayoutButton.Content = _mainWindowCompact ? "[+]" : "[-]";
 
             ApplyMainWindowCompactLayoutDensity();
+            _pendingTryRestoreAfterLeaveCompactUserDefinedBg = deferFullLeaveCompactUserDefinedBg;
             ApplyCompactAuxiliaryWindowState();
 
             // Saved window bounds may set an explicit Height; clear so SizeToContent can follow the card.
             SizeToContent = SizeToContent.Height;
             ClearValue(FrameworkElement.HeightProperty);
+
+            _lastAppliedMainCompactForUserDefined = _mainWindowCompact;
         }
         catch
         {
@@ -1356,6 +1474,14 @@ public partial class MainWindow : Window
                 // ignore
             }
 
+            try { UpdateMeasuredBackgroundAspects(); } catch { /* ignore */ }
+
+            if (_pendingTryRestoreAfterLeaveCompactUserDefinedBg)
+            {
+                _pendingTryRestoreAfterLeaveCompactUserDefinedBg = false;
+                try { TryRestoreAuxiliaryWindowsAfterCompact(); } catch { /* ignore */ }
+            }
+
             try
             {
                 if (_playlistSnapped && _playlistSnapEdge != PlaylistSnapEdge.None)
@@ -1367,8 +1493,247 @@ public partial class MainWindow : Window
             {
                 // ignore
             }
+
+            if (deferFullLeaveCompactUserDefinedBg)
+            {
+                try { _userDefinedMainBgDebounceTimer?.Stop(); } catch { /* ignore */ }
+                try { UpdateLayout(); } catch { /* ignore */ }
+                try { RefreshBackgroundIfUserDefinedCrop(); } catch { /* ignore */ }
+                try
+                {
+                    if (MainWindowImageBackgroundBorder is not null)
+                    {
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            try
+                            {
+                                MainWindowImageBackgroundBorder.SetResourceReference(
+                                    System.Windows.Controls.Border.BackgroundProperty,
+                                    "App.Brush.WindowBgImage.Main");
+                                MainWindowImageBackgroundBorder.InvalidateVisual();
+                            }
+                            catch { /* ignore */ }
+                        }), DispatcherPriority.Render);
+                    }
+                }
+                catch { /* ignore */ }
+            }
+
+            // After aux-window sync + layout, re-apply caption rules (Ultra uses current track; expanded respects App title mode).
+            try { ApplyMainWindowTitleFromSettings(GetAppTitleBase()); } catch { /* ignore */ }
         }), DispatcherPriority.ContextIdle);
+
+        // UserDefined wallpaper uses different crops for Default/Compact/Ultra; updating Viewbox immediately
+        // can happen before SizeToContent commits the new height, causing a visible 2-step. Defer to render.
+        if (!deferFullLeaveCompactUserDefinedBg)
+        {
+            try
+            {
+                // Also refresh after the next SizeChanged settles. When snapped aux windows are opening/syncing,
+                // the main SizeChanged handler can run after our Render callback; this ensures we always apply the
+                // final crop once the resize + aux sync have completed.
+                _userDefinedMainCropRefreshAfterSizePending = true;
+                ScheduleUserDefinedMainCropRefreshAfterLayout();
+            }
+            catch { /* ignore */ }
+
+            // Final safety net: update crop right before rendering a couple frames.
+            // When aux windows are opening/syncing, dispatcher ordering can still allow one frame of the "old crop"
+            // to paint at the new size. Rendering runs once per frame immediately before draw.
+            try
+            {
+                if (ShouldApplyUserDefinedBackgroundForMain())
+                {
+                    var anyAux = (_playlistWindow is not null) || (_optionsWindow is not null) || (_logWindow is not null);
+                    // Fewer forced frames when aux windows are open: each frame mutates shared App brushes and can amplify jerk.
+                    _userDefinedMainCropForceRenderFrames = anyAux ? 1 : 3;
+                    HookUserDefinedMainCropRenderLoopIfNeeded();
+                }
+            }
+            catch { /* ignore */ }
+        }
+        else
+        {
+            _userDefinedMainCropForceRenderFrames = 0;
+            try { UnhookUserDefinedMainCropRenderLoop(); } catch { /* ignore */ }
+        }
+
+        // Main window caption/taskbar text depends on compact + Ultra vs Options "App title" mode.
+        // This must run on compact toggles (not only when the compact layout radio changes), otherwise leaving
+        // Ultra/compact can leave Title stuck on the last track string even when AppTitleMode is Default/Custom.
+        try { ApplyMainWindowTitleFromSettings(GetAppTitleBase()); } catch { /* ignore */ }
     }
+
+    private void HookUserDefinedMainCropRenderLoopIfNeeded()
+    {
+        if (_userDefinedMainCropRenderHooked)
+            return;
+        _userDefinedMainCropRenderHooked = true;
+        System.Windows.Media.CompositionTarget.Rendering += CompositionTarget_Rendering_UserDefinedMainCrop;
+    }
+
+    private void UnhookUserDefinedMainCropRenderLoop()
+    {
+        if (!_userDefinedMainCropRenderHooked)
+            return;
+        _userDefinedMainCropRenderHooked = false;
+        try { System.Windows.Media.CompositionTarget.Rendering -= CompositionTarget_Rendering_UserDefinedMainCrop; } catch { /* ignore */ }
+    }
+
+    private void CompositionTarget_Rendering_UserDefinedMainCrop(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (_userDefinedMainCropForceRenderFrames <= 0)
+            {
+                UnhookUserDefinedMainCropRenderLoop();
+                return;
+            }
+
+            if (!ShouldApplyUserDefinedBackgroundForMain())
+            {
+                _userDefinedMainCropForceRenderFrames = 0;
+                UnhookUserDefinedMainCropRenderLoop();
+                return;
+            }
+
+            // Apply the in-place update (best effort). If it cannot run in-place, fall back once and stop.
+            if (!TryUpdateUserDefinedMainCropInPlaceFast())
+            {
+                TryUpdateUserDefinedMainCropInPlace();
+                _userDefinedMainCropForceRenderFrames = 0;
+                UnhookUserDefinedMainCropRenderLoop();
+                return;
+            }
+
+            _userDefinedMainCropForceRenderFrames--;
+            if (_userDefinedMainCropForceRenderFrames <= 0)
+                UnhookUserDefinedMainCropRenderLoop();
+        }
+        catch
+        {
+            _userDefinedMainCropForceRenderFrames = 0;
+            UnhookUserDefinedMainCropRenderLoop();
+        }
+    }
+
+    private void ScheduleUserDefinedMainCropRefreshAfterLayout()
+    {
+        if (!ShouldApplyUserDefinedBackgroundForMain())
+            return;
+
+        var anyAux = (_playlistWindow is not null) || (_optionsWindow is not null) || (_logWindow is not null);
+        if (anyAux)
+        {
+            RequestDebouncedUserDefinedMainBackgroundCropRefresh();
+            return;
+        }
+
+        _userDefinedMainCropRefreshGen++;
+        var gen = _userDefinedMainCropRefreshGen;
+
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                if (gen != _userDefinedMainCropRefreshGen)
+                    return;
+                if (!ShouldApplyUserDefinedBackgroundForMain())
+                    return;
+
+                // Commit the new SizeToContent pass, then update Viewbox in-place once.
+                try { UpdateLayout(); } catch { /* ignore */ }
+                try { RefreshBackgroundIfUserDefinedCrop(); } catch { /* ignore */ }
+            }
+            catch { /* ignore */ }
+        }), DispatcherPriority.Render);
+    }
+
+    private void RequestDebouncedUserDefinedMainBackgroundCropRefresh()
+    {
+        try
+        {
+            if (!ShouldApplyUserDefinedBackgroundForMain())
+                return;
+
+            if (_userDefinedMainBgDebounceTimer is null)
+            {
+                _userDefinedMainBgDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+                _userDefinedMainBgDebounceTimer.Tick += (_, _) =>
+                {
+                    try { _userDefinedMainBgDebounceTimer!.Stop(); } catch { /* ignore */ }
+                    if (!ShouldApplyUserDefinedBackgroundForMain())
+                        return;
+                    try { UpdateLayout(); } catch { /* ignore */ }
+                    try { RefreshBackgroundIfUserDefinedCrop(); } catch { /* ignore */ }
+                };
+            }
+
+            // Restart the debounce window on every burst event (resize/sync storms).
+            try { _userDefinedMainBgDebounceTimer.Stop(); } catch { /* ignore */ }
+            try { _userDefinedMainBgDebounceTimer.Start(); } catch { /* ignore */ }
+        }
+        catch { /* ignore */ }
+    }
+
+    /// <summary>
+    /// Keeps Default/Compact/Ultra aspect hints in sync. Historically only the <i>current</i> layout was measured,
+    /// leaving Compact/Ultra at 0 in Default mode — the designer then fell back to hard-coded 600×140 / 600×110,
+    /// which mismatched the real window and produced vertically squashed crops. Unknown aspects are derived from
+    /// the live client size using typical height ratios between the three layouts (same fixed width as Main).
+    /// </summary>
+    private void FillDerivedMainAspectHints(double w, double h)
+    {
+        static double SafeAspect(double ww, double hh)
+        {
+            if (ww <= 1 || hh <= 1) return 0;
+            return ww / hh;
+        }
+
+        // Prefer the DIP size of the element that actually displays the image (not always identical to Window bounds).
+        try
+        {
+            if (MainWindowImageBackgroundBorder is { } host && host.ActualWidth > 1 && host.ActualHeight > 1)
+            {
+                w = host.ActualWidth;
+                h = host.ActualHeight;
+            }
+        }
+        catch { /* ignore */ }
+
+        // Reference height ratios for 600px-wide SizeToContent layouts (see Background designer fallbacks).
+        const double refHDefault = 260.0;
+        const double refHCompact = 140.0;
+        const double refHUltra = 110.0;
+
+        var cur = SafeAspect(w, h);
+        if (cur <= 0)
+            return;
+
+        if (!_mainWindowCompact)
+        {
+            _measuredMainDefaultAspect = cur;
+            _measuredMainCompactAspect = SafeAspect(w, h * (refHCompact / refHDefault));
+            _measuredMainUltraAspect = SafeAspect(w, h * (refHUltra / refHDefault));
+            return;
+        }
+
+        if (string.Equals(_compactModeLayout, "Ultra", StringComparison.OrdinalIgnoreCase))
+        {
+            _measuredMainUltraAspect = cur;
+            _measuredMainDefaultAspect = SafeAspect(w, h * (refHDefault / refHUltra));
+            _measuredMainCompactAspect = SafeAspect(w, h * (refHCompact / refHUltra));
+        }
+        else
+        {
+            _measuredMainCompactAspect = cur;
+            _measuredMainDefaultAspect = SafeAspect(w, h * (refHDefault / refHCompact));
+            _measuredMainUltraAspect = SafeAspect(w, h * (refHUltra / refHCompact));
+        }
+    }
+
+    private void UpdateMeasuredBackgroundAspects() =>
+        FillDerivedMainAspectHints(ActualWidth, ActualHeight);
 
     private void ApplyCompactAuxiliaryWindowState()
     {
@@ -1383,7 +1748,8 @@ public partial class MainWindow : Window
         }
         else
         {
-            TryRestoreAuxiliaryWindowsAfterCompact();
+            if (!_pendingTryRestoreAfterLeaveCompactUserDefinedBg)
+                TryRestoreAuxiliaryWindowsAfterCompact();
         }
     }
 
@@ -1408,6 +1774,12 @@ public partial class MainWindow : Window
             }
         }
         catch { /* ignore */ }
+    }
+
+    private void ApplyMainWindowCompactModeLayout()
+    {
+        // Layout variants affect both density and visibility (PL button, info stack), so re-apply the compact mode.
+        ApplyMainWindowCompactMode();
     }
 
     private void TryRestoreAuxiliaryWindowsAfterCompact()
@@ -1501,6 +1873,7 @@ public partial class MainWindow : Window
     private void ApplyMainWindowCompactLayoutDensity()
     {
         var c = _mainWindowCompact;
+        var ultra = c && string.Equals(_compactModeLayout, "Ultra", StringComparison.OrdinalIgnoreCase);
 
         try
         {
@@ -1541,10 +1914,21 @@ public partial class MainWindow : Window
             ApplyVisualizerPlacementForCompact(c);
             if (c)
             {
-                VisualizerBorder.Padding = new Thickness(4, 0, 4, 0);
-                VisualizerHostGrid.Height = 24.0;
-                if (SpectrumPanelChrome is not null)
-                    SpectrumPanelChrome.Height = 24.0;
+                if (ultra)
+                {
+                    // Ultra compact is a single-row control strip; keep the visualizer tight.
+                    VisualizerBorder.Padding = new Thickness(4, 0, 4, 0);
+                    VisualizerHostGrid.Height = 24.0;
+                    if (SpectrumPanelChrome is not null)
+                        SpectrumPanelChrome.Height = 24.0;
+                }
+                else
+                {
+                    VisualizerBorder.Padding = new Thickness(4, 0, 4, 0);
+                    VisualizerHostGrid.Height = 24.0;
+                    if (SpectrumPanelChrome is not null)
+                        SpectrumPanelChrome.Height = 24.0;
+                }
             }
             else
             {
@@ -1571,6 +1955,26 @@ public partial class MainWindow : Window
         {
             // ignore
         }
+
+        try
+        {
+            if (PlaybackCardInnerGrid is not null)
+            {
+                if (ultra)
+                {
+                    MainPlaybackInfoStack.Visibility = Visibility.Collapsed;
+                    PlaybackCardInnerGrid.RowDefinitions[2].Height = new GridLength(0);
+                    PlaybackCardInnerGrid.RowDefinitions[3].Height = new GridLength(0);
+                }
+                else
+                {
+                    MainPlaybackInfoStack.Visibility = Visibility.Visible;
+                    PlaybackCardInnerGrid.RowDefinitions[2].Height = GridLength.Auto;
+                    PlaybackCardInnerGrid.RowDefinitions[3].Height = GridLength.Auto;
+                }
+            }
+        }
+        catch { /* ignore */ }
 
         try
         {
@@ -1698,6 +2102,408 @@ public partial class MainWindow : Window
         catch { /* ignore */ }
 
         RequestPersistSnapshot();
+    }
+
+    private void SetCompactModeLayout(string layout)
+    {
+        var norm = SettingsStore.NormalizeCompactModeLayout(layout);
+        if (string.Equals(_compactModeLayout, norm, StringComparison.OrdinalIgnoreCase))
+            return;
+        _compactModeLayout = norm;
+
+        // If compact is active, apply immediately (layout changes are handled later in the compact UI work).
+        try { ApplyMainWindowCompactModeLayout(); } catch { /* ignore */ }
+
+        RequestPersistSnapshot();
+    }
+
+    private bool ShouldApplyUserDefinedBackgroundForMain()
+    {
+        try
+        {
+            if (!string.Equals(SettingsStore.NormalizeBackgroundImageStretch(_backgroundImageStretch), "UserDefined", StringComparison.OrdinalIgnoreCase))
+                return false;
+            var mode = (_backgroundMode ?? "Default").Trim();
+            if (string.Equals(mode, "None", StringComparison.OrdinalIgnoreCase))
+                return false;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void RefreshBackgroundIfUserDefinedCrop()
+    {
+        try
+        {
+            if (!ShouldApplyUserDefinedBackgroundForMain())
+                return;
+
+            // Update the existing Main brushes in-place (no resource swap, no opacity tricks).
+            if (TryUpdateUserDefinedMainCropInPlaceFast())
+                return;
+
+            // Fallback: rebuild if resources aren't in the expected shape (older states).
+            TryUpdateUserDefinedMainCropInPlace();
+        }
+        catch { /* ignore */ }
+    }
+
+    private bool TryUpdateUserDefinedMainCropInPlaceFast()
+    {
+        try
+        {
+            if (!Dispatcher.CheckAccess())
+                return false;
+
+            var rect = GetUserDefinedRectForTarget("Main") ?? RectN.Full;
+            rect = SettingsStore.NormalizeRectN(rect);
+
+            if (System.Windows.Application.Current.Resources["App.Brush.WindowBgImageRaw"] is not System.Windows.Media.ImageBrush raw
+                || raw.ImageSource is not System.Windows.Media.Imaging.BitmapSource rawSrc)
+                return false;
+
+            // If the designer / settings changed the underlying image, in-place Viewbox updates alone will keep
+            // painting the old bitmap until something rebuilds the brushes. Detect mismatch and re-seed.
+            var curFp = TryComputeLiveUserDefinedBackgroundFingerprintFromBitmap(rawSrc);
+            var expectedFp = TryComputeExpectedUserDefinedBackgroundFingerprintWithoutDecode();
+            if (!string.IsNullOrEmpty(expectedFp) &&
+                !string.IsNullOrEmpty(curFp) &&
+                !string.Equals(expectedFp, curFp, StringComparison.Ordinal) &&
+                TryLoadUserDefinedBackgroundBitmapSourceFromSettings(out var expectedSrc) &&
+                expectedSrc is not null)
+            {
+                var newRaw = new System.Windows.Media.ImageBrush(expectedSrc);
+                ApplyBackgroundImageUserDefinedToBrush(newRaw, expectedSrc, rect);
+                System.Windows.Application.Current.Resources["App.Brush.WindowBgImageRaw"] = newRaw;
+                raw = newRaw;
+                rawSrc = expectedSrc;
+                _appliedUserDefinedBackgroundFingerprint = TryComputeBackgroundBitmapFingerprint(expectedSrc);
+
+                var newMain = new System.Windows.Media.ImageBrush(expectedSrc);
+                ApplyBackgroundImageUserDefinedToBrush(newMain, expectedSrc, rect);
+                System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"] =
+                    ApplyScrimIfNeeded(newMain, scrimPercent: _backgroundScrimPercent);
+                System.Windows.Application.Current.Resources["App.Brush.WindowBgImage"] =
+                    System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"];
+                return true;
+            }
+
+            // If a previous non-UserDefined apply left these frozen, re-seed mutable brushes so compact toggles
+            // can update Viewbox immediately (otherwise we fall back to a later rebuild and the crop looks "late").
+            if (raw.IsFrozen)
+            {
+                var newRaw = new System.Windows.Media.ImageBrush(rawSrc);
+                ApplyBackgroundImageUserDefinedToBrush(newRaw, rawSrc, rect);
+                System.Windows.Application.Current.Resources["App.Brush.WindowBgImageRaw"] = newRaw;
+                raw = newRaw;
+            }
+
+            raw.ViewboxUnits = System.Windows.Media.BrushMappingMode.RelativeToBoundingBox;
+            raw.Viewbox = new System.Windows.Rect(rect.X, rect.Y, rect.W, rect.H);
+
+            if (System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"] is System.Windows.Media.ImageBrush mainIb)
+            {
+                if (mainIb.ImageSource is not System.Windows.Media.Imaging.BitmapSource src)
+                    return false;
+
+                if (mainIb.IsFrozen)
+                {
+                    var next = new System.Windows.Media.ImageBrush(src);
+                    // Preserve the current mapping (should already be UserDefined), then override Viewbox below.
+                    try
+                    {
+                        next.TileMode = mainIb.TileMode;
+                        next.Viewport = mainIb.Viewport;
+                        next.ViewportUnits = mainIb.ViewportUnits;
+                        next.Stretch = mainIb.Stretch;
+                        next.AlignmentX = mainIb.AlignmentX;
+                        next.AlignmentY = mainIb.AlignmentY;
+                        next.ViewboxUnits = mainIb.ViewboxUnits;
+                        next.Viewbox = mainIb.Viewbox;
+                    }
+                    catch { /* ignore */ }
+                    System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"] = mainIb = next;
+                    System.Windows.Application.Current.Resources["App.Brush.WindowBgImage"] = mainIb;
+                }
+
+                mainIb.ViewboxUnits = System.Windows.Media.BrushMappingMode.RelativeToBoundingBox;
+                mainIb.Viewbox = new System.Windows.Rect(rect.X, rect.Y, rect.W, rect.H);
+            }
+            else if (System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"] is System.Windows.Media.DrawingBrush db)
+            {
+                if (db.IsFrozen)
+                {
+                    // Rebuild a mutable scrim wrapper around the current raw brush.
+                    var newMain = new System.Windows.Media.ImageBrush(rawSrc);
+                    ApplyBackgroundImageUserDefinedToBrush(newMain, rawSrc, rect);
+                    var rebuilt = ApplyScrimIfNeeded(newMain, scrimPercent: _backgroundScrimPercent);
+                    System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"] = rebuilt;
+                    System.Windows.Application.Current.Resources["App.Brush.WindowBgImage"] = rebuilt;
+                    db = rebuilt as System.Windows.Media.DrawingBrush ?? db;
+                    if (db.IsFrozen) return false;
+                }
+                if (db.Drawing is not System.Windows.Media.DrawingGroup dg) return false;
+                if (dg.IsFrozen) return false;
+
+                // Update any ImageBrush inside the geometry drawings, and resize the content rect to match the cropped bitmap aspect.
+                var src = rawSrc;
+
+                var vb = raw.Viewbox;
+                var imgW = Math.Max(1.0, (double)src.PixelWidth);
+                var imgH = Math.Max(1.0, (double)src.PixelHeight);
+                var physW = vb.Width * imgW;
+                var physH = vb.Height * imgH;
+                var cropAspect = physW / Math.Max(1e-9, physH);
+                var contentRect = cropAspect >= 1.0
+                    ? new System.Windows.Rect(0, 0, cropAspect, 1.0)
+                    : new System.Windows.Rect(0, 0, 1.0, 1.0 / cropAspect);
+
+                foreach (var child in dg.Children)
+                {
+                    if (child is not System.Windows.Media.GeometryDrawing gd)
+                        continue;
+
+                    if (gd.Geometry is System.Windows.Media.RectangleGeometry rg && !rg.IsFrozen)
+                        rg.Rect = contentRect;
+
+                    if (gd.Brush is System.Windows.Media.ImageBrush ib && !ib.IsFrozen)
+                    {
+                        ib.ViewboxUnits = System.Windows.Media.BrushMappingMode.RelativeToBoundingBox;
+                        ib.Viewbox = new System.Windows.Rect(rect.X, rect.Y, rect.W, rect.H);
+                    }
+                }
+            }
+            else
+            {
+                return false;
+            }
+
+            // Legacy key tracks Main.
+            System.Windows.Application.Current.Resources["App.Brush.WindowBgImage"] =
+                System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"];
+
+            // Nudge the live visual to pick up the updated brush immediately. When other windows are opening/syncing,
+            // DynamicResource propagation can lag a frame; re-binding the same key avoids the "late flip".
+            try
+            {
+                if (MainWindowImageBackgroundBorder is not null)
+                {
+                    MainWindowImageBackgroundBorder.SetResourceReference(
+                        System.Windows.Controls.Border.BackgroundProperty,
+                        "App.Brush.WindowBgImage.Main");
+                    MainWindowImageBackgroundBorder.InvalidateVisual();
+                }
+            }
+            catch { /* ignore */ }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? TryComputeBackgroundBitmapFingerprint(System.Windows.Media.Imaging.BitmapSource? src)
+    {
+        try
+        {
+            if (src is null)
+                return null;
+
+            // Prefer the original URI (custom file paths + pack URIs).
+            if (src is System.Windows.Media.Imaging.BitmapImage bi && bi.UriSource is { } uri)
+            {
+                if (uri.IsFile)
+                {
+                    try
+                    {
+                        var p = uri.LocalPath;
+                        if (!string.IsNullOrWhiteSpace(p) && File.Exists(p))
+                        {
+                            var fp = TryComputeFileFingerprint(p);
+                            if (!string.IsNullOrEmpty(fp))
+                                return $"{fp}|px:{src.PixelWidth}x{src.PixelHeight}";
+
+                            var fi = new FileInfo(p);
+                            return $"file:{p}|lw:{fi.LastWriteTimeUtc.Ticks}|len:{fi.Length}|px:{src.PixelWidth}x{src.PixelHeight}";
+                        }
+                    }
+                    catch { /* ignore */ }
+
+                    return $"file:{Path.GetFullPath(uri.LocalPath)}|px:{src.PixelWidth}x{src.PixelHeight}";
+                }
+
+                return $"uri:{uri}|px:{src.PixelWidth}x{src.PixelHeight}";
+            }
+
+            return $"mem:{src.PixelWidth}x{src.PixelHeight}|fmt:{src.Format}";
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? TryComputeFileFingerprint(string path)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return null;
+
+            var p = Path.GetFullPath(path);
+            if (!File.Exists(p))
+                return null;
+
+            var fi = new FileInfo(p);
+            return $"file:{p}|lw:{fi.LastWriteTimeUtc.Ticks}|len:{fi.Length}";
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static System.Windows.Media.Imaging.BitmapSource? TryLoadBitmapSourceFromFileFresh(string path)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return null;
+
+            var p = Path.GetFullPath(path);
+            if (!File.Exists(p))
+                return null;
+
+            // Decode from bytes to avoid WPF URI image caching when a file is replaced in-place.
+            var bytes = File.ReadAllBytes(p);
+            using var ms = new MemoryStream(bytes);
+            var bi = new System.Windows.Media.Imaging.BitmapImage();
+            bi.BeginInit();
+            bi.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            bi.StreamSource = ms;
+            bi.EndInit();
+            bi.Freeze();
+            return bi;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private string? TryComputeLiveUserDefinedBackgroundFingerprintFromBitmap(System.Windows.Media.Imaging.BitmapSource src)
+    {
+        try
+        {
+            var mode = (_backgroundMode ?? "Default").Trim();
+
+            // Custom file-backed backgrounds: compare on-disk stamp only (stable across decode/caching).
+            if (string.Equals(mode, "Custom", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(_customBackgroundImagePath) &&
+                File.Exists(_customBackgroundImagePath))
+            {
+                return TryComputeFileFingerprint(_customBackgroundImagePath);
+            }
+
+            return TryComputeBackgroundBitmapFingerprint(src);
+        }
+        catch
+        {
+            return TryComputeBackgroundBitmapFingerprint(src);
+        }
+    }
+
+    private string? TryComputeExpectedUserDefinedBackgroundFingerprintWithoutDecode()
+    {
+        try
+        {
+            var mode = (_backgroundMode ?? "Default").Trim();
+            if (string.Equals(mode, "None", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            if (string.Equals(mode, "Custom", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(_customBackgroundImagePath) &&
+                File.Exists(_customBackgroundImagePath))
+            {
+                return TryComputeFileFingerprint(_customBackgroundImagePath);
+            }
+
+            if (System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"] is System.Windows.Media.ImageBrush defBrush
+                && defBrush.ImageSource is System.Windows.Media.Imaging.BitmapSource srcDef)
+                return TryComputeBackgroundBitmapFingerprint(srcDef);
+
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool TryLoadUserDefinedBackgroundBitmapSourceFromSettings(out System.Windows.Media.Imaging.BitmapSource? src)
+    {
+        src = null;
+        try
+        {
+            var mode = (_backgroundMode ?? "Default").Trim();
+            if (string.Equals(mode, "None", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (string.Equals(mode, "Custom", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(_customBackgroundImagePath) &&
+                File.Exists(_customBackgroundImagePath))
+            {
+                src = TryLoadBitmapSourceFromFileFresh(_customBackgroundImagePath);
+                return src is not null;
+            }
+
+            if (System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"] is System.Windows.Media.ImageBrush defBrush
+                && defBrush.ImageSource is System.Windows.Media.Imaging.BitmapSource srcDef)
+            {
+                src = srcDef;
+                return true;
+            }
+
+            return false;
+        }
+        catch
+        {
+            src = null;
+            return false;
+        }
+    }
+
+    private void TryUpdateUserDefinedMainCropInPlace()
+    {
+        try
+        {
+            // Update raw + scrimmed main brushes by reusing their existing ImageSource.
+            if (System.Windows.Application.Current.Resources["App.Brush.WindowBgImageRaw"] is not System.Windows.Media.ImageBrush raw
+                || raw.ImageSource is not System.Windows.Media.Imaging.BitmapSource src)
+                return;
+
+            // Build a new raw brush with updated viewbox but same source.
+            var newRaw = new System.Windows.Media.ImageBrush(src);
+            ApplyBackgroundImageUserDefinedToBrush(newRaw, src, GetUserDefinedRectForTarget("Main"));
+            try { newRaw.Freeze(); } catch { /* ignore */ }
+            System.Windows.Application.Current.Resources["App.Brush.WindowBgImageRaw"] = newRaw;
+
+            var newMain = new System.Windows.Media.ImageBrush(src);
+            ApplyBackgroundImageUserDefinedToBrush(newMain, src, GetUserDefinedRectForTarget("Main"));
+            try { newMain.Freeze(); } catch { /* ignore */ }
+            System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"] =
+                ApplyScrimIfNeeded(newMain, scrimPercent: _backgroundScrimPercent);
+
+            // Legacy key tracks Main.
+            System.Windows.Application.Current.Resources["App.Brush.WindowBgImage"] =
+                System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"];
+        }
+        catch { /* ignore */ }
     }
 
     private void ChromeCloseButton_OnClick(object sender, RoutedEventArgs e)
@@ -2233,8 +3039,13 @@ public partial class MainWindow : Window
             };
             try { _playlistWindow.Title = $"{GetAppTitleBase()} — Playlist"; } catch { /* ignore */ }
 
-            // After the window is actually loaded (virtualization ready), center on now-playing.
-            _playlistWindow.Loaded += (_, _) => Dispatcher.BeginInvoke(new Action(FocusPlaylistOnNowPlaying), DispatcherPriority.ContextIdle);
+            // Center on now-playing during Loaded (sync + first center pass on UI thread) so we do not paint the
+            // top of the list for a frame before ContextIdle scroll. Queue list opacity is suppressed until then.
+            _playlistWindow.Loaded += (_, _) =>
+            {
+                try { FocusPlaylistOnNowPlaying(); }
+                catch { /* ignore */ }
+            };
 
             _playlistWindow.Closing += (_, _) =>
             {
@@ -2282,6 +3093,7 @@ public partial class MainWindow : Window
             _playlistWindow.MinHeight = 320.0 * plS;
             _playlistWindowOuterAtUiScalePercent = _uiScalePercent;
             AppLog.Info($"Playlist bounds (open) pre-show: L={_playlistWindow.Left} T={_playlistWindow.Top} W={_playlistWindow.Width} H={_playlistWindow.Height} State={_playlistWindow.WindowState}");
+            try { _playlistWindow.BeginSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
             _playlistWindow.Show();
             ApplyAlwaysOnTopFromSettings();
             // Restore snapped positioning relative to main window if previously snapped.
@@ -2349,13 +3161,22 @@ public partial class MainWindow : Window
                 return;
             var cur = _engine.GetCurrent();
             if (cur is null)
+            {
+                try { _playlistWindow.EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
                 return;
+            }
             if (_originalEntries.Count == 0)
+            {
+                try { _playlistWindow.EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
                 return;
+            }
 
             var idx = _originalEntries.FindIndex(e => string.Equals(e.VideoId, cur.VideoId, StringComparison.OrdinalIgnoreCase));
             if (idx < 0 || idx >= _originalEntries.Count)
+            {
+                try { _playlistWindow.EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
                 return;
+            }
 
             // Ensure it's visible even if centering math bails out.
             _playlistWindow.ScrollToIndex(idx);
@@ -2363,7 +3184,7 @@ public partial class MainWindow : Window
         }
         catch
         {
-            // ignore
+            try { _playlistWindow?.EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
         }
     }
 
@@ -2524,6 +3345,17 @@ public partial class MainWindow : Window
                     ApplyBackgroundFromSettings();
                     RequestPersistSnapshot();
                 },
+                getBackgroundUserDefinedMainNormal: () => _backgroundUserDefinedMainNormal,
+                setBackgroundUserDefinedMainNormal: (r) => { _backgroundUserDefinedMainNormal = r; },
+                getBackgroundUserDefinedMainCompact: () => _backgroundUserDefinedMainCompact,
+                setBackgroundUserDefinedMainCompact: (r) => { _backgroundUserDefinedMainCompact = r; },
+                getBackgroundUserDefinedMainUltra: () => _backgroundUserDefinedMainUltra,
+                setBackgroundUserDefinedMainUltra: (r) => { _backgroundUserDefinedMainUltra = r; },
+                getBackgroundUserDefinedPlaylist: () => _backgroundUserDefinedPlaylist,
+                setBackgroundUserDefinedPlaylist: (r) => { _backgroundUserDefinedPlaylist = r; },
+                getBackgroundUserDefinedOptionsLog: () => _backgroundUserDefinedOptionsLog,
+                setBackgroundUserDefinedOptionsLog: (r) => { _backgroundUserDefinedOptionsLog = r; },
+                openBackgroundDesigner: () => OpenBackgroundDesigner(),
                 getAppTitleMode: () => _appTitleMode,
                 setAppTitleMode: (m) =>
                 {
@@ -2589,6 +3421,8 @@ public partial class MainWindow : Window
                 setAlwaysOnTopOptionsWindow: (v) => SetAlwaysOnTopOptionsWindow(v),
                 getCompactModeHidesAuxWindows: () => _compactModeHidesAuxWindows,
                 setCompactModeHidesAuxWindows: (v) => SetCompactModeHidesAuxWindows(v),
+                getCompactModeLayout: () => _compactModeLayout,
+                setCompactModeLayout: (v) => SetCompactModeLayout(v),
                 getKeepIncompletePlaylistOnCancel: () => _keepIncompletePlaylistOnCancel,
                 setKeepIncompletePlaylistOnCancel: (v) =>
                 {
@@ -2761,6 +3595,13 @@ public partial class MainWindow : Window
         if (_optionsSnapped)
             SyncOptionsWindowToMain();
 
+        // If a compact-mode toggle is in-flight, apply the UserDefined crop after the resize + aux-window sync.
+        if (_userDefinedMainCropRefreshAfterSizePending && ShouldApplyUserDefinedBackgroundForMain())
+        {
+            _userDefinedMainCropRefreshAfterSizePending = false;
+            try { ScheduleUserDefinedMainCropRefreshAfterLayout(); } catch { /* ignore */ }
+        }
+
         // If not snapped, do nothing. Snapping is only initiated by moving the secondary window near the main window.
     }
 
@@ -2852,14 +3693,15 @@ public partial class MainWindow : Window
             var mainTop = main.Top;
             var mainRight = main.Right;
             var mainBottom = main.Bottom;
+            var mainOuterH = mainBottom - mainTop;
 
             var owLeft = ow.Left;
             var owTop = ow.Top;
             var owRight = ow.Right;
             var owBottom = ow.Bottom;
 
-            var verticalOverlap = Math.Min(mainBottom, owBottom) - Math.Max(mainTop, owTop);
-            var hasOverlap = verticalOverlap > 64;
+            var verticalOverlap = ComputeSideSnapVerticalOverlapDip(mainTop, mainBottom, owTop, owBottom);
+            var hasOverlap = verticalOverlap > SideSnapVerticalOverlapThresholdPx(mainOuterH);
 
             var horizontalOverlap = Math.Min(mainRight, owRight) - Math.Max(mainLeft, owLeft);
             var hasHOverlap = horizontalOverlap > 64;
@@ -2994,6 +3836,7 @@ public partial class MainWindow : Window
             var mainTop = main.Top;
             var mainRight = main.Right;
             var mainBottom = main.Bottom;
+            var mainOuterH = mainBottom - mainTop;
 
             var plLeft = pl.Left;
             var plTop = pl.Top;
@@ -3001,8 +3844,8 @@ public partial class MainWindow : Window
             var plBottom = pl.Bottom;
 
             // Consider snap only if windows overlap vertically a bit (prevents accidental snap).
-            var verticalOverlap = Math.Min(mainBottom, plBottom) - Math.Max(mainTop, plTop);
-            var hasOverlap = verticalOverlap > 64;
+            var verticalOverlap = ComputeSideSnapVerticalOverlapDip(mainTop, mainBottom, plTop, plBottom);
+            var hasOverlap = verticalOverlap > SideSnapVerticalOverlapThresholdPx(mainOuterH);
 
             // For bottom snap require horizontal overlap.
             var horizontalOverlap = Math.Min(mainRight, plRight) - Math.Max(mainLeft, plLeft);
@@ -3680,7 +4523,10 @@ public partial class MainWindow : Window
             SetPlaylistTitle(title);
             _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: !deferNowPlayingChanged);
             var displayIndex = GetOriginalIndexByVideoId(desiredId) ?? 0;
-            SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
+            await SetQueueListAsync(
+                _originalEntries,
+                selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex,
+                cancellationToken: cancellationToken);
             _hasLoadedPlaylist = true;
             UpdateRefreshEnabled();
             if (!deferNowPlayingChanged)
@@ -4500,7 +5346,7 @@ public partial class MainWindow : Window
         await LoadPlaylistFromEntriesRuntimeAsync(entries, title, source, currentVideoId, cancellationToken);
     }
 
-    private Task LoadPlaylistFromEntriesRuntimeAsync(
+    private async Task LoadPlaylistFromEntriesRuntimeAsync(
         IReadOnlyList<PlaylistEntry> entries,
         string? title,
         string sourceKey,
@@ -4541,7 +5387,10 @@ public partial class MainWindow : Window
 
             SetPlaylistTitle(title);
             var displayIndex = GetOriginalIndexByVideoId(preserveCurrentVideoId) ?? 0;
-            SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
+            await SetQueueListAsync(
+                _originalEntries,
+                selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex,
+                cancellationToken: cancellationToken);
             _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
             _hasLoadedPlaylist = true;
             UpdateRefreshEnabled();
@@ -4562,8 +5411,6 @@ public partial class MainWindow : Window
         {
             _playlistWindow?.SetLoadEnabled(true);
         }
-
-        return Task.CompletedTask;
     }
 
     private void ClearPlaylistSearchFilterAfterNewPlaylist()
@@ -4719,6 +5566,65 @@ public partial class MainWindow : Window
             _queueItems.Add(qi);
             _queueItemById[qi.VideoId] = qi;
         }
+        _playlistWindow?.SetItemsSource(_queueItems);
+        if (selectedIndex >= 0)
+            _playlistWindow?.ScrollToIndex(selectedIndex);
+    }
+
+    private async Task SetQueueListAsync(
+        IReadOnlyList<PlaylistEntry> entries,
+        int selectedIndex,
+        bool forceFullRebuild = true,
+        CancellationToken cancellationToken = default)
+    {
+        // Some refresh paths can call into this from non-UI threads; marshal to the window dispatcher.
+        if (!Dispatcher.CheckAccess())
+        {
+            await Dispatcher.InvokeAsync(
+                async () => await SetQueueListAsync(entries, selectedIndex, forceFullRebuild, cancellationToken),
+                DispatcherPriority.Normal).Task.Unwrap();
+            return;
+        }
+
+        if (!forceFullRebuild && PlaylistDisplaysSameEntryOrder(entries))
+        {
+            UpdateNowPlayingFlag(_engine.GetCurrent());
+            return;
+        }
+
+        _queueItems.Clear();
+        _queueItemById.Clear();
+
+        var isLocal = _lastPlaylistSourceType != PlaylistSourceType.YouTube;
+        var pad = Math.Max(1, entries.Count.ToString().Length);
+        var current = _engine.GetCurrent();
+
+        // Yield periodically so building huge playlists doesn't freeze the main window (e.g. when skipping metadata).
+        const int batch = 200;
+        var i = 0;
+        foreach (var e in entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var prefix = isLocal ? $"{(_queueItems.Count + 1).ToString().PadLeft(pad, '0')}. " : null;
+            var qi = new QueueItem(e, prefix);
+            if (_unavailableVideoIds.Contains(qi.VideoId) || LooksLikeUnavailableTitle(qi.Title))
+                qi.IsUnavailable = true;
+            if (_ageRestrictedVideoIds.Contains(qi.VideoId))
+                qi.IsAgeRestricted = true;
+            if (_premiumVideoIds.Contains(qi.VideoId))
+                qi.IsPremium = true;
+            if (current is { } cur && string.Equals(cur.VideoId, qi.VideoId, StringComparison.OrdinalIgnoreCase))
+                qi.IsNowPlaying = true;
+
+            _queueItems.Add(qi);
+            _queueItemById[qi.VideoId] = qi;
+
+            i++;
+            if (i % batch == 0)
+                await Dispatcher.Yield(DispatcherPriority.Background);
+        }
+
         _playlistWindow?.SetItemsSource(_queueItems);
         if (selectedIndex >= 0)
             _playlistWindow?.ScrollToIndex(selectedIndex);
@@ -5352,6 +6258,11 @@ public partial class MainWindow : Window
             BackgroundAlpha: _backgroundAlpha,
             BackgroundScrimPercent: _backgroundScrimPercent,
             BackgroundImageStretch: _backgroundImageStretch,
+            BackgroundUserDefinedMainNormal: _backgroundUserDefinedMainNormal,
+            BackgroundUserDefinedMainCompact: _backgroundUserDefinedMainCompact,
+            BackgroundUserDefinedMainUltra: _backgroundUserDefinedMainUltra,
+            BackgroundUserDefinedPlaylist: _backgroundUserDefinedPlaylist,
+            BackgroundUserDefinedOptionsLog: _backgroundUserDefinedOptionsLog,
             AppTitleMode: _appTitleMode,
             CustomAppTitle: string.IsNullOrWhiteSpace(_customAppTitle) ? null : _customAppTitle.Trim(),
             AppIconVisibility: _appIconVisibility,
@@ -5370,6 +6281,7 @@ public partial class MainWindow : Window
             AppLogLevel: _appLogLevel,
             AppLogMaxMb: _appLogMaxMb,
             MainWindowCompact: _mainWindowCompact,
+            CompactModeLayout: _compactModeLayout,
             CompactModeHidesAuxWindows: _compactModeHidesAuxWindows,
             KeepIncompletePlaylistOnCancel: _keepIncompletePlaylistOnCancel,
             LastSavedByAppVersion: AppVersion.Current
@@ -5439,40 +6351,56 @@ public partial class MainWindow : Window
         try
         {
             var mode = (_backgroundMode ?? "Default").Trim();
-            System.Windows.Media.Brush brush;
-            System.Windows.Media.ImageBrush? raw = null;
+            System.Windows.Media.Brush mainBrush;
+            System.Windows.Media.Brush playlistBrush;
+            System.Windows.Media.Brush optionsLogBrush;
+            System.Windows.Media.ImageBrush? rawMain = null;
+            var isUserDefined = string.Equals(
+                SettingsStore.NormalizeBackgroundImageStretch(_backgroundImageStretch),
+                "UserDefined",
+                StringComparison.OrdinalIgnoreCase);
 
             if (string.Equals(mode, "None", StringComparison.OrdinalIgnoreCase))
             {
                 // Flat background: follow current theme palette.
-                brush = (System.Windows.Media.Brush)System.Windows.Application.Current.Resources["App.Theme.Surface"];
+                var surface = (System.Windows.Media.Brush)System.Windows.Application.Current.Resources["App.Theme.Surface"];
                 // If the user sets Background opacity to 0, App.Theme.Surface can become fully transparent.
                 // With BackgroundMode=None that reveals the default window black, which can make Light theme
                 // look like "black on black". Force an opaque fill while still honoring the theme RGB.
-                if (_backgroundAlpha <= 0 && brush is System.Windows.Media.SolidColorBrush sb)
+                if (_backgroundAlpha <= 0 && surface is System.Windows.Media.SolidColorBrush sb)
                 {
                     var c = System.Windows.Media.Color.FromRgb(sb.Color.R, sb.Color.G, sb.Color.B);
                     var b = new System.Windows.Media.SolidColorBrush(c);
                     try { b.Freeze(); } catch { /* ignore */ }
-                    brush = b;
+                    surface = b;
                 }
+                mainBrush = surface;
+                playlistBrush = surface;
+                optionsLogBrush = surface;
             }
             else if (string.Equals(mode, "Custom", StringComparison.OrdinalIgnoreCase) &&
                      !string.IsNullOrWhiteSpace(_customBackgroundImagePath) &&
                      File.Exists(_customBackgroundImagePath))
             {
-                var bi = new System.Windows.Media.Imaging.BitmapImage();
-                bi.BeginInit();
-                bi.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bi.UriSource = new Uri(_customBackgroundImagePath, UriKind.Absolute);
-                bi.EndInit();
-                bi.Freeze();
+                var bi = TryLoadBitmapSourceFromFileFresh(_customBackgroundImagePath);
+                if (bi is null)
+                    return;
 
                 var img = new System.Windows.Media.ImageBrush(bi);
-                ApplyBackgroundImageStretchToBrush(img, bi, _backgroundImageStretch);
-                try { img.Freeze(); } catch { /* ignore */ }
-                raw = img;
-                brush = img;
+                ApplyBackgroundImageLayoutToBrushForTarget(img, bi, _backgroundImageStretch, target: "Main");
+                if (!isUserDefined) { try { img.Freeze(); } catch { /* ignore */ } }
+                rawMain = img;
+                mainBrush = img;
+
+                var imgPl = new System.Windows.Media.ImageBrush(bi);
+                ApplyBackgroundImageLayoutToBrushForTarget(imgPl, bi, _backgroundImageStretch, target: "Playlist");
+                try { imgPl.Freeze(); } catch { /* ignore */ }
+                playlistBrush = imgPl;
+
+                var imgOl = new System.Windows.Media.ImageBrush(bi);
+                ApplyBackgroundImageLayoutToBrushForTarget(imgOl, bi, _backgroundImageStretch, target: "OptionsLog");
+                try { imgOl.Freeze(); } catch { /* ignore */ }
+                optionsLogBrush = imgOl;
             }
             else
             {
@@ -5480,29 +6408,381 @@ public partial class MainWindow : Window
                 if (System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"] is System.Windows.Media.ImageBrush defBrush
                     && defBrush.ImageSource is System.Windows.Media.Imaging.BitmapSource srcDef)
                 {
-                    var img = new System.Windows.Media.ImageBrush(srcDef);
-                    ApplyBackgroundImageStretchToBrush(img, srcDef, _backgroundImageStretch);
-                    try { img.Freeze(); } catch { /* ignore */ }
-                    raw = img;
-                    brush = img;
+                    var imgMain = new System.Windows.Media.ImageBrush(srcDef);
+                    ApplyBackgroundImageLayoutToBrushForTarget(imgMain, srcDef, _backgroundImageStretch, target: "Main");
+                    if (!isUserDefined) { try { imgMain.Freeze(); } catch { /* ignore */ } }
+                    rawMain = imgMain;
+                    mainBrush = imgMain;
+
+                    var imgPl = new System.Windows.Media.ImageBrush(srcDef);
+                    ApplyBackgroundImageLayoutToBrushForTarget(imgPl, srcDef, _backgroundImageStretch, target: "Playlist");
+                    try { imgPl.Freeze(); } catch { /* ignore */ }
+                    playlistBrush = imgPl;
+
+                    var imgOl = new System.Windows.Media.ImageBrush(srcDef);
+                    ApplyBackgroundImageLayoutToBrushForTarget(imgOl, srcDef, _backgroundImageStretch, target: "OptionsLog");
+                    try { imgOl.Freeze(); } catch { /* ignore */ }
+                    optionsLogBrush = imgOl;
                 }
                 else
                 {
-                    raw = System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"] as System.Windows.Media.ImageBrush;
-                    brush = (System.Windows.Media.Brush)System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"];
+                    rawMain = System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"] as System.Windows.Media.ImageBrush;
+                    mainBrush = (System.Windows.Media.Brush)System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"];
+                    playlistBrush = mainBrush;
+                    optionsLogBrush = mainBrush;
                 }
             }
 
             // Keep a raw image brush around for theme color sampling.
-            if (raw is not null)
-                System.Windows.Application.Current.Resources["App.Brush.WindowBgImageRaw"] = raw;
+            if (rawMain is not null)
+                System.Windows.Application.Current.Resources["App.Brush.WindowBgImageRaw"] = rawMain;
 
+            System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"] =
+                ApplyScrimIfNeeded(mainBrush, scrimPercent: _backgroundScrimPercent);
+            System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Playlist"] =
+                ApplyScrimIfNeeded(playlistBrush, scrimPercent: _backgroundScrimPercent);
+            System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.OptionsLog"] =
+                ApplyScrimIfNeeded(optionsLogBrush, scrimPercent: _backgroundScrimPercent);
+
+            // Legacy key (fallback).
             System.Windows.Application.Current.Resources["App.Brush.WindowBgImage"] =
-                ApplyScrimIfNeeded(brush, scrimPercent: _backgroundScrimPercent);
+                System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Main"];
+
+            // Track what bitmap UserDefined in-place updates should be tied to. If the backing file changes without
+            // a full settings apply (rare), compact toggles can otherwise keep painting an older decoded BitmapSource.
+            try
+            {
+                if (isUserDefined &&
+                    !string.Equals(mode, "None", StringComparison.OrdinalIgnoreCase) &&
+                    rawMain?.ImageSource is System.Windows.Media.Imaging.BitmapSource appliedSrc)
+                {
+                    _appliedUserDefinedBackgroundFingerprint = TryComputeLiveUserDefinedBackgroundFingerprintFromBitmap(appliedSrc);
+                }
+                else
+                {
+                    _appliedUserDefinedBackgroundFingerprint = null;
+                }
+            }
+            catch
+            {
+                _appliedUserDefinedBackgroundFingerprint = null;
+            }
         }
         catch
         {
             // ignore
+        }
+    }
+
+    private RectN? GetUserDefinedRectForTarget(string target)
+    {
+        try
+        {
+            if (string.Equals(target, "Playlist", StringComparison.OrdinalIgnoreCase))
+                return _backgroundUserDefinedPlaylist;
+            if (string.Equals(target, "OptionsLog", StringComparison.OrdinalIgnoreCase))
+                return _backgroundUserDefinedOptionsLog;
+
+            // Main target: choose sub-rect by current main layout state.
+            if (_mainWindowCompact)
+            {
+                if (string.Equals(_compactModeLayout, "Ultra", StringComparison.OrdinalIgnoreCase))
+                    return _backgroundUserDefinedMainUltra ?? _backgroundUserDefinedMainCompact ?? _backgroundUserDefinedMainNormal;
+                return _backgroundUserDefinedMainCompact ?? _backgroundUserDefinedMainNormal;
+            }
+            return _backgroundUserDefinedMainNormal;
+        }
+        catch { return null; }
+    }
+
+    private void ApplyBackgroundImageLayoutToBrushForTarget(
+        System.Windows.Media.ImageBrush ib,
+        System.Windows.Media.Imaging.BitmapSource src,
+        string stretchMode,
+        string target)
+    {
+        var m = SettingsStore.NormalizeBackgroundImageStretch(stretchMode);
+        if (string.Equals(m, "UserDefined", StringComparison.OrdinalIgnoreCase))
+        {
+            ApplyBackgroundImageUserDefinedToBrush(ib, src, GetUserDefinedRectForTarget(target));
+            return;
+        }
+
+        ApplyBackgroundImageStretchToBrush(ib, src, m);
+    }
+
+    private void ApplyBackgroundImageUserDefinedToBrush(
+        System.Windows.Media.ImageBrush ib,
+        System.Windows.Media.Imaging.BitmapSource src,
+        RectN? rect)
+    {
+        // Normalized source-image viewbox. When rect is missing, fall back to full image.
+        var r = rect ?? RectN.Full;
+        r = SettingsStore.NormalizeRectN(r);
+
+        ib.TileMode = System.Windows.Media.TileMode.None;
+        ib.ViewboxUnits = System.Windows.Media.BrushMappingMode.RelativeToBoundingBox;
+        ib.Viewbox = new System.Windows.Rect(r.X, r.Y, r.W, r.H);
+        ib.Viewport = new System.Windows.Rect(0, 0, 1, 1);
+        ib.ViewportUnits = System.Windows.Media.BrushMappingMode.RelativeToBoundingBox;
+        // Preserve the crop's aspect ratio on the window (same idea as BestFit / UniformToFill on the full bitmap).
+        // Fill would vertically or horizontally squash the wallpaper whenever the user crop ≠ window aspect.
+        ib.Stretch = System.Windows.Media.Stretch.UniformToFill;
+        ib.AlignmentX = System.Windows.Media.AlignmentX.Center;
+        ib.AlignmentY = System.Windows.Media.AlignmentY.Center;
+    }
+
+    private void OpenBackgroundDesigner()
+    {
+        try
+        {
+            static System.Windows.Media.Imaging.BitmapSource? CoerceBitmapSource(System.Windows.Media.ImageSource? img)
+            {
+                try
+                {
+                    if (img is null)
+                        return null;
+                    if (img is System.Windows.Media.Imaging.BitmapSource bs)
+                        return bs;
+                    // Some ImageSources can be BitmapImage without being a BitmapSource in unusual cases;
+                    // attempt a reload from URI so we always have a decodable bitmap.
+                    if (img is System.Windows.Media.Imaging.BitmapImage bi && bi.UriSource is { } uri)
+                    {
+                        var clone = new System.Windows.Media.Imaging.BitmapImage();
+                        clone.BeginInit();
+                        clone.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                        clone.UriSource = uri;
+                        clone.EndInit();
+                        clone.Freeze();
+                        return clone;
+                    }
+                }
+                catch { /* ignore */ }
+                return null;
+            }
+
+            // Best-effort source bitmap from current raw brush; fallback to default pack background.
+            System.Windows.Media.Imaging.BitmapSource? src = null;
+            try
+            {
+                if (System.Windows.Application.Current.Resources["App.Brush.WindowBgImageRaw"] is System.Windows.Media.ImageBrush raw
+                    && raw.ImageSource is System.Windows.Media.Imaging.BitmapSource bs)
+                    src = bs;
+            }
+            catch { /* ignore */ }
+
+            if (src is null)
+            {
+                try
+                {
+                    if (System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"] is System.Windows.Media.ImageBrush def
+                        && def.ImageSource is { } img2)
+                        src = CoerceBitmapSource(img2);
+                }
+                catch { /* ignore */ }
+            }
+
+            if (src is null)
+            {
+                // Last resort: load the built-in pack image directly (ensures we always have a decoded BitmapSource).
+                try
+                {
+                    var bi = new System.Windows.Media.Imaging.BitmapImage();
+                    bi.BeginInit();
+                    bi.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                    bi.UriSource = new Uri("pack://application:,,,/LyllyPlayer;component/Assets/Background.png", UriKind.Absolute);
+                    bi.EndInit();
+                    bi.Freeze();
+                    src = bi;
+                }
+                catch { /* ignore */ }
+            }
+
+            if (src is null)
+            {
+                try
+                {
+                    System.Windows.MessageBox.Show(
+                        this,
+                        "Background designer couldn't load the default background image source.",
+                        "LyllyPlayer",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+                catch { /* ignore */ }
+                return;
+            }
+
+            // Keep MainWindow's stretch mode aligned with what the Options UI currently shows.
+            // Otherwise the user can pick "User defined" in Options but MainWindow still applies BestFit/Stretch until Apply,
+            // which makes the designer + crops appear to "do nothing" (especially with Background=Default).
+            try
+            {
+                if (_optionsWindow is not null)
+                {
+                    var tag = _optionsWindow.TryGetBackgroundImageStretchUiTag();
+                    if (!string.IsNullOrWhiteSpace(tag))
+                    {
+                        var next = SettingsStore.NormalizeBackgroundImageStretch(tag);
+                        if (!string.Equals(SettingsStore.NormalizeBackgroundImageStretch(_backgroundImageStretch), next, StringComparison.OrdinalIgnoreCase))
+                        {
+                            _backgroundImageStretch = next;
+                            ApplyBackgroundFromSettings();
+                            ApplyBackgroundColorsFromSettings();
+                            RequestPersistSnapshot();
+                        }
+                    }
+                }
+            }
+            catch { /* ignore */ }
+
+            if (_backgroundDesignerWindow is not null)
+            {
+                try
+                {
+                    _backgroundDesignerWindow.Activate();
+                    return;
+                }
+                catch { _backgroundDesignerWindow = null; }
+            }
+
+            static double SafeAspect(double w, double h)
+            {
+                if (w <= 1 || h <= 1) return 0;
+                return w / h;
+            }
+
+            static double SafeAspectFromWindow(Window w, Rect? lastBounds)
+            {
+                try
+                {
+                    // ActualWidth/Height can be 0 while minimized or before first render; prefer RestoreBounds.
+                    var a = SafeAspect(w.ActualWidth, w.ActualHeight);
+                    if (a > 0 && w.WindowState != WindowState.Minimized)
+                        return a;
+
+                    var rb = w.RestoreBounds;
+                    var rba = SafeAspect(rb.Width, rb.Height);
+                    if (rba > 0)
+                        return rba;
+
+                    if (lastBounds is { } lb)
+                    {
+                        var lba = SafeAspect(lb.Width, lb.Height);
+                        if (lba > 0)
+                            return lba;
+                    }
+                }
+                catch { /* ignore */ }
+                return 0;
+            }
+
+            // Ensure Default/Compact/Ultra hints are populated for this client size (avoids designer-only fallbacks
+            // that don't match the real window and squashed crops).
+            try { UpdateLayout(); } catch { /* ignore */ }
+            try { FillDerivedMainAspectHints(ActualWidth, ActualHeight); } catch { /* ignore */ }
+
+            // Aspect hints for the designer.
+            // Prefer cached, measured aspects (more stable than sampling the current mode only).
+            // Fall back to currently visible window sizes (playlist/options), else designer-internal defaults.
+            var mainDefaultAspect = _measuredMainDefaultAspect;
+            var mainCompactAspect = _measuredMainCompactAspect;
+            var mainUltraAspect = _measuredMainUltraAspect;
+            var playlistAspect = (_playlistWindow is not null) ? SafeAspectFromWindow(_playlistWindow, _lastPlaylistBounds) : 0;
+            var optionsLogAspect = (_optionsWindow is not null) ? SafeAspectFromWindow(_optionsWindow, _lastOptionsBounds) : 0;
+
+            var win = new LyllyPlayer.Windows.BackgroundDesignerWindow(
+                src: src,
+                mainNormal: (
+                    _backgroundUserDefinedMainNormal
+                    ?? (_optionsWindow is not null ? _optionsWindow.GetBackgroundDesignerDraft().mainNormal : RectN.Full)
+                ),
+                mainCompact: (
+                    _backgroundUserDefinedMainCompact
+                    ?? (_optionsWindow is not null ? _optionsWindow.GetBackgroundDesignerDraft().mainCompact : (_backgroundUserDefinedMainNormal ?? RectN.Full))
+                ),
+                mainUltra: (
+                    _backgroundUserDefinedMainUltra
+                    ?? (_optionsWindow is not null ? _optionsWindow.GetBackgroundDesignerDraft().mainUltra : (_backgroundUserDefinedMainNormal ?? RectN.Full))
+                ),
+                playlist: (
+                    _backgroundUserDefinedPlaylist
+                    ?? (_optionsWindow is not null ? _optionsWindow.GetBackgroundDesignerDraft().playlist : RectN.Full)
+                ),
+                optionsLog: (
+                    _backgroundUserDefinedOptionsLog
+                    ?? (_optionsWindow is not null ? _optionsWindow.GetBackgroundDesignerDraft().optionsLog : RectN.Full)
+                ),
+                mainDefaultAspect: mainDefaultAspect,
+                mainCompactAspect: mainCompactAspect,
+                mainUltraAspect: mainUltraAspect,
+                playlistAspect: playlistAspect,
+                optionsLogAspect: optionsLogAspect,
+                apply: (r) =>
+                {
+                    try
+                    {
+                        _backgroundUserDefinedMainNormal = r.MainNormal;
+                        _backgroundUserDefinedMainCompact = r.MainCompact;
+                        _backgroundUserDefinedMainUltra = r.MainUltra;
+                        _backgroundUserDefinedPlaylist = r.Playlist;
+                        _backgroundUserDefinedOptionsLog = r.OptionsLog;
+
+                        ApplyBackgroundFromSettings();
+                        ApplyBackgroundColorsFromSettings();
+                        RequestPersistSnapshot();
+                        try
+                        {
+                            _optionsWindow?.UpdateBackgroundDesignerDraft(
+                                mainNormal: r.MainNormal,
+                                mainCompact: r.MainCompact,
+                                mainUltra: r.MainUltra,
+                                playlist: r.Playlist,
+                                optionsLog: r.OptionsLog);
+                        }
+                        catch { /* ignore */ }
+                    }
+                    catch { /* ignore */ }
+                });
+            try { win.Owner = _optionsWindow; } catch { /* ignore */ }
+            if (win.Owner is null)
+                win.Owner = this;
+            _backgroundDesignerWindow = win;
+            win.Closed += (_, _) =>
+            {
+                try
+                {
+                    if (ReferenceEquals(_backgroundDesignerWindow, win))
+                        _backgroundDesignerWindow = null;
+                }
+                catch { /* ignore */ }
+            };
+
+            // Modeless: allow interacting with other windows while the designer is open.
+            win.ShowActivated = true;
+            win.Show();
+            try
+            {
+                // Ensure the window is actually brought to front (ShowInTaskbar=False + owned window can look like "nothing happened").
+                win.Activate();
+                win.Focus();
+                win.Topmost = true;
+                win.Topmost = false;
+            }
+            catch { /* ignore */ }
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                System.Windows.MessageBox.Show(
+                    this,
+                    "Background designer failed to open.\n\n" + ex.Message,
+                    "LyllyPlayer",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            catch { /* ignore */ }
         }
     }
 
@@ -5707,6 +6987,11 @@ public partial class MainWindow : Window
     {
         try
         {
+            var allowMutableForUserDefined = string.Equals(
+                SettingsStore.NormalizeBackgroundImageStretch(_backgroundImageStretch),
+                "UserDefined",
+                StringComparison.OrdinalIgnoreCase);
+
             scrimPercent = Math.Clamp(scrimPercent, 0, 80);
             if (scrimPercent <= 0)
                 return baseBrush;
@@ -5735,7 +7020,6 @@ public partial class MainWindow : Window
 
             var drawing = new System.Windows.Media.DrawingGroup();
             double tileW = 0, tileH = 0;
-            double contentW = 0, contentH = 0;
             // Tiled ImageBrush: inner ImageDrawing must match one tile in DIP space; 0,0,1,1 only works with Stretch≠None.
             if (ib.TileMode == System.Windows.Media.TileMode.Tile)
             {
@@ -5746,15 +7030,60 @@ public partial class MainWindow : Window
             }
             else
             {
-                // Use DIP-sized content bounds (bitmap aspect). Rect 0,0,1,1 squashes the image in drawing space and
-                // changes apparent zoom/crop vs plain ImageBrush when scrim toggles — looks like UI "scaling" changed.
-                (contentW, contentH) = GetBackgroundImageTileSizeDips(src);
-                var contentRect = new System.Windows.Rect(0, 0, contentW, contentH);
-                drawing.Children.Add(new System.Windows.Media.ImageDrawing(ib.ImageSource, contentRect));
+                // For non-tiled image brushes, keep drawing space normalized (0..1) and preserve the original
+                // ImageBrush Viewbox/ViewboxUnits so user-defined crops don't get reset when scrim toggles.
+                //
+                // Do NOT use ImageDrawing(ImageSource, 0..1 rect): it stretches the bitmap into a unit square
+                // (Fill-like), which crushes aspect for any non-square source — UserDefined / BestFit then look
+                // vertically squashed on the window. GeometryDrawing + cloned ImageBrush keeps the same mapping.
+                //
+                // The inner rectangle must match the *physical* aspect of the cropped bitmap (Viewbox × pixel size).
+                // If it is a square (0,0,1,1), the outer DrawingBrush applies a second UniformToFill (tile → window)
+                // and over-crops / "zooms in" vs a plain ImageBrush on the window.
+                var vb = ib.Viewbox;
+                var imgW = Math.Max(1.0, (double)src.PixelWidth);
+                var imgH = Math.Max(1.0, (double)src.PixelHeight);
+                double physW;
+                double physH;
+                if (ib.ViewboxUnits == System.Windows.Media.BrushMappingMode.RelativeToBoundingBox)
+                {
+                    physW = vb.Width * imgW;
+                    physH = vb.Height * imgH;
+                }
+                else
+                {
+                    physW = vb.Width;
+                    physH = vb.Height;
+                }
+
+                var cropAspect = physW / Math.Max(1e-9, physH);
+                double dw;
+                double dh;
+                if (cropAspect >= 1.0)
+                {
+                    dw = cropAspect;
+                    dh = 1.0;
+                }
+                else
+                {
+                    dw = 1.0;
+                    dh = 1.0 / cropAspect;
+                }
+
+                var contentRect = new System.Windows.Rect(0, 0, dw, dh);
+                // For UserDefined we keep the *same* ImageBrush instance so we can change Viewbox in-place later.
+                var ibForDrawing = allowMutableForUserDefined ? ib : ib.CloneCurrentValue();
+                if (!allowMutableForUserDefined)
+                {
+                    try { ibForDrawing.Freeze(); } catch { /* ignore */ }
+                }
+
+                drawing.Children.Add(new System.Windows.Media.GeometryDrawing(ibForDrawing, null, new System.Windows.Media.RectangleGeometry(contentRect)));
                 drawing.Children.Add(new System.Windows.Media.GeometryDrawing(scrim, null, new System.Windows.Media.RectangleGeometry(contentRect)));
             }
 
-            drawing.Freeze();
+            if (!allowMutableForUserDefined)
+                drawing.Freeze();
 
             System.Windows.Media.DrawingBrush db;
             if (ib.TileMode == System.Windows.Media.TileMode.Tile)
@@ -5771,20 +7100,23 @@ public partial class MainWindow : Window
             }
             else
             {
+                // Cropping / stretch live on the cloned ImageBrush inside the drawing (0..1 content rect).
+                // Copying ib.Viewbox onto this DrawingBrush would apply the crop twice (wrong zoom / wrong frame).
                 db = new System.Windows.Media.DrawingBrush(drawing)
                 {
                     Stretch = ib.Stretch,
                     AlignmentX = ib.AlignmentX,
                     AlignmentY = ib.AlignmentY,
                     TileMode = ib.TileMode,
-                    Viewbox = new System.Windows.Rect(0, 0, contentW, contentH),
-                    ViewboxUnits = System.Windows.Media.BrushMappingMode.Absolute,
+                    Viewbox = new System.Windows.Rect(0, 0, 1, 1),
+                    ViewboxUnits = System.Windows.Media.BrushMappingMode.RelativeToBoundingBox,
                     Viewport = ib.Viewport,
                     ViewportUnits = ib.ViewportUnits,
                 };
             }
 
-            db.Freeze();
+            if (!allowMutableForUserDefined)
+                db.Freeze();
             return db;
         }
         catch
@@ -6103,9 +7435,15 @@ public partial class MainWindow : Window
                 return null;
             var song = (_nowPlayingEntry.Title ?? "").Trim();
             var artist = (_nowPlayingEntry.Channel ?? "").Trim();
-            if (string.IsNullOrWhiteSpace(song))
-                return null;
-            return string.IsNullOrWhiteSpace(artist) ? song : $"{song} - {artist}";
+            if (!string.IsNullOrWhiteSpace(song))
+                return string.IsNullOrWhiteSpace(artist) ? song : $"{song} - {artist}";
+
+            // yt-dlp can briefly yield an empty title during fetch; fall back so Ultra-compact caption isn't blank.
+            if (!string.IsNullOrWhiteSpace(artist))
+                return artist;
+
+            var id = (_nowPlayingEntry.VideoId ?? "").Trim();
+            return string.IsNullOrWhiteSpace(id) ? null : id;
         }
         catch
         {
@@ -6117,6 +7455,12 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (_mainWindowCompact && string.Equals(_compactModeLayout, "Ultra", StringComparison.OrdinalIgnoreCase))
+            {
+                Title = TryGetCurrentSongTitleForWindowTitle() ?? baseTitle;
+                return;
+            }
+
             var mode = string.IsNullOrWhiteSpace(_appTitleMode) ? "Default" : _appTitleMode.Trim();
             if (string.Equals(mode, "Current song", StringComparison.OrdinalIgnoreCase))
             {
@@ -6938,11 +8282,27 @@ public partial class MainWindow : Window
             255);
     }
 
+    /// <summary>
+    /// Mutes inactive-vs-active caption contrast when global UI opacity is low so the inactive strip does not dominate
+    /// the window (0 = keep full distinction, higher = pull inactive RGB toward active).
+    /// </summary>
+    private static double InactiveTitleBarMuteStrength(byte userAlpha)
+    {
+        if (userAlpha >= 255) return 0;
+        var u = userAlpha / 255.0;
+        return Math.Clamp(Math.Pow(1.0 - u, 1.2) * 0.82, 0.0, 0.82);
+    }
+
     private static void ApplyDefaultThemeBrushes(byte alpha, bool darkTheme)
     {
         try
         {
             var a = MapThemeChromeAlpha(alpha);
+            var inactiveMute = InactiveTitleBarMuteStrength(alpha);
+            // Text/ink should be translucent (so it layers with the background like the spectrum curve).
+            // Use a strong mapping so UI transparency changes are actually visible.
+            var inkA = (byte)Math.Clamp((int)Math.Round(80 + a * 0.45), 110, 200);
+            var inkSubtleA = (byte)Math.Clamp((int)Math.Round(64 + a * 0.30), 90, 170);
             System.Windows.Media.Color surface;
             System.Windows.Media.Color border;
             System.Windows.Media.Color subtle;
@@ -6985,14 +8345,15 @@ public partial class MainWindow : Window
                 ? System.Windows.Media.Color.FromArgb(0xFF, 0x23, 0x23, 0x23)
                 : System.Windows.Media.Color.FromArgb(0xFF, 0xFA, 0xFA, 0xFA));
             SetBrush("App.Theme.Border", System.Windows.Media.Color.FromArgb(a, border.R, border.G, border.B));
-            SetBrush("App.Theme.WindowBorderActive", System.Windows.Media.Color.FromArgb(a, border.R, border.G, border.B));
+            // Window border should remain visible even when background alpha is low (border is chrome, not content).
+            SetBrush("App.Theme.WindowBorderActive", System.Windows.Media.Color.FromArgb(0xFF, border.R, border.G, border.B));
             var winBorderInactive = Blend(
                 System.Windows.Media.Color.FromRgb(border.R, border.G, border.B),
                 System.Windows.Media.Color.FromRgb(surface.R, surface.G, surface.B),
                 0.55);
-            SetBrush("App.Theme.WindowBorderInactive", System.Windows.Media.Color.FromArgb(a, winBorderInactive.R, winBorderInactive.G, winBorderInactive.B));
-            SetBrush("App.Theme.Foreground", fg);
-            SetBrush("App.Theme.ForegroundSubtle", System.Windows.Media.Color.FromRgb(subtle.R, subtle.G, subtle.B));
+            SetBrush("App.Theme.WindowBorderInactive", System.Windows.Media.Color.FromArgb(0xFF, winBorderInactive.R, winBorderInactive.G, winBorderInactive.B));
+            SetBrush("App.Theme.Foreground", System.Windows.Media.Color.FromArgb(inkA, fg.R, fg.G, fg.B));
+            SetBrush("App.Theme.ForegroundSubtle", System.Windows.Media.Color.FromArgb(inkSubtleA, subtle.R, subtle.G, subtle.B));
             var spectrumGrid = Blend(
                 System.Windows.Media.Color.FromRgb(subtle.R, subtle.G, subtle.B),
                 System.Windows.Media.Color.FromRgb(border.R, border.G, border.B),
@@ -7038,22 +8399,27 @@ public partial class MainWindow : Window
             var titleInactiveRgb = Blend(surfaceRaisedRgbOnly, surfaceRgbOnly, 0.65);
             var lumA = RelativeLuminance(surfaceRaisedRgbOnly);
             var lumI = RelativeLuminance(titleInactiveRgb);
-            if (Math.Abs(lumA - lumI) < 0.18)
+            var minSep = 0.18 * (1.0 - inactiveMute * 0.72);
+            if (Math.Abs(lumA - lumI) < minSep)
             {
-                titleInactiveRgb = AdjustLuminance(titleInactiveRgb, darkTheme ? -0.22 : -0.28);
+                var push = 1.0 - inactiveMute * 0.55;
+                titleInactiveRgb = AdjustLuminance(titleInactiveRgb, (darkTheme ? -0.22 : -0.28) * push);
                 lumI = RelativeLuminance(titleInactiveRgb);
-                if (Math.Abs(lumA - lumI) < 0.18)
-                    titleInactiveRgb = AdjustLuminance(titleInactiveRgb, darkTheme ? -0.14 : -0.18);
+                if (Math.Abs(lumA - lumI) < minSep)
+                    titleInactiveRgb = AdjustLuminance(titleInactiveRgb, (darkTheme ? -0.14 : -0.18) * push);
             }
 
+            titleInactiveRgb = Blend(titleInactiveRgb, surfaceRaisedRgbOnly, inactiveMute);
             SetBrush("App.Theme.TitleBarInactive", System.Windows.Media.Color.FromArgb(a, titleInactiveRgb.R, titleInactiveRgb.G, titleInactiveRgb.B));
             var titleTextActive = PickForegroundForBackground(surfaceRaisedRgbOnly, minRatio: 7.0);
             var titleTextInactive = PickForegroundForBackground(titleInactiveRgb, minRatio: 7.0);
             var dimCandidate = Blend(titleTextInactive, surfaceRgbOnly, 0.25);
             if (ContrastRatio(titleInactiveRgb, dimCandidate) >= 4.5)
                 titleTextInactive = dimCandidate;
-            SetBrush("App.Theme.TitleBarTextActive", System.Windows.Media.Color.FromRgb(titleTextActive.R, titleTextActive.G, titleTextActive.B));
-            SetBrush("App.Theme.TitleBarTextInactive", System.Windows.Media.Color.FromRgb(titleTextInactive.R, titleTextInactive.G, titleTextInactive.B));
+            SetBrush("App.Theme.TitleBarTextActive", System.Windows.Media.Color.FromArgb(inkA, titleTextActive.R, titleTextActive.G, titleTextActive.B));
+            SetBrush("App.Theme.TitleBarTextInactive", System.Windows.Media.Color.FromArgb(inkSubtleA, titleTextInactive.R, titleTextInactive.G, titleTextInactive.B));
+
+            SyncLegacyWindowChromeFillBrush(System.Windows.Media.Color.FromRgb(surface.R, surface.G, surface.B));
         }
         catch { /* ignore */ }
     }
@@ -7063,6 +8429,9 @@ public partial class MainWindow : Window
         try
         {
             var a = MapThemeChromeAlpha(alpha);
+            var inactiveMute = InactiveTitleBarMuteStrength(alpha);
+            var inkA = (byte)Math.Clamp((int)Math.Round(80 + a * 0.45), 110, 200);
+            var inkSubtleA = (byte)Math.Clamp((int)Math.Round(64 + a * 0.30), 90, 170);
             // Pull live Windows theme colors (not our baked defaults).
             var surfaceRgb = System.Windows.SystemColors.ControlColor;
             var surfaceRaisedRgb = System.Windows.SystemColors.ControlLightColor;
@@ -7096,10 +8465,11 @@ public partial class MainWindow : Window
             var borderOnlyEarly = System.Windows.Media.Color.FromRgb(borderRgb.R, borderRgb.G, borderRgb.B);
             var winBorderAct = Blend(borderOnlyEarly, capActiveEarly, 0.26);
             var winBorderInact = Blend(borderOnlyEarly, capInactiveEarly, 0.38);
-            SetBrush("App.Theme.WindowBorderActive", System.Windows.Media.Color.FromArgb(a, winBorderAct.R, winBorderAct.G, winBorderAct.B));
-            SetBrush("App.Theme.WindowBorderInactive", System.Windows.Media.Color.FromArgb(a, winBorderInact.R, winBorderInact.G, winBorderInact.B));
-            SetBrush("App.Theme.Foreground", System.Windows.Media.Color.FromRgb(fgRgb.R, fgRgb.G, fgRgb.B));
-            SetBrush("App.Theme.ForegroundSubtle", System.Windows.Media.Color.FromRgb(subtleRgb.R, subtleRgb.G, subtleRgb.B));
+            // Keep window borders fully opaque regardless of background alpha.
+            SetBrush("App.Theme.WindowBorderActive", System.Windows.Media.Color.FromArgb(0xFF, winBorderAct.R, winBorderAct.G, winBorderAct.B));
+            SetBrush("App.Theme.WindowBorderInactive", System.Windows.Media.Color.FromArgb(0xFF, winBorderInact.R, winBorderInact.G, winBorderInact.B));
+            SetBrush("App.Theme.Foreground", System.Windows.Media.Color.FromArgb(inkA, fgRgb.R, fgRgb.G, fgRgb.B));
+            SetBrush("App.Theme.ForegroundSubtle", System.Windows.Media.Color.FromArgb(inkSubtleA, subtleRgb.R, subtleRgb.G, subtleRgb.B));
             var surfaceRgbOnlyWin = System.Windows.Media.Color.FromRgb(surfaceRgb.R, surfaceRgb.G, surfaceRgb.B);
             var darkWinChrome = RelativeLuminance(surfaceRgbOnlyWin) < 0.42;
             var spectrumWin = Blend(
@@ -7162,16 +8532,19 @@ public partial class MainWindow : Window
             SetBrush("App.Theme.Pressed", System.Windows.Media.Color.FromArgb(a, pressed.R, pressed.G, pressed.B));
 
             // Title bar: same DWM-informed caption palette as window borders (computed above).
+            var capInactiveMuted = Blend(capInactiveEarly, capActiveEarly, inactiveMute);
             SetBrush("App.Theme.TitleBarActive", System.Windows.Media.Color.FromArgb(a, capActiveEarly.R, capActiveEarly.G, capActiveEarly.B));
-            SetBrush("App.Theme.TitleBarInactive", System.Windows.Media.Color.FromArgb(a, capInactiveEarly.R, capInactiveEarly.G, capInactiveEarly.B));
-            SetBrush("App.Theme.TitleBarTextActive", System.Windows.Media.Color.FromRgb(capTxtAEarly.R, capTxtAEarly.G, capTxtAEarly.B));
-            SetBrush("App.Theme.TitleBarTextInactive", System.Windows.Media.Color.FromRgb(capTxtIEarly.R, capTxtIEarly.G, capTxtIEarly.B));
+            SetBrush("App.Theme.TitleBarInactive", System.Windows.Media.Color.FromArgb(a, capInactiveMuted.R, capInactiveMuted.G, capInactiveMuted.B));
+            SetBrush("App.Theme.TitleBarTextActive", System.Windows.Media.Color.FromArgb(inkA, capTxtAEarly.R, capTxtAEarly.G, capTxtAEarly.B));
+            SetBrush("App.Theme.TitleBarTextInactive", System.Windows.Media.Color.FromArgb(inkSubtleA, capTxtIEarly.R, capTxtIEarly.G, capTxtIEarly.B));
 
             SyncSystemChromeBrushesFromSelectionTheme(
                 System.Windows.Media.Color.FromRgb(selSoft.R, selSoft.G, selSoft.B),
                 System.Windows.Media.Color.FromRgb(selTextFinal.R, selTextFinal.G, selTextFinal.B),
                 System.Windows.Media.Color.FromRgb(hotTrackRgb.R, hotTrackRgb.G, hotTrackRgb.B),
                 System.Windows.Media.Color.FromRgb(fgRgb.R, fgRgb.G, fgRgb.B));
+
+            SyncLegacyWindowChromeFillBrush(surfaceRgb);
         }
         catch { /* ignore */ }
     }
@@ -7179,6 +8552,9 @@ public partial class MainWindow : Window
     private static void ApplyThemeBrushesFromBaseColor(System.Windows.Media.Color baseColor, byte alpha, bool preferDarkTheme)
     {
         var a = MapThemeChromeAlpha(alpha);
+        var inactiveMute = InactiveTitleBarMuteStrength(alpha);
+        var inkA = (byte)Math.Clamp((int)Math.Round(80 + a * 0.45), 110, 200);
+        var inkSubtleA = (byte)Math.Clamp((int)Math.Round(64 + a * 0.30), 90, 170);
         // Bias extremely bright/dark bases toward requested polarity so manual Light/Dark remains usable.
         var lum = RelativeLuminance(baseColor);
         var bc = baseColor;
@@ -7218,13 +8594,13 @@ public partial class MainWindow : Window
         SetBrush("App.Theme.PopupSurface", System.Windows.Media.Color.FromArgb(0xFF, bc.R, bc.G, bc.B));
         SetBrush("App.Theme.PopupSurfaceRaised", System.Windows.Media.Color.FromArgb(0xFF, surfaceRaised.R, surfaceRaised.G, surfaceRaised.B));
         SetBrush("App.Theme.Border", themeBorder);
-        SetBrush("App.Theme.WindowBorderActive", System.Windows.Media.Color.FromArgb(a, themeBorder.R, themeBorder.G, themeBorder.B));
+        SetBrush("App.Theme.WindowBorderActive", System.Windows.Media.Color.FromArgb(0xFF, themeBorder.R, themeBorder.G, themeBorder.B));
         var themeBorderRgbOnly = System.Windows.Media.Color.FromRgb(themeBorder.R, themeBorder.G, themeBorder.B);
         var baseSurfaceRgb = System.Windows.Media.Color.FromRgb(bc.R, bc.G, bc.B);
         var themeBorderInactiveRgb = Blend(themeBorderRgbOnly, baseSurfaceRgb, 0.55);
-        SetBrush("App.Theme.WindowBorderInactive", System.Windows.Media.Color.FromArgb(a, themeBorderInactiveRgb.R, themeBorderInactiveRgb.G, themeBorderInactiveRgb.B));
-        SetBrush("App.Theme.Foreground", fg);
-        SetBrush("App.Theme.ForegroundSubtle", fgSubtle);
+        SetBrush("App.Theme.WindowBorderInactive", System.Windows.Media.Color.FromArgb(0xFF, themeBorderInactiveRgb.R, themeBorderInactiveRgb.G, themeBorderInactiveRgb.B));
+        SetBrush("App.Theme.Foreground", System.Windows.Media.Color.FromArgb(inkA, fg.R, fg.G, fg.B));
+        SetBrush("App.Theme.ForegroundSubtle", System.Windows.Media.Color.FromArgb(inkSubtleA, fgSubtle.R, fgSubtle.G, fgSubtle.B));
         var spectrumBase = Blend(
             fgSubtle,
             System.Windows.Media.Color.FromRgb(themeBorder.R, themeBorder.G, themeBorder.B),
@@ -7264,15 +8640,18 @@ public partial class MainWindow : Window
         var titleInactiveRgb = Blend(titleActiveRgb, surfaceRgb, 0.65);
         var lumA = RelativeLuminance(titleActiveRgb);
         var lumI = RelativeLuminance(titleInactiveRgb);
-        if (Math.Abs(lumA - lumI) < 0.18)
+        var minSep = 0.18 * (1.0 - inactiveMute * 0.72);
+        if (Math.Abs(lumA - lumI) < minSep)
         {
+            var push = 1.0 - inactiveMute * 0.55;
             // Push harder in a direction that maintains the chosen polarity.
-            titleInactiveRgb = AdjustLuminance(titleInactiveRgb, preferDarkTheme ? 0.28 : -0.28);
+            titleInactiveRgb = AdjustLuminance(titleInactiveRgb, (preferDarkTheme ? 0.28 : -0.28) * push);
             lumI = RelativeLuminance(titleInactiveRgb);
-            if (Math.Abs(lumA - lumI) < 0.18)
-                titleInactiveRgb = AdjustLuminance(titleInactiveRgb, preferDarkTheme ? 0.18 : -0.18);
+            if (Math.Abs(lumA - lumI) < minSep)
+                titleInactiveRgb = AdjustLuminance(titleInactiveRgb, (preferDarkTheme ? 0.18 : -0.18) * push);
         }
 
+        titleInactiveRgb = Blend(titleInactiveRgb, titleActiveRgb, inactiveMute);
         SetBrush("App.Theme.TitleBarActive", titleActive);
         SetBrush("App.Theme.TitleBarInactive", System.Windows.Media.Color.FromArgb(a, titleInactiveRgb.R, titleInactiveRgb.G, titleInactiveRgb.B));
         var titleTextActive = PickForegroundForBackground(titleActiveRgb, minRatio: 7.0);
@@ -7281,8 +8660,8 @@ public partial class MainWindow : Window
         var dimCandidate = Blend(titleTextInactive, surfaceRgb, 0.25);
         if (ContrastRatio(titleInactiveRgb, dimCandidate) >= 4.5)
             titleTextInactive = dimCandidate;
-        SetBrush("App.Theme.TitleBarTextActive", System.Windows.Media.Color.FromRgb(titleTextActive.R, titleTextActive.G, titleTextActive.B));
-        SetBrush("App.Theme.TitleBarTextInactive", System.Windows.Media.Color.FromRgb(titleTextInactive.R, titleTextInactive.G, titleTextInactive.B));
+        SetBrush("App.Theme.TitleBarTextActive", System.Windows.Media.Color.FromArgb(inkA, titleTextActive.R, titleTextActive.G, titleTextActive.B));
+        SetBrush("App.Theme.TitleBarTextInactive", System.Windows.Media.Color.FromArgb(inkSubtleA, titleTextInactive.R, titleTextInactive.G, titleTextInactive.B));
 
         // Hover/pressed should be visible against raised surface.
         var hover = Blend(surfaceRaised, fg, 0.08);
@@ -7297,6 +8676,8 @@ public partial class MainWindow : Window
             hotRgb,
             System.Windows.Media.Color.FromRgb(fg.R, fg.G, fg.B));
         SetSystemBrush(System.Windows.SystemColors.GrayTextBrushKey, System.Windows.Media.Color.FromRgb(fgSubtle.R, fgSubtle.G, fgSubtle.B));
+
+        SyncLegacyWindowChromeFillBrush(System.Windows.Media.Color.FromRgb(bc.R, bc.G, bc.B));
     }
 
     private static System.Windows.Media.Color DeriveBorder(System.Windows.Media.Color surfaceRgb, byte alpha)
@@ -7496,6 +8877,20 @@ public partial class MainWindow : Window
             var b = new System.Windows.Media.SolidColorBrush(c);
             try { b.Freeze(); } catch { /* ignore */ }
             System.Windows.Application.Current.Resources[key] = b;
+        }
+        catch { /* ignore */ }
+    }
+
+    /// <summary>
+    /// <see cref="App.Brush.WindowBg"/> is legacy XAML chrome fill (App.xaml default is a constant near-black).
+    /// Theme switching updates <see cref="App.Theme.Surface"/> but historically did not update this key, so dialogs
+    /// that still bind <c>App.Brush.WindowBg</c> looked "stuck in dark mode" while text followed <c>App.Theme.*</c>.
+    /// </summary>
+    private static void SyncLegacyWindowChromeFillBrush(System.Windows.Media.Color surfaceRgb)
+    {
+        try
+        {
+            SetBrush("App.Brush.WindowBg", System.Windows.Media.Color.FromArgb(0xFF, surfaceRgb.R, surfaceRgb.G, surfaceRgb.B));
         }
         catch { /* ignore */ }
     }
@@ -8196,7 +9591,7 @@ public partial class MainWindow : Window
         {
             IsHitTestVisible = false,
             Stroke = null,
-            Opacity = 0.58,
+            Opacity = 0.52,
         };
         ApplySpectrumCurveFill();
         System.Windows.Controls.Panel.SetZIndex(_spectrumCurvePath, 1);

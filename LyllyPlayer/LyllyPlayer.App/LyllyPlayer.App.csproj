@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <AssemblyTitle>LyllyPlayer</AssemblyTitle>
     <Product>LyllyPlayer</Product>
-    <Company>LyllyPlayer</Company>
+    <Company>MuiluFox</Company>
     <Description>LyllyPlayer music player</Description>
     <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
     <OutputType>WinExe</OutputType>

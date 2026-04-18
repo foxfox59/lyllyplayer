@@ -34,7 +34,7 @@
         <Grid Margin="{DynamicResource App.Theme.WindowChromeContentMargin}">
             <Border SnapsToDevicePixels="{DynamicResource App.Theme.WindowChromeSnapsToDevicePixels}"
                     UseLayoutRounding="True"
-                    Background="{DynamicResource App.Brush.WindowBgImage}"
+                    Background="{DynamicResource App.Brush.WindowBgImage.OptionsLog}"
                     CornerRadius="{DynamicResource App.Theme.WindowCornerRadiusOuter}"/>
             <local:WindowChromeFrameRing Panel.ZIndex="5"
                                          SnapsToDevicePixels="True"

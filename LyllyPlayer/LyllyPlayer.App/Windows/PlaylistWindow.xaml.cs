@@ -57,6 +57,9 @@ public partial class PlaylistWindow : Window
     private readonly Func<string, Task> _doubleClickPlayAsync;
     private int _lastClickedIndex = -1;
     private int _centerRequestId;
+    /// <summary>Avoid one frame at the top of the list before <see cref="CenterListBoxOnQueueItem"/> runs (initial open).</summary>
+    private bool _suppressQueueListUntilInitialScroll;
+    private DispatcherTimer? _initialScrollMaskFailsafeTimer;
     private int _busyCount;
     private string _busyMessage = "Loading...";
     private CancellationTokenSource? _busyCts;
@@ -563,6 +566,50 @@ public partial class PlaylistWindow : Window
         try
         {
             QueueListBox.ScrollIntoView(_queueSource[index]);
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    /// <summary>Call before <see cref="Window.Show"/> so the first paint does not flash the top of the list before scroll-to-now-playing.</summary>
+    public void BeginSuppressQueueListUntilInitialScroll()
+    {
+        try
+        {
+            _suppressQueueListUntilInitialScroll = true;
+            QueueListBox.Opacity = 0;
+            if (_initialScrollMaskFailsafeTimer is null)
+            {
+                _initialScrollMaskFailsafeTimer = new DispatcherTimer(DispatcherPriority.Background)
+                {
+                    Interval = TimeSpan.FromMilliseconds(350),
+                };
+                _initialScrollMaskFailsafeTimer.Tick += (_, _) =>
+                {
+                    try { _initialScrollMaskFailsafeTimer!.Stop(); } catch { /* ignore */ }
+                    try { EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
+                };
+            }
+            try { _initialScrollMaskFailsafeTimer.Stop(); } catch { /* ignore */ }
+            try { _initialScrollMaskFailsafeTimer.Start(); } catch { /* ignore */ }
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    public void EndSuppressQueueListUntilInitialScroll()
+    {
+        try
+        {
+            if (!_suppressQueueListUntilInitialScroll)
+                return;
+            _suppressQueueListUntilInitialScroll = false;
+            QueueListBox.Opacity = 1;
+            try { _initialScrollMaskFailsafeTimer?.Stop(); } catch { /* ignore */ }
         }
         catch
         {
@@ -1149,16 +1196,28 @@ public partial class PlaylistWindow : Window
 
     private void CenterListBoxOnQueueItem(System.Windows.Controls.ListBox listBox, QueueItem item, int requestId, int attempt = 0)
     {
-        listBox.Dispatcher.BeginInvoke(new Action(() =>
+        void Work()
         {
-            if (requestId != _centerRequestId)
-                return;
+            var endInitialScrollMask = true;
             try
             {
+                if (requestId != _centerRequestId)
+                {
+                    endInitialScrollMask = false;
+                    return;
+                }
+
                 listBox.ApplyTemplate();
                 var scrollViewer = FindListBoxScrollViewer(listBox);
                 if (scrollViewer is null || scrollViewer.ViewportHeight <= 0)
+                {
+                    if (attempt < 3)
+                    {
+                        endInitialScrollMask = false;
+                        listBox.Dispatcher.BeginInvoke(new Action(() => CenterListBoxOnQueueItem(listBox, item, requestId, attempt + 1)), DispatcherPriority.Loaded);
+                    }
                     return;
+                }
 
                 listBox.ScrollIntoView(item);
                 listBox.UpdateLayout();
@@ -1180,7 +1239,10 @@ public partial class PlaylistWindow : Window
                 if (container is null)
                 {
                     if (attempt < 3)
-                        CenterListBoxOnQueueItem(listBox, item, requestId, attempt + 1);
+                    {
+                        endInitialScrollMask = false;
+                        listBox.Dispatcher.BeginInvoke(new Action(() => CenterListBoxOnQueueItem(listBox, item, requestId, attempt + 1)), DispatcherPriority.Loaded);
+                    }
                     return;
                 }
 
@@ -1202,10 +1264,28 @@ public partial class PlaylistWindow : Window
                 scrollViewer.ScrollToVerticalOffset(target);
 
                 if (attempt < 2 && Math.Abs(delta) > Math.Max(2, container.ActualHeight))
-                    CenterListBoxOnQueueItem(listBox, item, requestId, attempt + 1);
+                {
+                    endInitialScrollMask = false;
+                    listBox.Dispatcher.BeginInvoke(new Action(() => CenterListBoxOnQueueItem(listBox, item, requestId, attempt + 1)), DispatcherPriority.Loaded);
+                }
             }
-            catch { }
-        }), DispatcherPriority.ContextIdle);
+            catch
+            {
+                // ignore
+            }
+            finally
+            {
+                if (endInitialScrollMask)
+                    EndSuppressQueueListUntilInitialScroll();
+            }
+        }
+
+        if (listBox.Dispatcher.CheckAccess() && attempt == 0)
+            Work();
+        else if (!listBox.Dispatcher.CheckAccess())
+            listBox.Dispatcher.BeginInvoke(Work, DispatcherPriority.ContextIdle);
+        else
+            listBox.Dispatcher.BeginInvoke(Work, DispatcherPriority.Loaded);
     }
 
     private static ScrollViewer? FindListBoxScrollViewer(System.Windows.Controls.ListBox listBox)

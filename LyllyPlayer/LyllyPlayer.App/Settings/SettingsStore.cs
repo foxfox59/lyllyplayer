@@ -53,6 +53,7 @@ public static class SettingsStore
     private const string DefaultAppTitleMode = "Default";
     private const string DefaultCustomAppTitle = "";
     private const string DefaultAppIconVisibility = "TaskbarOnly";
+    private const string DefaultCompactModeLayout = "Normal";
     private const int DefaultSearchCount = 50;
     private const int DefaultSearchMinLengthSeconds = 0;
     private const bool DefaultReadMetadataOnLoad = false;
@@ -294,6 +295,11 @@ public static class SettingsStore
             BackgroundAlpha = loaded.BackgroundAlpha ?? GetInt(nameof(AppSettings.BackgroundAlpha)),
             BackgroundScrimPercent = loaded.BackgroundScrimPercent ?? GetInt(nameof(AppSettings.BackgroundScrimPercent)),
             BackgroundImageStretch = loaded.BackgroundImageStretch ?? GetString(nameof(AppSettings.BackgroundImageStretch)),
+            BackgroundUserDefinedMainNormal = loaded.BackgroundUserDefinedMainNormal,
+            BackgroundUserDefinedMainCompact = loaded.BackgroundUserDefinedMainCompact,
+            BackgroundUserDefinedMainUltra = loaded.BackgroundUserDefinedMainUltra,
+            BackgroundUserDefinedPlaylist = loaded.BackgroundUserDefinedPlaylist,
+            BackgroundUserDefinedOptionsLog = loaded.BackgroundUserDefinedOptionsLog,
             AppTitleMode = loaded.AppTitleMode ?? GetString(nameof(AppSettings.AppTitleMode)),
             CustomAppTitle = loaded.CustomAppTitle ?? GetString(nameof(AppSettings.CustomAppTitle)),
             AppIconVisibility = loaded.AppIconVisibility ?? GetString(nameof(AppSettings.AppIconVisibility)),
@@ -312,6 +318,7 @@ public static class SettingsStore
             AppLogLevel = loaded.AppLogLevel ?? GetString(nameof(AppSettings.AppLogLevel)),
             AppLogMaxMb = loaded.AppLogMaxMb ?? GetInt(nameof(AppSettings.AppLogMaxMb)),
             MainWindowCompact = loaded.MainWindowCompact ?? GetBool(nameof(AppSettings.MainWindowCompact)),
+            CompactModeLayout = loaded.CompactModeLayout ?? GetString(nameof(AppSettings.CompactModeLayout)),
             CompactModeHidesAuxWindows = loaded.CompactModeHidesAuxWindows ?? GetBool(nameof(AppSettings.CompactModeHidesAuxWindows)),
             KeepIncompletePlaylistOnCancel = loaded.KeepIncompletePlaylistOnCancel ?? GetBool(nameof(AppSettings.KeepIncompletePlaylistOnCancel)),
             LastSavedByAppVersion = loaded.LastSavedByAppVersion ?? GetString(nameof(AppSettings.LastSavedByAppVersion)),
@@ -421,6 +428,7 @@ public static class SettingsStore
         TakeBool(nameof(AppSettings.AlwaysOnTopPlaylistWindow), ref s, (c, v) => c with { AlwaysOnTopPlaylistWindow = v });
         TakeBool(nameof(AppSettings.AlwaysOnTopOptionsWindow), ref s, (c, v) => c with { AlwaysOnTopOptionsWindow = v });
         TakeBool(nameof(AppSettings.CompactModeHidesAuxWindows), ref s, (c, v) => c with { CompactModeHidesAuxWindows = v });
+        TakeString(nameof(AppSettings.CompactModeLayout), ref s, (c, v) => c with { CompactModeLayout = v });
 
         return any ? s : AllNullSettings();
     }
@@ -530,6 +538,11 @@ public static class SettingsStore
         BackgroundAlpha: null,
         BackgroundScrimPercent: null,
         BackgroundImageStretch: null,
+        BackgroundUserDefinedMainNormal: null,
+        BackgroundUserDefinedMainCompact: null,
+        BackgroundUserDefinedMainUltra: null,
+        BackgroundUserDefinedPlaylist: null,
+        BackgroundUserDefinedOptionsLog: null,
         AppTitleMode: null,
         CustomAppTitle: null,
         AppIconVisibility: null,
@@ -548,6 +561,7 @@ public static class SettingsStore
         AppLogLevel: null,
         AppLogMaxMb: null,
         MainWindowCompact: null,
+        CompactModeLayout: null,
         CompactModeHidesAuxWindows: null,
         KeepIncompletePlaylistOnCancel: null,
         LastSavedByAppVersion: null);
@@ -620,6 +634,11 @@ public static class SettingsStore
             BackgroundAlpha: DefaultBackgroundAlpha,
             BackgroundScrimPercent: DefaultBackgroundScrimPercent,
             BackgroundImageStretch: DefaultBackgroundImageStretch,
+            BackgroundUserDefinedMainNormal: null,
+            BackgroundUserDefinedMainCompact: null,
+            BackgroundUserDefinedMainUltra: null,
+            BackgroundUserDefinedPlaylist: null,
+            BackgroundUserDefinedOptionsLog: null,
             AppTitleMode: DefaultAppTitleMode,
             CustomAppTitle: DefaultCustomAppTitle,
             AppIconVisibility: DefaultAppIconVisibility,
@@ -638,6 +657,7 @@ public static class SettingsStore
             AppLogLevel: DefaultAppLogLevel,
             AppLogMaxMb: DefaultAppLogMaxMb,
             MainWindowCompact: null,
+            CompactModeLayout: DefaultCompactModeLayout,
             CompactModeHidesAuxWindows: true,
             KeepIncompletePlaylistOnCancel: DefaultKeepIncompletePlaylistOnCancel,
             LastSavedByAppVersion: null
@@ -663,6 +683,11 @@ public static class SettingsStore
             BackgroundAlpha = s.BackgroundAlpha is >= 0 and <= 255 ? s.BackgroundAlpha : DefaultBackgroundAlpha,
             BackgroundScrimPercent = s.BackgroundScrimPercent is >= 0 and <= 80 ? s.BackgroundScrimPercent : DefaultBackgroundScrimPercent,
             BackgroundImageStretch = NormalizeBackgroundImageStretch(s.BackgroundImageStretch),
+            BackgroundUserDefinedMainNormal = s.BackgroundUserDefinedMainNormal is { } mn ? NormalizeRectN(mn) : null,
+            BackgroundUserDefinedMainCompact = s.BackgroundUserDefinedMainCompact is { } mc ? NormalizeRectN(mc) : null,
+            BackgroundUserDefinedMainUltra = s.BackgroundUserDefinedMainUltra is { } mu ? NormalizeRectN(mu) : null,
+            BackgroundUserDefinedPlaylist = s.BackgroundUserDefinedPlaylist is { } pl ? NormalizeRectN(pl) : null,
+            BackgroundUserDefinedOptionsLog = s.BackgroundUserDefinedOptionsLog is { } ol ? NormalizeRectN(ol) : null,
             AppTitleMode = NormalizeAppTitleMode(s.AppTitleMode),
             CustomAppTitle = s.CustomAppTitle ?? DefaultCustomAppTitle,
             AppIconVisibility = NormalizeAppIconVisibility(s.AppIconVisibility),
@@ -680,6 +705,7 @@ public static class SettingsStore
             AppLogLevel = NormalizeAppLogLevel(s.AppLogLevel),
             AppLogMaxMb = s.AppLogMaxMb is >= MinAppLogMaxMb and <= MaxAppLogMaxMb ? s.AppLogMaxMb : DefaultAppLogMaxMb,
             MainWindowCompact = s.MainWindowCompact ?? false,
+            CompactModeLayout = NormalizeCompactModeLayout(s.CompactModeLayout),
             CompactModeHidesAuxWindows = s.CompactModeHidesAuxWindows ?? true,
             KeepIncompletePlaylistOnCancel = s.KeepIncompletePlaylistOnCancel ?? DefaultKeepIncompletePlaylistOnCancel,
             LastSavedByAppVersion = string.IsNullOrWhiteSpace(s.LastSavedByAppVersion) ? null : s.LastSavedByAppVersion.Trim(),
@@ -712,6 +738,16 @@ public static class SettingsStore
         return DefaultAppIconVisibility;
     }
 
+    public static string NormalizeCompactModeLayout(string? v)
+    {
+        var t = string.IsNullOrWhiteSpace(v) ? DefaultCompactModeLayout : v.Trim();
+        if (string.Equals(t, "Ultra", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(t, "UltraCompact", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(t, "Ultra compact", StringComparison.OrdinalIgnoreCase))
+            return "Ultra";
+        return "Normal";
+    }
+
     private static string NormalizeAudioQuality(string? q)
     {
         var t = string.IsNullOrWhiteSpace(q) ? DefaultAudioQuality : q.Trim();
@@ -739,12 +775,32 @@ public static class SettingsStore
         if (string.Equals(t, "BestFit", StringComparison.OrdinalIgnoreCase)
             || string.Equals(t, "Uniform", StringComparison.OrdinalIgnoreCase))
             return "BestFit";
+        if (string.Equals(t, "UserDefined", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(t, "User defined", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(t, "Designer", StringComparison.OrdinalIgnoreCase))
+            return "UserDefined";
         if (string.Equals(t, "Tile", StringComparison.OrdinalIgnoreCase))
             return "Tile";
         if (string.Equals(t, "Stretch", StringComparison.OrdinalIgnoreCase)
             || string.Equals(t, "Fill", StringComparison.OrdinalIgnoreCase))
             return "Stretch";
         return DefaultBackgroundImageStretch;
+    }
+
+    public static RectN NormalizeRectN(RectN v)
+    {
+        static double Clamp01(double x) => x < 0 ? 0 : (x > 1 ? 1 : x);
+        var x = Clamp01(v.X);
+        var y = Clamp01(v.Y);
+        var w = Clamp01(v.W);
+        var h = Clamp01(v.H);
+        // Minimum normalized crop size. Keep this small so the Designer can create fine crops.
+        const double min = 0.01;
+        if (w < min) w = min;
+        if (h < min) h = min;
+        if (x + w > 1) x = Math.Max(0, 1 - w);
+        if (y + h > 1) y = Math.Max(0, 1 - h);
+        return new RectN(x, y, w, h);
     }
 
     public static string NormalizeThemeMode(string? v)
