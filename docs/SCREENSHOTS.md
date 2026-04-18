@@ -1,4 +1,4 @@
-# LyllyPlayer screenshots (as of 1.1.0)
+# LyllyPlayer screenshots (as of 1.2.0)
 
 ## Default view, no settings changed, 100% UI scale
 
@@ -15,3 +15,12 @@
 ## Skinned, 100% UI scale, compact view 
 
 ![Skinned compact](/docs/_media/skinned_compact.png)
+
+## Skinned, 100% UI scale, ultra compact view 
+
+![Skinned ultra compact](/docs/_media/ultracompact.png)
+
+## Theme designer
+
+![Designer](/docs/_media/designer.png)
+
