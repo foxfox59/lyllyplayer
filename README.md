@@ -9,9 +9,9 @@
   
 ### What's new, pussycat?
 
-- 1.2.0, introduces the **ultra-compact mode**, a simple **theme designer** and slight transparency fixes for the foreground + title text
-  - Known issue: Always on top occasionally works incorrectly and might break other apps Z-order as well. Working on a fix.  
-- 1.1.0, initial public release with no major bugs (fingers crossed)  
+- 1.2.1: fixes a rare issue that only happened when using DisplayFusion (apps were fighting for window focus). 
+- 1.2.0: introduces the **ultra-compact mode**, a simple **theme designer** and slight transparency fixes for the foreground + title text
+- 1.1.0: initial public release with no major bugs (fingers crossed)  
 
 ---
 
