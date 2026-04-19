@@ -39,11 +39,6 @@ public partial class MainWindow : Window
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")]
-    private static extern bool SetForegroundWindow(IntPtr hWnd);
-
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
     private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
 
@@ -577,6 +572,8 @@ public partial class MainWindow : Window
     private Hardcodet.Wpf.TaskbarNotification.TaskbarIcon? _hardcodetTrayIcon;
     private bool _nativeTrayCleanedUp;
     private ITaskbarList? _taskbarList;
+    /// <summary>Last value passed to <see cref="ITaskbarList"/> AddTab/DeleteTab. Re-applying the same state every UI tick spams the shell and breaks focus with some window managers (e.g. DisplayFusion).</summary>
+    private bool? _lastNativeTaskbarListShowInTaskbar;
 
     private const int WM_APP = 0x8000;
     private const int WM_TRAYICON = WM_APP + 0x1B;
@@ -595,6 +592,27 @@ public partial class MainWindow : Window
 
     private const uint NIS_HIDDEN = 0x00000001;
     private const uint NOTIFYICON_VERSION_4 = 4;
+
+    /// <summary>Binary Fortress DisplayFusion hooks shell Z-order; repeated <c>SetWindowPos</c> on our HWNDs can confuse it.</summary>
+    private static bool? _cachedDisplayFusionRunning;
+    private static DateTime _nextDisplayFusionProbeUtc;
+
+    private static bool IsDisplayFusionRunning()
+    {
+        var now = DateTime.UtcNow;
+        if (_cachedDisplayFusionRunning is bool b && now < _nextDisplayFusionProbeUtc)
+            return b;
+        try
+        {
+            _cachedDisplayFusionRunning = Process.GetProcessesByName("DisplayFusion").Length > 0;
+        }
+        catch
+        {
+            _cachedDisplayFusionRunning = false;
+        }
+        _nextDisplayFusionProbeUtc = now.AddSeconds(45);
+        return _cachedDisplayFusionRunning.Value;
+    }
 
     private const uint TrayUid = 1;
     private static readonly Guid TrayGuid = new("d2e9f5c8-40c3-4a4f-a9bf-0f9a6a5f3c2d"); // legacy (no longer used)
@@ -1101,8 +1119,8 @@ public partial class MainWindow : Window
                 }
             }),
             handledEventsToo: true);
-        // NOTE: Avoid refreshing shell styles on Deactivated. It can interfere with taskbar minimize behavior
-        // on borderless windows by forcing a frame republish at the wrong time.
+        // NOTE: Avoid work on Deactivated (shell styles / HWND_TOPMOST resync fought the shell: taskbar restore
+        // and foreground for other apps could fail; borderless minimize behavior also suffered).
         Deactivated += (_, _) => { };
         Closing += (_, _) =>
         {
@@ -1111,6 +1129,10 @@ public partial class MainWindow : Window
                 // no-op (legacy: used to un-hide UserDefined wallpaper)
             }
             catch { /* ignore */ }
+            // Clear Topmost before teardown so we never rely on Win32 topmost cleanup after HWND destruction.
+            try { Topmost = false; } catch { /* ignore */ }
+            try { if (_playlistWindow is not null) _playlistWindow.Topmost = false; } catch { /* ignore */ }
+            try { if (_optionsWindow is not null) _optionsWindow.Topmost = false; } catch { /* ignore */ }
             DetachMainWindowShellStyleHook();
             _isShuttingDown = true;
             try { _persistTimer.Stop(); } catch { /* ignore */ }
@@ -7190,8 +7212,6 @@ public partial class MainWindow : Window
         }
     }
 
-
-
     private void SyncAuxWindowsMinimizeStateWithMain()
     {
         // When windows are not owned, minimizing Main won't minimize auxiliaries automatically.
@@ -7390,7 +7410,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void TryRaiseWindowNoActivate(Window? w)
+    private void TryRaiseWindowNoActivate(Window? w)
     {
         if (w is null)
             return;
@@ -7406,7 +7426,32 @@ public partial class MainWindow : Window
             var hwnd = new WindowInteropHelper(w).Handle;
             if (hwnd == IntPtr.Zero)
                 return;
-            SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+            var mainHwnd = new WindowInteropHelper(this).Handle;
+
+            // DisplayFusion manages Z-order across monitors; stacking sibling HWNDs via SetWindowPos here fights its hooks
+            // and can leave other apps unable to activate reliably. Rely on WPF visibility/Topmost only.
+            if (IsDisplayFusionRunning())
+                return;
+
+            if (_alwaysOnTop)
+            {
+                // Main uses WPF Topmost (WS_EX_TOPMOST). Do not call SetWindowPos(HWND_TOPMOST) — it fights the shell
+                // and can break Z-order/taskbar restore for other apps. Only order aux above main when they share TOP.
+                var wantTop = ReferenceEquals(w, _playlistWindow) && _alwaysOnTopPlaylistWindow
+                    || ReferenceEquals(w, _optionsWindow) && _alwaysOnTopOptionsWindow;
+                if (wantTop && mainHwnd != IntPtr.Zero)
+                {
+                    _ = SetWindowPos(hwnd, mainHwnd, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    return;
+                }
+
+                return;
+            }
+
+            // Not always-on-top: stack the auxiliary immediately above the main window (avoid HWND_TOP over whole desktop).
+            var insertAfter = mainHwnd != IntPtr.Zero ? mainHwnd : HWND_TOP;
+            _ = SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
         catch { /* ignore */ }
     }
@@ -7760,12 +7805,8 @@ public partial class MainWindow : Window
                         try { _hardcodetTrayIcon.ToolTipText = "LyllyPlayer"; } catch { /* ignore */ }
                         _hardcodetTrayIcon.Visibility = showTray ? Visibility.Visible : Visibility.Collapsed;
                     }
-                    // On affected systems, Explorer only removes the tray gap after a user interaction like
-                    // double-clicking the tray icon (which foregrounds the app). Best-effort: do the same
-                    // "foreground nudge" after a tray visibility toggle.
                     if (showTray)
                     {
-                        try { QueueExplorerTrayLayoutNudge(); } catch { /* ignore */ }
                         try { _ = TrayRefresher.RefreshTrayLayoutBestEffortAsync(); } catch { /* ignore */ }
                     }
                     _lastAppliedShowTray = showTray;
@@ -7776,45 +7817,16 @@ public partial class MainWindow : Window
             // Avoid constantly "jolting" Explorer with style rebuilds when the mode hasn't changed.
             // Rebuilding the taskbar button can cause a temporary right-edge gap in the notification area
             // on some Win10 configurations until the window is activated again.
-            var taskbarModeChanged = _lastAppliedShowInTaskbar != showTaskbar;
             if (_lastAppliedShowInTaskbar != showTaskbar)
             {
                 ApplyTaskbarVisibilityNative(showTaskbar);
                 _lastAppliedShowInTaskbar = showTaskbar;
             }
             // ShowInTaskbar is set inside ApplyTaskbarVisibilityNative (which also uses ITaskbarList).
-
-            // Empirically, some Win10 Explorer builds leave a right-edge tray gap after taskbar button rebuilds
-            // until the app is activated (e.g. double-clicking the tray icon). Nudge activation/focus in a
-            // best-effort, no-op way by briefly foregrounding the main window and restoring the previous
-            // foreground window.
-            if (taskbarModeChanged)
-            {
-                try { QueueExplorerTrayLayoutNudge(); } catch { /* ignore */ }
-            }
+            // Taskbar rebuilds can leave a cosmetic tray gap on some Win10 builds until the user interacts
+            // with the tray — do not steal/restore foreground to "fix" it (breaks focus for all apps).
         }
         catch { /* ignore */ }
-    }
-
-    private void QueueExplorerTrayLayoutNudge()
-    {
-        if (_isShuttingDown)
-            return;
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            try
-            {
-                var hwnd = new WindowInteropHelper(this).Handle;
-                if (hwnd == IntPtr.Zero)
-                    return;
-                var prev = GetForegroundWindow();
-                // Bring us to foreground (like the user double-clicking the tray icon), then restore.
-                SetForegroundWindow(hwnd);
-                if (prev != IntPtr.Zero && prev != hwnd)
-                    SetForegroundWindow(prev);
-            }
-            catch { /* ignore */ }
-        }), DispatcherPriority.Background);
     }
 
     private void ApplyTaskbarVisibilityNative(bool showInTaskbar)
@@ -7855,24 +7867,31 @@ public partial class MainWindow : Window
             }
             catch { /* ignore */ }
 
-            // Hide/show the taskbar button via ITaskbarList (shell hint).
-            try
+            // Hide/show the taskbar button via ITaskbarList (shell hint). Only when the desired state changes:
+            // ApplyMainWindowShellIntegration runs ~1s from the UI timer; repeating AddTab forever spams the shell
+            // and breaks activation/focus with DisplayFusion and similar taskbar hooks.
+            if (_lastNativeTaskbarListShowInTaskbar != showInTaskbar)
             {
-                _taskbarList ??= (ITaskbarList)new CTaskbarList();
-                _taskbarList.HrInit();
-                if (showInTaskbar)
+                try
                 {
-                    _taskbarList.AddTab(hwnd);
+                    _taskbarList ??= (ITaskbarList)new CTaskbarList();
+                    _taskbarList.HrInit();
+                    if (showInTaskbar)
+                        _taskbarList.AddTab(hwnd);
+                    else
+                        _taskbarList.DeleteTab(hwnd);
+                    _lastNativeTaskbarListShowInTaskbar = showInTaskbar;
                 }
-                else
-                {
-                    _taskbarList.DeleteTab(hwnd);
-                }
+                catch { /* ignore */ }
             }
-            catch { /* ignore */ }
 
             // Keep WPF's property in sync (best-effort; it can be flaky with custom chrome).
-            try { ShowInTaskbar = showInTaskbar; } catch { /* ignore */ }
+            try
+            {
+                if (ShowInTaskbar != showInTaskbar)
+                    ShowInTaskbar = showInTaskbar;
+            }
+            catch { /* ignore */ }
             try
             {
                 var tray = _trayMessageHwnd != IntPtr.Zero ? _trayMessageHwnd : hwnd;
