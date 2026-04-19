@@ -4,6 +4,7 @@
 **LyllyPlayer should always be completely free to download and use. If you are getting asked to pay for it (other than [donations](https://www.paypal.me/MuiluFox) here), someone is ripping you off.**  
 
 **[See it in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**  
+**[Using the Theme Designer (YouTube link)](https://www.youtube.com/watch?v=Z1lniBzXm9Q)**
   
 ---  
   
