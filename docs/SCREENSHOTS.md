@@ -2,24 +2,24 @@
 
 ## Default view, no settings changed, 100% UI scale
 
-Default
+![Default](/docs/_media/default.png)
 
-## Default color, no background image, 100% UI scale, compact view
+## Default color, no background image, 100% UI scale, compact view 
 
-Compact
+![Compact](/docs/_media/compact.png)
 
 ## Skinning example, 100% UI scale (old "best fit", 1.1.0)
 
-Skinned
+![Skinned](/docs/_media/skinned.png)
 
 ## Skinned, 100% UI scale, compact view (old "best fit", 1.1.0)
 
-Skinned compact
+![Skinned compact](/docs/_media/skinned_compact.png)
 
 ## Skinned, 100% UI scale, ultra compact view (new in 1.2.0)
 
-Skinned ultra compact
+![Skinned ultra compact](/docs/_media/ultracompact.png)
 
 ## Theme designer (new in 1.2.0)
 
-Designer
+![Designer](/docs/_media/designer.png)
