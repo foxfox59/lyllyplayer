@@ -10,6 +10,7 @@
 
 ### What's new, pussycat?
 
+- 1.3.1: fixes a small bug with the playlist window getting stuck on the wrong display on multi-monitor setups
 - 1.3.0: playlist and search improvements
   - Ability to import YT playlists from your account (!!)
     - Best-effort using yt-dlp and browser cookie. This might not work for you and/or break at any given time. I'm intentionally trying to avoid having to use API tokens as I want this to be as turnkey as possible.
