@@ -3994,55 +3994,78 @@ public partial class MainWindow : Window
             return i.IsEmpty ? 0 : Math.Max(0, i.Width) * Math.Max(0, i.Height);
         }
 
-        double VisibleArea(Rect a, Rect work)
+        (double l, double t, double visible, double overlap) Evaluate(IEnumerable<Rect> workAreas)
         {
-            var i = Rect.Intersect(a, work);
-            return i.IsEmpty ? 0 : Math.Max(0, i.Width) * Math.Max(0, i.Height);
+            var bestLocal = (l: left, t: top, visible: 0.0, overlap: double.MaxValue);
+            foreach (var work in workAreas)
+            {
+                var candidates = new List<(double l, double t)>(8);
+
+                // 0) current desired (clamped to this work area)
+                candidates.Add(ClampToWork(work, left, top));
+
+                if (snap == PlaylistSnapEdge.Right || snap == PlaylistSnapEdge.Left)
+                {
+                    var intendedLeft = snap == PlaylistSnapEdge.Right ? (main.Right + gap) : (main.Left - plW - gap);
+                    candidates.Add(ClampToWork(work, intendedLeft, top));
+
+                    var oppositeLeft = snap == PlaylistSnapEdge.Right ? (main.Left - plW - gap) : (main.Right + gap);
+                    candidates.Add(ClampToWork(work, oppositeLeft, top));
+
+                    candidates.Add(ClampToWork(work, intendedLeft, main.Top - plH - gap));
+                    candidates.Add(ClampToWork(work, intendedLeft, main.Bottom + gap));
+                }
+                else if (snap == PlaylistSnapEdge.Bottom)
+                {
+                    var intendedTop = main.Bottom + gap;
+                    candidates.Add(ClampToWork(work, left, intendedTop));
+                    candidates.Add(ClampToWork(work, left, main.Top - plH - gap));
+                    candidates.Add(ClampToWork(work, main.Right + gap, intendedTop));
+                    candidates.Add(ClampToWork(work, main.Left - plW - gap, intendedTop));
+                }
+
+                foreach (var c in candidates.Distinct())
+                {
+                    var r = new Rect(c.l, c.t, plW, plH);
+                    var inter = Rect.Intersect(r, work);
+                    var visible = inter.IsEmpty ? 0 : Math.Max(0, inter.Width) * Math.Max(0, inter.Height);
+                    if (visible <= 0)
+                        continue;
+                    if (inter.Height < Math.Min(plH, minVisible) || inter.Width < Math.Min(plW, minVisible))
+                        continue;
+
+                    var overlap = OverlapArea(r, main);
+                    if (visible > bestLocal.visible + 1e-6 || (Math.Abs(visible - bestLocal.visible) <= 1e-6 && overlap < bestLocal.overlap))
+                        bestLocal = (c.l, c.t, visible, overlap);
+                }
+            }
+            return bestLocal;
         }
 
-        var best = (l: left, t: top, visible: 0.0, overlap: double.MaxValue);
-
-        foreach (var work in works)
+        // Strong preference: keep snapped windows on the same work area as the main window.
+        Rect? preferred = null;
+        try
         {
-            var candidates = new List<(double l, double t)>(8);
-
-            // 0) current desired (clamped to this work area)
-            candidates.Add(ClampToWork(work, left, top));
-
-            if (snap == PlaylistSnapEdge.Right || snap == PlaylistSnapEdge.Left)
+            var mc = new System.Windows.Point(main.Left + main.Width / 2.0, main.Top + main.Height / 2.0);
+            preferred = works.FirstOrDefault(w => w.Contains(mc));
+            if (preferred is null)
             {
-                var intendedLeft = snap == PlaylistSnapEdge.Right ? (main.Right + gap) : (main.Left - plW - gap);
-                candidates.Add(ClampToWork(work, intendedLeft, top));
-
-                var oppositeLeft = snap == PlaylistSnapEdge.Right ? (main.Left - plW - gap) : (main.Right + gap);
-                candidates.Add(ClampToWork(work, oppositeLeft, top));
-
-                candidates.Add(ClampToWork(work, intendedLeft, main.Top - plH - gap));
-                candidates.Add(ClampToWork(work, intendedLeft, main.Bottom + gap));
-            }
-            else if (snap == PlaylistSnapEdge.Bottom)
-            {
-                var intendedTop = main.Bottom + gap;
-                candidates.Add(ClampToWork(work, left, intendedTop));
-                candidates.Add(ClampToWork(work, left, main.Top - plH - gap));
-                candidates.Add(ClampToWork(work, main.Right + gap, intendedTop));
-                candidates.Add(ClampToWork(work, main.Left - plW - gap, intendedTop));
-            }
-
-            foreach (var c in candidates.Distinct())
-            {
-                var r = new Rect(c.l, c.t, plW, plH);
-                var visible = VisibleArea(r, work);
-                if (visible <= 0)
-                    continue;
-                if (Rect.Intersect(r, work).Height < Math.Min(plH, minVisible) || Rect.Intersect(r, work).Width < Math.Min(plW, minVisible))
-                    continue;
-
-                var overlap = OverlapArea(r, main);
-                if (visible > best.visible + 1e-6 || (Math.Abs(visible - best.visible) <= 1e-6 && overlap < best.overlap))
-                    best = (c.l, c.t, visible, overlap);
+                // Fallback: choose the work area with the largest overlap with main.
+                preferred = works
+                    .OrderByDescending(w => OverlapArea(w, main))
+                    .FirstOrDefault();
             }
         }
+        catch { preferred = null; }
+
+        if (preferred is Rect pw && works.Count > 1)
+        {
+            var bestPreferred = Evaluate(new[] { pw });
+            if (bestPreferred.visible > 0)
+                return (bestPreferred.l, bestPreferred.t);
+        }
+
+        var best = Evaluate(works);
 
         // As a last resort (no good candidates), clamp to the first work area to keep it reachable.
         if (best.visible <= 0 && works.Count > 0)
