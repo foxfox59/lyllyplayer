@@ -23,6 +23,18 @@ namespace LyllyPlayer.Windows;
 
 public partial class PlaylistWindow : Window
 {
+    private sealed class SortChoice
+    {
+        public PlaylistSortMode Mode { get; }
+        public string Label { get; }
+        public SortChoice(PlaylistSortMode mode, string label)
+        {
+            Mode = mode;
+            Label = label;
+        }
+        public override string ToString() => Label;
+    }
+
     private sealed class Win32OwnerWrapper : Forms.IWin32Window
     {
         public IntPtr Handle { get; }
@@ -33,9 +45,11 @@ public partial class PlaylistWindow : Window
         => System.Windows.Application.Current?.MainWindow ?? this;
 
     private readonly Func<string, Task> _loadUrlAsync;
-    private readonly Func<string, int, int, CancellationToken, Task> _searchYoutubeAsync;
     private readonly Func<(int count, int minLengthSeconds)> _getSearchDefaults;
     private readonly Action<int, int> _setSearchDefaults;
+    private readonly Func<Window, CancellationToken, Task> _openYoutubeModalAsync;
+    private readonly Func<PlaylistSortSpec, CancellationToken, Task> _applySortAsync;
+    private readonly Func<bool> _getIsYoutubeSource;
     private readonly Func<string, string, Task> _savePlaylistToFileAsync;
     private readonly Func<string, Task> _loadPlaylistFromFileAsync;
     private readonly Func<IReadOnlyList<PlaylistEntry>, string?, string, CancellationToken, Task> _loadEntriesAsync;
@@ -82,11 +96,16 @@ public partial class PlaylistWindow : Window
     private string _playlistFilterQuery = "";
     private readonly DispatcherTimer _playlistFilterDebounceTimer;
 
+    private bool _suppressSortUiEvents;
+    private PlaylistSortSpec _lastSortSpec = new(PlaylistSortMode.None, PlaylistSortDirection.Asc);
+
     public PlaylistWindow(
         Func<string, Task> loadUrlAsync,
-        Func<string, int, int, CancellationToken, Task> searchYoutubeAsync,
         Func<(int count, int minLengthSeconds)> getSearchDefaults,
         Action<int, int> setSearchDefaults,
+        Func<Window, CancellationToken, Task> openYoutubeModalAsync,
+        Func<PlaylistSortSpec, CancellationToken, Task> applySortAsync,
+        Func<bool> getIsYoutubeSource,
         Func<string, string, Task> savePlaylistToFileAsync,
         Func<string, Task> loadPlaylistFromFileAsync,
         Func<IReadOnlyList<PlaylistEntry>, string?, string, CancellationToken, Task> loadEntriesAsync,
@@ -109,9 +128,11 @@ public partial class PlaylistWindow : Window
     )
     {
         _loadUrlAsync = loadUrlAsync;
-        _searchYoutubeAsync = searchYoutubeAsync;
         _getSearchDefaults = getSearchDefaults;
         _setSearchDefaults = setSearchDefaults;
+        _openYoutubeModalAsync = openYoutubeModalAsync;
+        _applySortAsync = applySortAsync;
+        _getIsYoutubeSource = getIsYoutubeSource;
         _savePlaylistToFileAsync = savePlaylistToFileAsync;
         _loadPlaylistFromFileAsync = loadPlaylistFromFileAsync;
         _loadEntriesAsync = loadEntriesAsync;
@@ -135,6 +156,7 @@ public partial class PlaylistWindow : Window
         InitializeComponent();
 
         SourceTextBox.Text = _getSource();
+        InitializeSortUi();
 
         _playlistFilterDebounceTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -152,6 +174,136 @@ public partial class PlaylistWindow : Window
                 // ignore
             }
         };
+    }
+
+    private void InitializeSortUi()
+    {
+        try
+        {
+            _suppressSortUiEvents = true;
+            SortDescToggleButton.IsChecked = false;
+            SortDescToggleButton.Content = "Asc";
+            RefreshSortChoices();
+        }
+        catch { /* ignore */ }
+        finally { _suppressSortUiEvents = false; }
+    }
+
+    public void RefreshSortChoices()
+    {
+        try
+        {
+            _suppressSortUiEvents = true;
+            var isYoutube = false;
+            try { isYoutube = _getIsYoutubeSource(); } catch { /* ignore */ }
+
+            var items = new List<SortChoice>
+            {
+                new(PlaylistSortMode.None, "None"),
+                new(PlaylistSortMode.NameOrTitle, isYoutube ? "Title" : "Name"),
+                new(PlaylistSortMode.ChannelOrPath, isYoutube ? "Channel" : "Path + filename"),
+                new(PlaylistSortMode.Duration, "Duration"),
+            };
+
+            var wantMode = _lastSortSpec.Mode;
+            SortModeComboBox.ItemsSource = items;
+            SortModeComboBox.DisplayMemberPath = "Label";
+            SortModeComboBox.SelectedValuePath = "Mode";
+            // Force the SelectionBoxItem to update when labels change (YouTube vs Local).
+            try { SortModeComboBox.SelectedIndex = -1; } catch { /* ignore */ }
+            SortModeComboBox.SelectedValue = wantMode;
+        }
+        catch { /* ignore */ }
+        finally { _suppressSortUiEvents = false; }
+    }
+
+    public PlaylistSortSpec GetSortSpec()
+    {
+        try { return _lastSortSpec; } catch { return new PlaylistSortSpec(PlaylistSortMode.None, PlaylistSortDirection.Asc); }
+    }
+
+    public void SetSortSpec(PlaylistSortSpec spec)
+    {
+        try
+        {
+            _suppressSortUiEvents = true;
+            _lastSortSpec = spec;
+            try { SortModeComboBox.SelectedValue = spec.Mode; } catch { /* ignore */ }
+            var desc = spec.Direction == PlaylistSortDirection.Desc;
+            try { SortDescToggleButton.IsChecked = desc; } catch { /* ignore */ }
+            try { SortDescToggleButton.Content = desc ? "Desc" : "Asc"; } catch { /* ignore */ }
+        }
+        catch { /* ignore */ }
+        finally { _suppressSortUiEvents = false; }
+    }
+
+    private PlaylistSortSpec GetSortSpecFromUi()
+    {
+        var mode = PlaylistSortMode.None;
+        try
+        {
+            if (SortModeComboBox.SelectedValue is PlaylistSortMode sm)
+                mode = sm;
+        }
+        catch { /* ignore */ }
+        var dir = (SortDescToggleButton.IsChecked ?? false) ? PlaylistSortDirection.Desc : PlaylistSortDirection.Asc;
+        return new PlaylistSortSpec(mode, dir);
+    }
+
+    private async Task ApplySortFromUiAsync()
+    {
+        if (_busyCount > 0)
+            return;
+        var spec = GetSortSpecFromUi();
+        if (spec.Equals(_lastSortSpec))
+            return;
+        _lastSortSpec = spec;
+
+        using var cts = new CancellationTokenSource();
+        try
+        {
+            Interlocked.Increment(ref _busyCount);
+            SetLoadEnabled(false);
+            SetBusy("Sorting...");
+            await _applySortAsync(spec, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
+        }
+        catch
+        {
+            // ignore
+        }
+        finally
+        {
+            ClearBusy();
+            Interlocked.Decrement(ref _busyCount);
+            SetLoadEnabled(true);
+        }
+    }
+
+    private async void SortModeComboBox_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSortUiEvents)
+            return;
+        await ApplySortFromUiAsync();
+    }
+
+    private async void SortDescToggleButton_OnChecked(object sender, RoutedEventArgs e)
+    {
+        try { SortDescToggleButton.Content = "Desc"; } catch { /* ignore */ }
+        if (_suppressSortUiEvents)
+            return;
+        await ApplySortFromUiAsync();
+    }
+
+    private async void SortDescToggleButton_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        try { SortDescToggleButton.Content = "Asc"; } catch { /* ignore */ }
+        if (_suppressSortUiEvents)
+            return;
+        await ApplySortFromUiAsync();
     }
 
     private void ChromeCloseButton_OnClick(object sender, RoutedEventArgs e)
@@ -676,54 +828,17 @@ public partial class PlaylistWindow : Window
         {
             if (_busyCount > 0)
                 return;
-
-            var (defCount, defMin) = _getSearchDefaults();
-            var dlg = new SearchYoutubeDialog(initialQuery: "", initialCount: defCount, initialMinLengthSeconds: defMin) { Owner = GetDialogOwnerWindow() };
-            if (dlg.ShowDialog() != true)
-                return;
-
-            var query = dlg.QueryText;
-            if (string.IsNullOrWhiteSpace(query))
-                return;
-
-            var count = dlg.ResultCount;
-            if (count <= 0) count = 50;
-            var minLen = dlg.MinLengthSeconds;
-            try { _setSearchDefaults(count, minLen); } catch { /* ignore */ }
-
-            try { _capturePlaylistForCancelRestore?.Invoke(); } catch { /* ignore */ }
-
-            var source = $"Search: {query}";
-            SourceTextBox.Text = source;
-            _sourceChanged(source);
-
+            using var cts = new CancellationTokenSource();
             Interlocked.Increment(ref _busyCount);
             SetLoadEnabled(false);
-            var oldContent = SearchYoutubeButton.Content;
-            using var cts = new CancellationTokenSource();
-            Interlocked.Exchange(ref _searchOverlayDismissKind, 0);
             try
             {
-                SearchYoutubeButton.Content = "Searching...";
-                SetBusy("Searching…", cts, showSearchStop: true);
-                await _searchYoutubeAsync(query, count, minLen, cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                // Cancellation is handled in MainWindow (rollback vs partial keep).
-            }
-            catch (Exception ex)
-            {
-                try
-                {
-                    System.Windows.MessageBox.Show(this, $"Search failed.\n\n{ex.Message}", "Search", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-                catch { /* ignore */ }
+                SetBusy("YouTube...");
+                await _openYoutubeModalAsync(this, cts.Token);
             }
             finally
             {
                 ClearBusy();
-                try { SearchYoutubeButton.Content = oldContent; } catch { /* ignore */ }
                 Interlocked.Decrement(ref _busyCount);
                 SetLoadEnabled(true);
             }
@@ -732,7 +847,7 @@ public partial class PlaylistWindow : Window
         {
             try
             {
-                System.Windows.MessageBox.Show(this, $"Search failed.\n\n{ex.Message}", "Search", MessageBoxButton.OK, MessageBoxImage.Error);
+                System.Windows.MessageBox.Show(this, $"YouTube failed.\n\n{ex.Message}", "YouTube", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             catch { /* ignore */ }
         }
@@ -767,7 +882,9 @@ public partial class PlaylistWindow : Window
             SetBusy("Saving...");
             try
             {
-                await _savePlaylistToFileAsync(dlg.FileName, s);
+                // Persist playlist title (not the source URL/path). The MainWindow delegate will use its current
+                // playlist title when displayName is empty.
+                await _savePlaylistToFileAsync(dlg.FileName, "");
             }
             finally
             {

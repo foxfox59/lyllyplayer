@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using LyllyPlayer.Models;
@@ -193,6 +194,10 @@ public sealed class YtDlpClient
             if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(webpageUrl))
                 continue;
 
+            // Prune entries that are definitively unavailable from flat metadata.
+            if (LooksLikeUnavailableFlatTitle(title) || IsUnavailableEntry(e))
+                continue;
+
             // In flat-playlist mode, "url" may be a video ID; normalize to a real URL.
             if (!webpageUrl.Contains("://", StringComparison.OrdinalIgnoreCase))
                 webpageUrl = $"https://www.youtube.com/watch?v={webpageUrl}";
@@ -280,6 +285,10 @@ public sealed class YtDlpClient
             if (string.IsNullOrWhiteSpace(t) || string.Equals(t.Trim(), "(untitled)", StringComparison.OrdinalIgnoreCase))
                 continue;
 
+            // Prune entries that are definitively unavailable from flat metadata.
+            if (LooksLikeUnavailableFlatTitle(t) || IsUnavailableEntry(e))
+                continue;
+
             if (string.IsNullOrWhiteSpace(webpageUrl))
                 webpageUrl = $"https://www.youtube.com/watch?v={id}";
             else if (!webpageUrl.Contains("://", StringComparison.OrdinalIgnoreCase))
@@ -299,6 +308,220 @@ public sealed class YtDlpClient
 
         var trimmed = entries.Take(count).ToList();
         return new PlaylistResolveResult(title, trimmed);
+    }
+
+    public async Task<IReadOnlyList<YoutubePlaylistHit>> ResolveYoutubePlaylistSearchAsync(string query, int count, CancellationToken cancellationToken)
+    {
+        var q = (query ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(q))
+            return Array.Empty<YoutubePlaylistHit>();
+
+        count = Math.Clamp(count <= 0 ? 20 : count, 1, 100);
+
+        // YouTube "Playlists" filter (sp=EgIQAw%3D%3D). Best-effort; YouTube may change this at any time.
+        var url = "https://www.youtube.com/results?search_query=" + WebUtility.UrlEncode(q) + "&sp=EgIQAw%3D%3D";
+
+        var args = new[]
+        {
+            "--dump-single-json",
+            "--flat-playlist",
+            url,
+        };
+
+        var (exitCode, stdout, stderr) = await RunAsync(args, cancellationToken, longRunningLogHint: "YouTube playlist search");
+        if (exitCode != 0)
+            throw new InvalidOperationException($"yt-dlp failed ({exitCode}). {stderr}".Trim());
+
+        using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
+        if (!doc.RootElement.TryGetProperty("entries", out var entriesEl) || entriesEl.ValueKind != JsonValueKind.Array)
+            return Array.Empty<YoutubePlaylistHit>();
+
+        var hits = new List<YoutubePlaylistHit>(entriesEl.GetArrayLength());
+        foreach (var e in entriesEl.EnumerateArray())
+        {
+            var title = (GetString(e, "title") ?? "").Trim();
+            var webpageUrl = GetString(e, "webpage_url") ?? GetString(e, "url") ?? "";
+            var channel = GetString(e, "channel") ?? GetString(e, "uploader");
+            var count0 = GetInt(e, "playlist_count") ?? GetInt(e, "n_entries");
+
+            if (string.IsNullOrWhiteSpace(title))
+                continue;
+            if (string.IsNullOrWhiteSpace(webpageUrl))
+                continue;
+
+            // In flat mode "url" can be just a playlist id; normalize to a playlist URL.
+            var urlOrId = webpageUrl.Trim();
+            if (!urlOrId.Contains("://", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(urlOrId))
+                urlOrId = "https://www.youtube.com/playlist?list=" + urlOrId;
+
+            if (!urlOrId.Contains("list=", StringComparison.OrdinalIgnoreCase) && !urlOrId.Contains("/playlist", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            hits.Add(new YoutubePlaylistHit(
+                Title: title,
+                UrlOrId: urlOrId,
+                Channel: channel,
+                ItemCount: count0
+            ));
+
+            if (hits.Count >= count)
+                break;
+        }
+
+        return hits;
+    }
+
+    public async Task<int?> TryGetPlaylistItemCountBestEffortAsync(string playlistUrlOrId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var src = (playlistUrlOrId ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(src))
+                return null;
+
+            // Accept raw ID by converting to a canonical URL.
+            var url = src.Contains("://", StringComparison.OrdinalIgnoreCase)
+                ? src
+                : $"https://www.youtube.com/playlist?list={src}";
+
+            var args = new[]
+            {
+                "--dump-single-json",
+                "--flat-playlist",
+                url,
+            };
+
+            var (exitCode, stdout, _) = await RunAsync(args, cancellationToken, longRunningLogHint: "YouTube playlist count", suppressNonZeroExitLog: true);
+            if (exitCode != 0)
+                return null;
+
+            using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
+            var root = doc.RootElement;
+            var n0 = GetInt(root, "playlist_count") ?? GetInt(root, "n_entries");
+            if (n0 is int ok0 && ok0 > 0)
+                return ok0;
+
+            if (root.TryGetProperty("entries", out var entriesEl) && entriesEl.ValueKind == JsonValueKind.Array)
+            {
+                var n1 = entriesEl.GetArrayLength();
+                return n1 > 0 ? n1 : null;
+            }
+
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async Task<IReadOnlyList<YoutubePlaylistHit>> ResolveAccountPlaylistsBestEffortAsync(int count, CancellationToken cancellationToken)
+    {
+        count = Math.Clamp(count <= 0 ? 50 : count, 1, 200);
+
+        if (!UsesCookiesFromBrowser)
+        {
+            try { AppLog.Warn("My playlists: cookies-from-browser is not enabled; yt-dlp likely cannot access account playlists."); } catch { /* ignore */ }
+        }
+
+        async Task<(string label, string urlTried, IReadOnlyList<YoutubePlaylistHit> hits)> TryParsePlaylistsFromTabUrlAsync(string label, string url, CancellationToken ct)
+        {
+            var args = new[]
+            {
+                "--dump-single-json",
+                "--flat-playlist",
+                url,
+            };
+            var (ec, stdout, stderr) = await RunAsync(args, ct, longRunningLogHint: $"YouTube {label}");
+            if (ec != 0)
+                throw new InvalidOperationException($"yt-dlp failed ({ec}). {stderr}".Trim());
+
+            using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
+            if (!doc.RootElement.TryGetProperty("entries", out var entriesEl) || entriesEl.ValueKind != JsonValueKind.Array)
+            {
+                try { AppLog.Warn($"My playlists: {label} JSON had no 'entries' array (exit 0). url={url}"); } catch { /* ignore */ }
+                return (label, url, Array.Empty<YoutubePlaylistHit>());
+            }
+
+            var hits = new List<YoutubePlaylistHit>(entriesEl.GetArrayLength());
+            foreach (var e in entriesEl.EnumerateArray())
+            {
+                var title = (GetString(e, "title") ?? "").Trim();
+                var webpageUrl = GetString(e, "webpage_url") ?? GetString(e, "url") ?? "";
+                var channel = GetString(e, "channel") ?? GetString(e, "uploader");
+                var count0 = GetInt(e, "playlist_count") ?? GetInt(e, "n_entries");
+
+                if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(webpageUrl))
+                    continue;
+
+                var urlOrId = webpageUrl.Trim();
+                if (!urlOrId.Contains("://", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(urlOrId))
+                    urlOrId = "https://www.youtube.com/playlist?list=" + urlOrId;
+                if (!urlOrId.Contains("list=", StringComparison.OrdinalIgnoreCase) && !urlOrId.Contains("/playlist", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                hits.Add(new YoutubePlaylistHit(title, urlOrId, channel, count0));
+                if (hits.Count >= count)
+                    break;
+            }
+
+            try { AppLog.Info($"My playlists: {label} returned {hits.Count} playlist hits.", AppLogInfoTier.Diagnostic); } catch { /* ignore */ }
+            return (label, url, hits);
+        }
+
+        // 1) Try /feed/library to discover the Playlists tab URL (often more resilient than /feed/playlists).
+        string? playlistsTabUrl = null;
+        try
+        {
+            var libraryArgs = new[]
+            {
+                "--dump-single-json",
+                "--flat-playlist",
+                "https://www.youtube.com/feed/library",
+            };
+
+            var (ec0, stdout0, stderr0) = await RunAsync(libraryArgs, cancellationToken, longRunningLogHint: "YouTube library");
+            if (ec0 != 0)
+                throw new InvalidOperationException($"yt-dlp failed ({ec0}). {stderr0}".Trim());
+
+            using var doc0 = JsonDocument.Parse(stdout0, SafeJson.CreateDocumentOptions());
+            if (doc0.RootElement.TryGetProperty("entries", out var tabs) && tabs.ValueKind == JsonValueKind.Array)
+            {
+                try { AppLog.Info($"My playlists: /feed/library returned {tabs.GetArrayLength()} items.", AppLogInfoTier.Diagnostic); } catch { /* ignore */ }
+                foreach (var t in tabs.EnumerateArray())
+                {
+                    var title = (GetString(t, "title") ?? "").Trim();
+                    if (!string.Equals(title, "Playlists", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    playlistsTabUrl = GetString(t, "url") ?? GetString(t, "webpage_url");
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            try { AppLog.Warn($"My playlists: /feed/library probe failed: {ex.Message}".Trim()); } catch { /* ignore */ }
+            playlistsTabUrl = null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(playlistsTabUrl))
+        {
+            var r = await TryParsePlaylistsFromTabUrlAsync("playlists-tab", playlistsTabUrl!, cancellationToken);
+            if (r.hits.Count > 0)
+                return r.hits;
+        }
+        else
+        {
+            try { AppLog.Warn("My playlists: yt-dlp did not expose a 'Playlists' tab URL from https://www.youtube.com/feed/library (exit 0). Trying /feed/playlists next."); } catch { /* ignore */ }
+        }
+
+        // 2) Fallback: try /feed/playlists directly.
+        var r2 = await TryParsePlaylistsFromTabUrlAsync("feed/playlists", "https://www.youtube.com/feed/playlists", cancellationToken);
+        if (r2.hits.Count > 0)
+        {
+            try { AppLog.Info("My playlists: feed/playlists succeeded.", AppLogInfoTier.Crucial); } catch { /* ignore */ }
+        }
+        return r2.hits;
     }
 
     public async Task<int?> TryGetDurationSecondsAsync(string videoUrl, CancellationToken cancellationToken)
@@ -977,7 +1200,19 @@ public sealed class YtDlpClient
         => el.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 
     private static int? GetInt(JsonElement el, string name)
-        => el.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var v) ? v : null;
+    {
+        if (!el.TryGetProperty(name, out var p))
+            return null;
+        if (p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var v))
+            return v;
+        if (p.ValueKind == JsonValueKind.String)
+        {
+            var s = p.GetString();
+            if (int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var vs))
+                return vs;
+        }
+        return null;
+    }
 
     /// <summary>
     /// Detects whether a flat-playlist entry is known to require authentication.
@@ -995,6 +1230,30 @@ public sealed class YtDlpClient
         if (e.TryGetProperty("is_private", out var priv) && priv.ValueKind == JsonValueKind.True)
             return true;
 
+        return false;
+    }
+
+    private static bool LooksLikeUnavailableFlatTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return false;
+        return title.Contains("private video", StringComparison.OrdinalIgnoreCase)
+               || title.Contains("deleted video", StringComparison.OrdinalIgnoreCase)
+               || title.Contains("[private video]", StringComparison.OrdinalIgnoreCase)
+               || title.Contains("[deleted video]", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsUnavailableEntry(JsonElement e)
+    {
+        try
+        {
+            var availability = GetString(e, "availability");
+            if (string.Equals(availability, "unavailable", StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (string.Equals(availability, "private", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        catch { /* ignore */ }
         return false;
     }
 }

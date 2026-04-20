@@ -146,7 +146,6 @@
                     Grid.Row="0"
                     Grid.Column="0"
                     Content="&#x21BB;"
-                    ToolTip="Refresh"
                     MinWidth="44"
                     Height="30"
                     Margin="0,0,8,0"
@@ -158,7 +157,6 @@
                      VerticalContentAlignment="Center"
                      Height="30"
                      MinWidth="220"
-                     ToolTip="Current playlist source"
                      IsReadOnly="True"
                      IsReadOnlyCaretVisible="False"/>
 
@@ -182,7 +180,7 @@
                         Orientation="Horizontal"
                         Margin="0,8,0,0">
                 <Button x:Name="SearchYoutubeButton"
-                        Content="Search Youtube"
+                        Content="Youtube..."
                         MinWidth="108"
                         Height="30"
                         Margin="0,0,6,0"
@@ -206,7 +204,26 @@
                         Click="LoadFolderButton_OnClick"/>
             </StackPanel>
         </Grid>
-        <StackPanel Grid.Row="1" Margin="12,8,12,0" Orientation="Horizontal"/>
+        <StackPanel Grid.Row="1" Margin="12,8,12,0" Orientation="Horizontal">
+            <TextBlock Text="Sort"
+                       VerticalAlignment="Center"
+                       Margin="0,0,8,0"/>
+            <ComboBox x:Name="SortModeComboBox"
+                      Width="170"
+                      Height="28"
+                      Margin="0,0,8,0"
+                      Background="{DynamicResource {x:Static SystemColors.ControlBrushKey}}"
+                      Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}"
+                      BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}"
+                      VerticalContentAlignment="Center"
+                      SelectionChanged="SortModeComboBox_OnSelectionChanged"/>
+            <ToggleButton x:Name="SortDescToggleButton"
+                          Width="70"
+                          Height="28"
+                          Content="Asc"
+                          Checked="SortDescToggleButton_OnChecked"
+                          Unchecked="SortDescToggleButton_OnUnchecked"/>
+        </StackPanel>
 
         <Grid Grid.Row="2" Margin="12,0,12,8">
             <ListBox x:Name="QueueListBox"
@@ -407,7 +424,6 @@
                      Padding="6,0"
                      VerticalContentAlignment="Center"
                      Margin="0,0,0,0"
-                     ToolTip="Filter the list (live). Space-separated words must all match. Does not change the real playlist or play order."
                      TextChanged="PlaylistFilterTextBox_TextChanged"/>
         </DockPanel>
         </Grid>

@@ -1202,21 +1202,40 @@ public sealed class PlaybackEngine : IDisposable
     /// </summary>
     private Task<YoutubeStreamInput> ResolveYoutubeStreamForPlaybackAsync(PlaylistEntry entry, CancellationToken ct, bool publishStatus = true, PlaybackTimingMark? mark = null)
     {
-        if (_ytDlp.UsesCookiesFromBrowser && IsYoutubeDiskCacheEligible(entry))
+        // Only force cookie/pipe when the playlist metadata explicitly said it needs auth.
+        // For normal public videos, prefer the no-cookie JSON/-g paths so playback doesn't depend on browser cookie state.
+        if (entry.RequiresCookies && _ytDlp.UsesCookiesFromBrowser && IsYoutubeDiskCacheEligible(entry))
         {
             mark?.Step("resolve_youtube_cookie_pipe_fastpath");
             if (publishStatus)
             {
                 // Use COOKIE status so the UI can surface a helpful "requires cookies" hint.
-                var cookieDetail = entry.RequiresCookies
-                    ? "Login-gated video — streaming via browser cookies (slow start)…"
-                    : "Streaming (yt-dlp pipe, browser cookies)…";
+                var cookieDetail = "Login-gated video — streaming via browser cookies (slow start)…";
                 StatusChanged?.Invoke(this, (entry, "COOKIE", cookieDetail));
             }
             return Task.FromResult(new YoutubeStreamInput(entry.WebpageUrl.Trim(), null, DecodeViaYtdlpStdoutPipe: true));
         }
 
-        return ResolveYoutubeStreamInputWithFallbackAsync(entry, ct, publishStatus, mark);
+        return ResolveYoutubeStreamInputWithCookieRetryAsync(entry, ct, publishStatus, mark);
+    }
+
+    private async Task<YoutubeStreamInput> ResolveYoutubeStreamInputWithCookieRetryAsync(PlaylistEntry entry, CancellationToken ct, bool publishStatus = true, PlaybackTimingMark? mark = null)
+    {
+        try
+        {
+            return await ResolveYoutubeStreamInputWithFallbackAsync(entry, ct, publishStatus, mark).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (_ytDlp.UsesCookiesFromBrowser && IsYoutubeDiskCacheEligible(entry))
+        {
+            // Some videos are public but still fail without cookies (region, age, transient googlevideo 403s).
+            // Best-effort: retry via yt-dlp stdout pipe using browser cookies.
+            try { AppLog.Warn($"YouTube: no-cookie resolve failed; retrying with cookies. {ex.Message}".Trim()); } catch { /* ignore */ }
+            if (publishStatus)
+            {
+                StatusChanged?.Invoke(this, (entry, "COOKIE", "Retrying with browser cookies…"));
+            }
+            return new YoutubeStreamInput(entry.WebpageUrl.Trim(), null, DecodeViaYtdlpStdoutPipe: true);
+        }
     }
 
     /// <summary>Resolve a direct media URL for FFmpeg (no browser cookies in JSON <c>http_headers</c>).</summary>

@@ -36,6 +36,7 @@
                     Stretch="Fill"
                     AlignmentX="Center"
                     AlignmentY="Center"/>
+
         <ImageBrush x:Key="App.Brush.WindowBgImage.Playlist"
                     ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"
                     Stretch="Fill"
@@ -161,6 +162,7 @@
         <Style TargetType="{x:Type TextBlock}">
             <Setter Property="FontFamily" Value="{StaticResource App.MonoFont}"/>
             <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+            <Setter Property="ToolTipService.IsEnabled" Value="False"/>
         </Style>
         <Style TargetType="{x:Type Label}">
             <Setter Property="FontFamily" Value="{StaticResource App.MonoFont}"/>
@@ -170,6 +172,7 @@
              Window is explicitly overridden to stay fully opaque. -->
         <Style TargetType="{x:Type FrameworkElement}">
             <Setter Property="Opacity" Value="1.0"/>
+            <Setter Property="ToolTipService.IsEnabled" Value="False"/>
         </Style>
         <!-- Replaces WPF default dotted blue focus with theme SelectionBorder -->
         <Style x:Key="App.FocusVisual.Theme">
@@ -193,6 +196,7 @@
             <Setter Property="FontFamily" Value="{StaticResource App.MonoFont}"/>
             <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
             <Setter Property="FocusVisualStyle" Value="{StaticResource App.FocusVisual.Theme}"/>
+            <Setter Property="ToolTipService.IsEnabled" Value="False"/>
         </Style>
         <!-- Transparent window + opaque inner Border matches rounded chrome (opaque HWND clips corners when AllowsTransparency is false). -->
         <Style TargetType="{x:Type Window}">
@@ -778,9 +782,13 @@
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="6,4"/>
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <!-- Global rule: TextBoxes must not resize horizontally based on content. -->
+            <Setter Property="MinWidth" Value="360"/>
+            <Setter Property="MaxWidth" Value="360"/>
             <!-- Vertical Disabled: no vertical scroll / wheel consumption (avoids fighting parent ScrollViewers). Hidden still allows wheel. -->
             <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
-            <Setter Property="HorizontalScrollBarVisibility" Value="Hidden"/>
+            <!-- Horizontal Disabled: do not show scrollbar, and avoid auto-scrolling/measurement pressure from long single-line text. -->
+            <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="{x:Type TextBox}">

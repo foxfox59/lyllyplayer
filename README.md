@@ -5,14 +5,26 @@
 
 **[See it in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**  
 **[Using the Theme Designer (YouTube link)](https://www.youtube.com/watch?v=Z1lniBzXm9Q)**
-  
----  
-  
+
+---
+
 ### What's new, pussycat?
 
+- 1.3.0: playlist and search improvements
+  - Ability to import YT playlists from your account (!!)
+    - Best-effort using yt-dlp and browser cookie. This might not work for you and/or break at any given time. I'm intentionally trying to avoid having to use API tokens as I want this to be as turnkey as possible.
+  - YouTube functionality moved under new window (**Youtube...**) in Playlist, with tabs for:
+    - Search videos
+    - Search playlists (best-effort item counts)
+    - Import playlist (replace/append + optional remove duplicates)
+    - My playlists (best-effort; uses yt-dlp + browser cookies when enabled)
+  - Playlist sorting (real sort affecting playback order)
+  - Appended/compound playlists track per-item origin (name + source) and persist it in saved playlist JSON
+  - Refresh is disabled for compound playlists (can’t reliably refresh multiple sources)
+  - When playlist would appear off screen when toggled, try to show it in a visible position instead
 - 1.2.1: fixes a rare issue that only happened when using DisplayFusion (apps were fighting for window focus). 
 - 1.2.0: introduces the **ultra-compact mode**, a simple **theme designer** and slight transparency fixes for the foreground + title text
-- 1.1.0: initial public release with no major bugs (fingers crossed)  
+- 1.1.0: initial public release with no major bugs (fingers crossed)
 
 ---
 
@@ -72,8 +84,7 @@ Ideas for later — **not** commitments and nothing to depend on for now:
 
 - Optimize memory usage (or change whole implementation away from WPF)
 - Improve window snapping (currently occasionally feels jittery)
-- Playlist enhancements (sorting, queue, adding files/URLs to existing playlists, etc)
-- Improve search (add ability to search for playlists in addition to individual songs/videos)
+- Playlist enhancements (queue UX, adding items/URLs to existing playlists, etc)
 - Lyrics display? Not a very high priority, but it might be amusing
 - Linux builds — desktop player on Linux (would require significant changes)
 - Android release — mobile variant (requested feature by testers, would require very significant changes)

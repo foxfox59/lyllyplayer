@@ -34,6 +34,10 @@ public sealed record AppSettings(
     bool? PlaylistWindowOpen,
     /// <summary>Last playlist list filter query (view-only); persisted across playlist window close/reopen.</summary>
     string? PlaylistWindowFilter,
+    /// <summary>Playlist sort mode (real sort affecting play order): None | NameOrTitle | ChannelOrPath | Duration.</summary>
+    string? PlaylistWindowSortMode,
+    /// <summary>Playlist sort direction: Asc | Desc.</summary>
+    string? PlaylistWindowSortDirection,
     double? OptionsWindowLeft,
     double? OptionsWindowTop,
     double? OptionsWindowWidth,
@@ -83,6 +87,8 @@ public sealed record AppSettings(
     string? YtdlpEjsComponentSource,
     bool? YoutubeCookiesFromBrowserEnabled,
     string? YoutubeCookiesFromBrowser,
+    /// <summary>Last used YouTube playlist import behavior: true = Append, false = Replace.</summary>
+    bool? YoutubeImportAppend,
     string? AudioQuality,
     string? AudioOutputDevice,
     /// <summary>ErrorsAndWarnings | Basic | Verbose — controls INFO lines in app.log.</summary>

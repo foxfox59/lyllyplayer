@@ -136,6 +136,8 @@
                     </StackPanel>
 
                     <TextBox x:Name="LogTextBox"
+                             MinWidth="0"
+                             MaxWidth="100000"
                              IsReadOnly="True"
                              TextWrapping="NoWrap"
                              VerticalScrollBarVisibility="Auto"

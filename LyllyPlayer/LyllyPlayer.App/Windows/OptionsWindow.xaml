@@ -366,11 +366,9 @@
                                               Margin="0,0,8,0"
                                               SelectionChanged="BackgroundImageStretchComboBox_OnSelectionChanged">
                                         <ComboBoxItem Content="Stretch" Tag="Stretch"/>
-                                        <ComboBoxItem Content="Best fit" Tag="BestFit" IsSelected="True"
-                                                      ToolTip="Keeps aspect ratio and covers the window; may crop edges (no empty side or top/bottom bars)."/>
+                                        <ComboBoxItem Content="Best fit" Tag="BestFit" IsSelected="True"/>
                                         <ComboBoxItem Content="Tile" Tag="Tile"/>
-                                        <ComboBoxItem Content="User defined" Tag="UserDefined"
-                                                      ToolTip="Pick the exact image area each window shows (Designer…)."/>
+                                        <ComboBoxItem Content="User defined" Tag="UserDefined"/>
                                     </ComboBox>
                                     <Button Grid.Column="1"
                                             x:Name="BackgroundDesignerButton"
@@ -411,8 +409,7 @@
                                             CornerRadius="3"
                                             BorderThickness="1"
                                             BorderBrush="{DynamicResource App.Theme.Border}"
-                                            Background="Transparent"
-                                            ToolTip="Current custom color (Theme → Custom + pick…)"/>
+                                            Background="Transparent"/>
                                     <Button Grid.Column="2"
                                             x:Name="BackgroundColorPickButton"
                                             Content="pick..."
@@ -429,8 +426,7 @@
                                     <TextBlock DockPanel.Dock="Left"
                                                Text="Overall UI opacity:"
                                                VerticalAlignment="Center"
-                                               Margin="0,0,8,0"
-                                               ToolTip="Controls transparency for the main window backdrop and themed surfaces (cards, borders, title bar tint), not only the background image."/>
+                                               Margin="0,0,8,0"/>
                                     <TextBlock DockPanel.Dock="Right"
                                                x:Name="BackgroundAlphaValueTextBlock"
                                                VerticalAlignment="Center"
@@ -475,8 +471,7 @@
                                           Height="30"
                                           Margin="0,0,0,10"
                                           SelectionChanged="ThemeModeComboBox_OnSelectionChanged">
-                                    <ComboBoxItem Content="Auto" IsSelected="True"
-                                                  ToolTip="If a background image is loaded, light vs dark follows its average brightness (after dropping the brightest highlights). Otherwise follows Windows Settings → Personalization → Colors → “Choose your mode” for apps (registry AppsUseLightTheme)."/>
+                                    <ComboBoxItem Content="Auto" IsSelected="True"/>
                                     <ComboBoxItem Content="Light"/>
                                     <ComboBoxItem Content="Dark"/>
                                 </ComboBox>
@@ -677,7 +672,6 @@
                                              MinHeight="28"
                                              VerticalContentAlignment="Center"
                                              Margin="0,0,0,4"
-                                             ToolTip="Example: chrome, edge, firefox, or chrome:ProfileName"
                                              TextChanged="YoutubeCookiesTextBox_OnTextChanged"/>
                                 </StackPanel>
 
@@ -705,21 +699,18 @@
                                           Content="Also keep Playlist window on top (when TOP is enabled)"
                                           Margin="0,0,0,8"
                                           Foreground="{DynamicResource App.Theme.Foreground}"
-                                          ToolTip="When TOP is enabled on the main window, keep Playlist window topmost as well."
                                           Checked="AlwaysOnTopPlaylistWindowCheckBox_OnChecked"
                                           Unchecked="AlwaysOnTopPlaylistWindowCheckBox_OnUnchecked"/>
                                 <CheckBox x:Name="AlwaysOnTopOptionsWindowCheckBox"
                                           Content="Also keep Options window on top (when TOP is enabled)"
                                           Margin="0,0,0,8"
                                           Foreground="{DynamicResource App.Theme.Foreground}"
-                                          ToolTip="When TOP is enabled on the main window, keep Options window topmost as well."
                                           Checked="AlwaysOnTopOptionsWindowCheckBox_OnChecked"
                                           Unchecked="AlwaysOnTopOptionsWindowCheckBox_OnUnchecked"/>
                                 <CheckBox x:Name="CompactHidesAuxWindowsCheckBox"
                                           Content="Compact mode hides Playlist and Options"
                                           Margin="0,0,0,8"
                                           Foreground="{DynamicResource App.Theme.Foreground}"
-                                          ToolTip="When you switch to compact mode, close Playlist and Options windows (restored when leaving compact)."
                                           Checked="CompactHidesAuxWindowsCheckBox_OnChecked"
                                           Unchecked="CompactHidesAuxWindowsCheckBox_OnUnchecked"/>
 
@@ -804,7 +795,7 @@
                                              Width="72"
                                              Height="30"
                                              VerticalContentAlignment="Center"
-                                             ToolTip="When the log file would exceed this size, older lines are removed (recent entries kept). Range 1–200. Default 50."/>
+                                             />
                                 </StackPanel>
                                 <Button x:Name="OpenLogButton"
                                         Content="Logs&#x2026;"

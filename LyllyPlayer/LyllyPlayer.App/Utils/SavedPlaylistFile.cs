@@ -91,6 +91,18 @@ public static class SavedPlaylistFile
 
     public static SavedPlaylist FromEntries(string name, string sourceType, string source, IReadOnlyList<PlaylistEntry> entries)
     {
+        return FromEntries(name, sourceType, source, entries, originInfoByVideoId: null);
+    }
+
+    public static SavedPlaylist FromEntries(
+        string name,
+        string sourceType,
+        string source,
+        IReadOnlyList<PlaylistEntry> entries,
+        IReadOnlyDictionary<string, SavedPlaylistOrigin>? originInfoByVideoId)
+    {
+        name = string.IsNullOrWhiteSpace(name) ? "Playlist" : name.Trim();
+        source = string.IsNullOrWhiteSpace(source) ? "" : source.Trim();
         var id = Guid.NewGuid().ToString("N");
         var created = DateTime.UtcNow;
         var list = new List<SavedPlaylistEntry>();
@@ -108,13 +120,44 @@ public static class SavedPlaylistFile
             ));
         }
 
+        IReadOnlyDictionary<string, SavedPlaylistOrigin>? originInfos = null;
+        try
+        {
+            if (originInfoByVideoId is not null && originInfoByVideoId.Count > 0)
+            {
+                // Only persist origins for entries present in the file, and only when it differs from base.
+                var baseName = (name ?? "").Trim();
+                var baseSource = (source ?? "").Trim();
+                var dict = new Dictionary<string, SavedPlaylistOrigin>(StringComparer.OrdinalIgnoreCase);
+                foreach (var e in list)
+                {
+                    if (originInfoByVideoId.TryGetValue(e.VideoId, out var o) && o is not null)
+                    {
+                        var label = (o.Label ?? "").Trim();
+                        var src = (o.Source ?? "").Trim();
+                        var labelDiffers = !string.IsNullOrWhiteSpace(label) && !string.Equals(label, baseName, StringComparison.OrdinalIgnoreCase);
+                        var sourceDiffers = !string.IsNullOrWhiteSpace(src) && !string.Equals(src, baseSource, StringComparison.OrdinalIgnoreCase);
+                        if (labelDiffers || sourceDiffers)
+                            dict[e.VideoId] = new SavedPlaylistOrigin(label, src);
+                    }
+                }
+                originInfos = dict.Count > 0 ? dict : null;
+            }
+        }
+        catch
+        {
+            originInfos = null;
+        }
+
         return new SavedPlaylist(
             Id: id,
-            Name: name,
+            Name: name ?? "Playlist",
             CreatedUtc: created,
             SourceType: sourceType,
-            Source: source,
-            Entries: list
+            Source: source ?? "",
+            Entries: list,
+            OriginByVideoId: null,
+            OriginInfoByVideoId: originInfos
         );
     }
 

@@ -353,6 +353,7 @@ public partial class MainWindow : Window
     private string _ytdlpEjsComponentSource = "github";
     private bool _youtubeCookiesFromBrowserEnabled;
     private string _youtubeCookiesFromBrowser = "";
+    private bool _youtubeImportAppend;
     private readonly AppSettings _startupSettings;
     private List<PlaylistEntry> _currentEntries = new();
     private List<PlaylistEntry> _originalEntries = new();
@@ -374,6 +375,10 @@ public partial class MainWindow : Window
     private bool _shuffleEnabled;
     private bool _startupResumeAttempted;
     private bool _hasLoadedPlaylist;
+    private bool _playlistIsCompound;
+    private sealed record PlaylistOriginInfo(string Label, string Source);
+    private readonly Dictionary<string, PlaylistOriginInfo> _playlistOriginByVideoId = new(StringComparer.OrdinalIgnoreCase);
+    private PlaylistOriginInfo? _basePlaylistOrigin;
     private PlaylistRestoreSnapshot? _cancelPlaylistSnapshot;
     private string? _loadedPlaylistId;
     private bool _globalMediaKeysEnabled;
@@ -495,6 +500,9 @@ public partial class MainWindow : Window
 
     private bool _suppressShuffleToggle;
     private bool _suppressCompactShuffleToggle;
+    private Rect? _mainWindowCompactBoundsBeforeExpand;
+    private Rect? _mainWindowExpandedBoundsAfterExpand;
+    private bool _mainWindowExpandedMovedSinceExpand;
     private bool _compactUserOpenedPlaylistWindow;
 
     private enum RepeatMode { None, Single, Playlist }
@@ -641,6 +649,8 @@ public partial class MainWindow : Window
     private double _windowBorderCustomPx = 2;
     private double UiScale => Math.Clamp(_uiScalePercent / 100.0, 0.5, 2.0);
 
+    private int _statusToastRequestId;
+
     public MainWindow()
     {
         _shellStyleHook = MainWindowShellStyleHwndHook;
@@ -663,6 +673,7 @@ public partial class MainWindow : Window
             : _startupSettings.YtdlpEjsComponentSource.Trim();
         _youtubeCookiesFromBrowserEnabled = _startupSettings.YoutubeCookiesFromBrowserEnabled ?? false;
         _youtubeCookiesFromBrowser = _startupSettings.YoutubeCookiesFromBrowser ?? "";
+        _youtubeImportAppend = _startupSettings.YoutubeImportAppend ?? false;
 
         var yInit = ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp");
         _ytDlp = new YtDlpClient(yInit.EffectiveFileName);
@@ -791,6 +802,7 @@ public partial class MainWindow : Window
                 _nowPlayingEntry = entry;
                 _nowPlayingStatus = entry is null ? "STOPPED" : "FETCHING";
                 UpdateNowPlayingText();
+                UpdatePlaylistTitleDisplayForNowPlaying();
                 UpdateNowPlayingFlag(entry);
                 if (!ShouldSuppressAutoScroll(entry))
                     SelectAndScrollToNowPlaying(entry);
@@ -2104,8 +2116,101 @@ public partial class MainWindow : Window
 
     private void ToggleMainWindowCompactMode()
     {
+        var wasCompact = _mainWindowCompact;
+        Rect pre;
+        try { pre = GetOuterBounds(this); }
+        catch { pre = new Rect(Left, Top, Width, Height); }
+
         _mainWindowCompact = !_mainWindowCompact;
         ApplyMainWindowCompactMode();
+
+        // Window height is SizeToContent="Height" so it changes after layout; adjust position after the
+        // new height is realized.
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                UpdateLayout();
+
+                var works = GetAllWorkAreasDips(this);
+                Rect PickWorkArea(Rect bounds)
+                {
+                    var cx = bounds.Left + bounds.Width / 2.0;
+                    var cy = bounds.Top + bounds.Height / 2.0;
+                    foreach (var w in works)
+                        if (w.Contains(new System.Windows.Point(cx, cy)))
+                            return w;
+                    // Fallback: nearest by center distance.
+                    return works
+                        .OrderBy(w =>
+                        {
+                            var wx = w.Left + w.Width / 2.0;
+                            var wy = w.Top + w.Height / 2.0;
+                            var dx = wx - cx;
+                            var dy = wy - cy;
+                            return dx * dx + dy * dy;
+                        })
+                        .FirstOrDefault();
+                }
+
+                var postW = ActualWidth > 0 ? ActualWidth : Width;
+                var postH = ActualHeight > 0 ? ActualHeight : Height;
+                if (postW <= 1) postW = Width;
+                if (postH <= 1) postH = Height;
+
+                if (wasCompact && !_mainWindowCompact)
+                {
+                    // Leaving compact: if the expanded height would push the window off-screen, expand upward
+                    // (keep the bottom edge stable as much as possible). Default behavior is to expand downward.
+                    _mainWindowCompactBoundsBeforeExpand = pre;
+                    _mainWindowExpandedBoundsAfterExpand = null;
+                    _mainWindowExpandedMovedSinceExpand = false;
+
+                    var work = PickWorkArea(pre);
+                    // Default: keep the same Top, so the window grows downward.
+                    var desiredTopDown = pre.Top;
+                    var desiredBottomDown = desiredTopDown + postH;
+
+                    double newTop;
+                    if (desiredBottomDown <= work.Bottom + 1e-6)
+                    {
+                        // Fits: expand downwards.
+                        newTop = Math.Clamp(desiredTopDown, work.Top, work.Bottom - postH);
+                    }
+                    else
+                    {
+                        // Would go off-screen: expand upward by anchoring the bottom edge.
+                        var anchorBottom = Math.Min(pre.Bottom, work.Bottom);
+                        var desiredTopUp = anchorBottom - postH;
+                        newTop = Math.Clamp(desiredTopUp, work.Top, work.Bottom - postH);
+                    }
+                    var newLeft = Math.Clamp(pre.Left, work.Left, work.Right - postW);
+                    Top = SnapRound(newTop);
+                    Left = SnapRound(newLeft);
+
+                    try { _mainWindowExpandedBoundsAfterExpand = GetOuterBounds(this); } catch { /* ignore */ }
+                }
+                else if (!wasCompact && _mainWindowCompact)
+                {
+                    // Returning to compact: restore the original compact position only if the user did not move
+                    // the expanded window since the last expand.
+                    var canRestore = !_mainWindowExpandedMovedSinceExpand && _mainWindowCompactBoundsBeforeExpand is { } compactBounds;
+                    if (canRestore)
+                    {
+                        var work = PickWorkArea(compactBounds);
+                        var newTop = Math.Clamp(compactBounds.Top, work.Top, work.Bottom - postH);
+                        var newLeft = Math.Clamp(compactBounds.Left, work.Left, work.Right - postW);
+                        Top = SnapRound(newTop);
+                        Left = SnapRound(newLeft);
+                    }
+
+                    _mainWindowExpandedBoundsAfterExpand = null;
+                    _mainWindowExpandedMovedSinceExpand = false;
+                }
+            }
+            catch { /* ignore */ }
+        }), DispatcherPriority.Loaded);
+
         RequestPersistSnapshot();
     }
 
@@ -2828,87 +2933,6 @@ public partial class MainWindow : Window
 
                     await LoadPlaylistFromSourceAsync(forceFetch: false, isStartupAutoLoad: false);
                 },
-                searchYoutubeAsync: async (query, count, minLenSeconds, ct) =>
-                {
-                    // True only after at least one yt-dlp batch produced non-empty entries and we applied it (not the pre-search playlist).
-                    var loadedAnySearchResults = false;
-                    try
-                    {
-                        _lastPlaylistSourceType = PlaylistSourceType.SearchYoutubeMusic;
-                        _lastLocalPlaylistPath = null;
-                        _playlistSourceText = $"Search: {query}";
-
-                        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                        linked.CancelAfter(TimeSpan.FromMinutes(3));
-                        var token = linked.Token;
-
-                        // Staged ytsearch fetches so [Stop] can keep the last completed batch (folder overlay pattern).
-                        var maxFetch = Math.Clamp((int)Math.Round(count * 2.0), 20, 200);
-                        const int step = 20;
-                        var targets = new List<int>();
-                        for (var t = step; t < maxFetch; t += step)
-                            targets.Add(t);
-                        if (targets.Count == 0 || targets[^1] != maxFetch)
-                            targets.Add(maxFetch);
-
-                        var batchCount = targets.Count;
-                        for (var ti = 0; ti < targets.Count; ti++)
-                        {
-                            token.ThrowIfCancellationRequested();
-                            var flat = targets[ti];
-                            var res = await _ytDlp.ResolveYoutubeMusicSearchAsync(query, count, minLenSeconds, flat, token).ConfigureAwait(true);
-                            var entries = PlaylistDeduper.DedupeForSearch(res.Entries);
-                            token.ThrowIfCancellationRequested();
-                            var isLastSearchBatch = ti == targets.Count - 1;
-                            await LoadPlaylistFromEntriesAsync(
-                                entries,
-                                title: res.PlaylistTitle ?? $"Search: {query}",
-                                sourceKey: _playlistSourceText ?? "",
-                                isStartupAutoLoad: false,
-                                token,
-                                deferNowPlayingChanged: !isLastSearchBatch).ConfigureAwait(true);
-                            if (entries.Count > 0)
-                                loadedAnySearchResults = true;
-                            if (batchCount > 0)
-                            {
-                                try
-                                {
-                                    _playlistWindow?.ReportBusyOverlayDeterminate((ti + 1) / (double)batchCount);
-                                }
-                                catch { /* ignore */ }
-                            }
-                        }
-
-                        CommitCancelPlaylistSnapshot();
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        var kind = 0;
-                        try { kind = _playlistWindow?.TakeSearchDismissKind() ?? 0; } catch { /* ignore */ }
-                        if (!loadedAnySearchResults)
-                        {
-                            try { RollbackCancelPlaylistSnapshot(); } catch { /* ignore */ }
-                        }
-                        else if (kind == 2 || (_keepIncompletePlaylistOnCancel && (kind == 1 || kind == 0)))
-                        {
-                            CommitCancelPlaylistSnapshot();
-                            if (kind == 2)
-                                try { SetStatusMessage("INFO", $"Search stopped; kept {_originalEntries.Count} tracks."); } catch { /* ignore */ }
-                            else
-                                try { SetStatusMessage("INFO", $"Search cancelled; kept {_originalEntries.Count} tracks."); } catch { /* ignore */ }
-                        }
-                        else
-                        {
-                            try { RollbackCancelPlaylistSnapshot(); } catch { /* ignore */ }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        try { RollbackCancelPlaylistSnapshot(); } catch { /* ignore */ }
-                        AppLog.Exception(ex, "Search failed");
-                        try { SetStatusMessage("ERROR", $"Search failed. {ex.Message}".Trim()); } catch { /* ignore */ }
-                    }
-                },
                 getSearchDefaults: () => (_searchDefaultCount, _searchMinLengthSeconds),
                 setSearchDefaults: (count, minLenSeconds) =>
                 {
@@ -2916,6 +2940,9 @@ public partial class MainWindow : Window
                     _searchMinLengthSeconds = Math.Clamp(minLenSeconds, 0, 3600);
                     RequestPersistSnapshot();
                 },
+                openYoutubeModalAsync: async (owner, ct) => await OpenYoutubeModalAsync(owner, ct).ConfigureAwait(true),
+                applySortAsync: async (spec, ct) => await ApplyPlaylistSortAsync(spec, ct).ConfigureAwait(true),
+                getIsYoutubeSource: () => IsYoutubeLikeSource(_lastPlaylistSourceType),
                 savePlaylistToFileAsync: async (path, displayName) =>
                 {
                     try
@@ -2923,9 +2950,17 @@ public partial class MainWindow : Window
                         var name = string.IsNullOrWhiteSpace(displayName) ? (_playlistTitle ?? "Playlist") : displayName.Trim();
                         var srcType = _lastPlaylistSourceType.ToString();
                         var src = _playlistSourceText ?? "";
-                        var pl = SavedPlaylistFile.FromEntries(name, srcType, src, _originalEntries);
+                        var pl = SavedPlaylistFile.FromEntries(
+                            name,
+                            srcType,
+                            src,
+                            _originalEntries,
+                            originInfoByVideoId: _playlistOriginByVideoId.ToDictionary(
+                                k => k.Key,
+                                v => new LyllyPlayer.Models.SavedPlaylistOrigin(v.Value.Label, v.Value.Source),
+                                StringComparer.OrdinalIgnoreCase));
                         SavedPlaylistFile.Save(path, pl);
-                        SetStatusMessage("INFO", $"Saved playlist: {Path.GetFileName(path)}");
+                        ShowInfoToast($"Saved playlist: {Path.GetFileName(path)}");
                     }
                     catch (Exception ex)
                     {
@@ -2968,6 +3003,9 @@ public partial class MainWindow : Window
                         _playlistWindow?.SetSourceText(path);
 
                         await LoadPlaylistFromEntriesAsync(result.Entries, title: pl.Name, sourceKey: path, isStartupAutoLoad: false);
+                        ApplySavedPlaylistOriginsIfAny(pl, result.Entries);
+                        UpdateRefreshEnabled();
+                        UpdatePlaylistTitleDisplayForNowPlaying();
                     }
                     catch (Exception ex)
                     {
@@ -3061,6 +3099,19 @@ public partial class MainWindow : Window
             };
             try { _playlistWindow.Title = $"{GetAppTitleBase()} — Playlist"; } catch { /* ignore */ }
 
+            try
+            {
+                var sortModeRaw = (latestSettings.PlaylistWindowSortMode ?? "None").Trim();
+                var sortDirRaw = (latestSettings.PlaylistWindowSortDirection ?? "Asc").Trim();
+                _ = Enum.TryParse<PlaylistSortMode>(sortModeRaw, ignoreCase: true, out var sm);
+                _ = Enum.TryParse<PlaylistSortDirection>(sortDirRaw, ignoreCase: true, out var sd);
+                var spec = new PlaylistSortSpec(sm, sd);
+                _playlistWindow.SetSortSpec(spec);
+                if (spec.Mode != PlaylistSortMode.None && _originalEntries.Count > 1)
+                    _ = ApplyPlaylistSortAsync(spec, CancellationToken.None);
+            }
+            catch { /* ignore */ }
+
             // Center on now-playing during Loaded (sync + first center pass on UI thread) so we do not paint the
             // top of the list for a frame before ContextIdle scroll. Queue list opacity is suppressed until then.
             _playlistWindow.Loaded += (_, _) =>
@@ -3106,7 +3157,7 @@ public partial class MainWindow : Window
                 _compactUserOpenedPlaylistWindow = false;
             };
             _playlistWindow.SetItemsSource(_queueItems);
-            _playlistWindow.SetRefreshEnabled(_hasLoadedPlaylist);
+            UpdateRefreshEnabled();
             try { _playlistWindow.ApplyPersistedPlaylistFilter(latestSettings.PlaylistWindowFilter); } catch { /* ignore */ }
             ApplyPlaylistWindowSettings(latestSettings, _playlistWindow);
             NormalizePlaylistWindowOuterForUiScale(latestSettings, _playlistWindow);
@@ -3208,6 +3259,265 @@ public partial class MainWindow : Window
         {
             try { _playlistWindow?.EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
         }
+    }
+
+    private static bool IsYoutubeLikeSource(PlaylistSourceType t)
+        => t == PlaylistSourceType.YouTube || t == PlaylistSourceType.SearchYoutubeMusic;
+
+    private Task OpenYoutubeModalAsync(Window owner, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var dlg = new YoutubeModal(
+            searchVideosAsync: async (query, count, minLen, ct) => await SearchYoutubeVideosAsync(query, count, minLen, ct).ConfigureAwait(true),
+            searchPlaylistsAsync: async (query, count, ct) => await _ytDlp.ResolveYoutubePlaylistSearchAsync(query, count, ct).ConfigureAwait(true),
+            listAccountPlaylistsAsync: async (count, ct) => await _ytDlp.ResolveAccountPlaylistsBestEffortAsync(count, ct).ConfigureAwait(true),
+            importPlaylistAsync: async (urlOrId, append, dedupe, ct) => await ImportYoutubePlaylistAsync(urlOrId, append, dedupe, ct).ConfigureAwait(true),
+            tryGetPlaylistItemCountAsync: async (urlOrId, ct) => await _ytDlp.TryGetPlaylistItemCountBestEffortAsync(urlOrId, ct).ConfigureAwait(true),
+            searchDefaults: (_searchDefaultCount, _searchMinLengthSeconds),
+            importAppendDefault: _youtubeImportAppend,
+            setImportAppendDefault: v =>
+            {
+                try
+                {
+                    _youtubeImportAppend = v;
+                    SaveSettingsSnapshot();
+                }
+                catch { /* ignore */ }
+            }
+        )
+        {
+            Owner = owner,
+        };
+
+        try { dlg.Title = $"{GetAppTitleBase()} — YouTube"; } catch { /* ignore */ }
+        // Modeless: allow interacting with Playlist/Main while the YouTube modal is open.
+        dlg.ShowActivated = true;
+        dlg.Show();
+        return Task.CompletedTask;
+    }
+
+    private async Task SearchYoutubeVideosAsync(string query, int count, int minLenSeconds, CancellationToken cancellationToken)
+    {
+        var q = (query ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(q))
+            return;
+
+        count = Math.Clamp(count <= 0 ? 50 : count, 1, 200);
+        minLenSeconds = Math.Clamp(minLenSeconds, 0, 3600);
+
+        // Replace current playlist with search results (same behavior as the old Search Youtube button).
+        try { BeginCancelPlaylistSnapshot(); } catch { /* ignore */ }
+        try
+        {
+            _lastPlaylistSourceType = PlaylistSourceType.SearchYoutubeMusic;
+            _lastLocalPlaylistPath = null;
+            _playlistSourceText = $"Search: {q}";
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var fetch = Math.Clamp((int)Math.Round(count * 2.0), 20, 200);
+            var res = await _ytDlp.ResolveYoutubeMusicSearchAsync(q, count, minLenSeconds, fetch, cancellationToken).ConfigureAwait(true);
+            var entries = PlaylistDeduper.DedupeForSearch(res.Entries);
+            await LoadPlaylistFromEntriesAsync(
+                entries,
+                title: res.PlaylistTitle ?? $"Search: {q}",
+                sourceKey: _playlistSourceText ?? "",
+                isStartupAutoLoad: false,
+                cancellationToken: cancellationToken).ConfigureAwait(true);
+            CommitCancelPlaylistSnapshot();
+        }
+        catch
+        {
+            try { RollbackCancelPlaylistSnapshot(); } catch { /* ignore */ }
+            throw;
+        }
+    }
+
+    private async Task ImportYoutubePlaylistAsync(string playlistUrlOrId, bool append, bool dedupe, CancellationToken cancellationToken)
+    {
+        var src = (playlistUrlOrId ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(src))
+            return;
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var res = await _ytDlp.ResolvePlaylistEntriesAsync(src, cancellationToken).ConfigureAwait(true);
+        var plName = string.IsNullOrWhiteSpace(res.PlaylistTitle) ? null : res.PlaylistTitle!.Trim();
+        var imported = res.Entries?.ToList() ?? new List<PlaylistEntry>();
+        if (imported.Count == 0)
+        {
+            SetStatusMessage("WARN", $"No playlist entries found{(string.IsNullOrWhiteSpace(plName) ? "" : $" for \"{plName}\"")}.");
+            return;
+        }
+
+        var curId = _engine.GetCurrent()?.VideoId;
+
+        List<PlaylistEntry> merged;
+        if (!append)
+        {
+            merged = imported;
+            _lastPlaylistSourceType = PlaylistSourceType.YouTube;
+            _lastLocalPlaylistPath = null;
+            _playlistSourceText = src;
+            _playlistIsCompound = false;
+            try { SetPlaylistTitle(plName ?? src); } catch { /* ignore */ }
+            try { SetStatusMessage("INFO", $"Imported playlist: {(string.IsNullOrWhiteSpace(plName) ? src : $"\"{plName}\"")} ({imported.Count} items)."); } catch { /* ignore */ }
+            RebuildPerItemPlaylistOriginsForCurrentPlaylist(plName ?? src, src);
+        }
+        else
+        {
+            _playlistIsCompound = true;
+            merged = _originalEntries.ToList();
+            var beforeCount = merged.Count;
+            var appendLabel = string.IsNullOrWhiteSpace(plName) ? src : plName;
+            if (dedupe)
+            {
+                var seen = new HashSet<string>(merged.Select(e => e.VideoId), StringComparer.OrdinalIgnoreCase);
+                foreach (var e in imported)
+                    if (seen.Add(e.VideoId))
+                        merged.Add(e);
+            }
+            else
+            {
+                merged.AddRange(imported);
+            }
+            try
+            {
+                foreach (var e in imported)
+                    _playlistOriginByVideoId[e.VideoId] = new PlaylistOriginInfo(appendLabel, src);
+            }
+            catch { /* ignore */ }
+            try
+            {
+                var added = Math.Max(0, merged.Count - beforeCount);
+                var namePart = string.IsNullOrWhiteSpace(plName) ? src : $"\"{plName}\"";
+                SetStatusMessage("INFO", $"Appended playlist: {namePart} (+{added} items).");
+            }
+            catch { /* ignore */ }
+        }
+
+        // Apply list without stopping playback; preserve current track if possible.
+        _originalEntries = merged;
+        _currentEntries = BuildPlayOrder(_originalEntries, shuffle: _shuffleEnabled).ToList();
+        var startIndex = FindIndexByVideoId(_currentEntries, curId);
+        _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : (startIndex >= 0 ? startIndex : 0), raiseNowPlayingChanged: false);
+
+        var displayIndex = GetOriginalIndexByVideoId(curId) ?? 0;
+        SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
+        UpdateRefreshEnabled();
+        MarkLastPlaylistSnapshotDirty();
+        RequestPersistSnapshot();
+        UpdatePlaylistTitleDisplayForNowPlaying();
+    }
+
+    private Task ApplyPlaylistSortAsync(PlaylistSortSpec spec, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var mode = spec.Mode;
+        if (mode == PlaylistSortMode.None || _originalEntries.Count <= 1)
+            return Task.CompletedTask;
+
+        var isYoutube = IsYoutubeLikeSource(_lastPlaylistSourceType);
+        var curId = _engine.GetCurrent()?.VideoId;
+
+        string LocalPathOrUrl(PlaylistEntry e)
+        {
+            var s = (e.WebpageUrl ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(s))
+                return "";
+            try
+            {
+                if (Uri.TryCreate(s, UriKind.Absolute, out var u) && u.IsFile)
+                    return u.LocalPath ?? "";
+            }
+            catch { /* ignore */ }
+            return s;
+        }
+
+        string LocalFileNameFallback(PlaylistEntry e)
+        {
+            try
+            {
+                var p = LocalPathOrUrl(e);
+                if (string.IsNullOrWhiteSpace(p))
+                    return "";
+                return Path.GetFileName(p) ?? "";
+            }
+            catch { return ""; }
+        }
+
+        string NameKey(PlaylistEntry e)
+        {
+            if (isYoutube)
+                return (e.Title ?? "").Trim();
+            var t = (e.Title ?? "").Trim();
+            if (!string.IsNullOrWhiteSpace(t) && !string.Equals(t, "(untitled)", StringComparison.OrdinalIgnoreCase))
+                return t;
+            return LocalFileNameFallback(e);
+        }
+
+        string ChannelOrPathKey(PlaylistEntry e)
+        {
+            if (isYoutube)
+                return (e.Channel ?? "").Trim();
+            return LocalPathOrUrl(e);
+        }
+
+        IOrderedEnumerable<PlaylistEntry> ordered;
+        if (spec.Direction == PlaylistSortDirection.Desc)
+        {
+            ordered = mode switch
+            {
+                PlaylistSortMode.NameOrTitle => _originalEntries
+                    .OrderByDescending(NameKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
+                PlaylistSortMode.ChannelOrPath => _originalEntries
+                    .OrderByDescending(ChannelOrPathKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenByDescending(NameKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
+                PlaylistSortMode.Duration => _originalEntries
+                    // Keep unknown durations last even in Desc.
+                    .OrderBy(static e => e.DurationSeconds is null ? 1 : 0)
+                    .ThenByDescending(static e => e.DurationSeconds ?? 0)
+                    .ThenByDescending(NameKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
+                _ => _originalEntries.OrderByDescending(NameKey, StringComparer.OrdinalIgnoreCase),
+            };
+        }
+        else
+        {
+            ordered = mode switch
+            {
+                PlaylistSortMode.NameOrTitle => _originalEntries
+                    .OrderBy(NameKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
+                PlaylistSortMode.ChannelOrPath => _originalEntries
+                    .OrderBy(ChannelOrPathKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(NameKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
+                PlaylistSortMode.Duration => _originalEntries
+                    // Keep unknown durations last.
+                    .OrderBy(static e => e.DurationSeconds is null ? 1 : 0)
+                    .ThenBy(static e => e.DurationSeconds ?? 0)
+                    .ThenBy(NameKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
+                _ => _originalEntries.OrderBy(NameKey, StringComparer.OrdinalIgnoreCase),
+            };
+        }
+
+        var sorted = ordered.ToList();
+
+        _originalEntries = sorted;
+        _currentEntries = BuildPlayOrder(_originalEntries, shuffle: _shuffleEnabled).ToList();
+        var startIndex = FindIndexByVideoId(_currentEntries, curId);
+        _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : (startIndex >= 0 ? startIndex : 0), raiseNowPlayingChanged: false);
+
+        var displayIndex = GetOriginalIndexByVideoId(curId) ?? 0;
+        SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
+        MarkLastPlaylistSnapshotDirty();
+        RequestPersistSnapshot();
+        return Task.CompletedTask;
     }
 
     private void OptionsButton_OnClick(object sender, RoutedEventArgs e)
@@ -3597,6 +3907,22 @@ public partial class MainWindow : Window
             if (_playlistSnapEdge == PlaylistSnapEdge.Bottom)
                 desiredLeft = mainLeft + _playlistDockXOffset;
 
+            // If the computed snapped position would be mostly off-screen (monitor changes / DPI changes),
+            // clamp to the nearest screen's work area so the user can still reach the window.
+            try
+            {
+                var works = GetAllWorkAreasDips(this);
+                (desiredLeft, desiredTop) = ClampSnappedToWorkAreasAvoidOverlap(
+                    snap: _playlistSnapEdge,
+                    desiredLeft,
+                    desiredTop,
+                    plW: pl.Width,
+                    plH: pl.Height,
+                    main,
+                    works);
+            }
+            catch { /* ignore */ }
+
             _playlistWindow.Left = SnapRound(desiredLeft);
             _playlistWindow.Top = SnapRound(desiredTop);
         }
@@ -3610,8 +3936,142 @@ public partial class MainWindow : Window
         }
     }
 
+    private static List<Rect> GetAllWorkAreasDips(Window w)
+    {
+        // Convert monitor work areas (device pixels) -> DIPs in this window's coordinate space.
+        var src = PresentationSource.FromVisual(w);
+        var toDevice = src?.CompositionTarget?.TransformToDevice ?? System.Windows.Media.Matrix.Identity;
+        var fromDevice = src?.CompositionTarget?.TransformFromDevice ?? System.Windows.Media.Matrix.Identity;
+        _ = toDevice; // kept for symmetry / future use
+
+        var works = new List<Rect>();
+        foreach (var s in Forms.Screen.AllScreens)
+        {
+            var waPx = s.WorkingArea;
+            var tlDip = fromDevice.Transform(new System.Windows.Point(waPx.Left, waPx.Top));
+            var brDip = fromDevice.Transform(new System.Windows.Point(waPx.Right, waPx.Bottom));
+            works.Add(new Rect(tlDip.X, tlDip.Y, Math.Max(0, brDip.X - tlDip.X), Math.Max(0, brDip.Y - tlDip.Y)));
+        }
+
+        if (works.Count == 0)
+        {
+            // Fallback: primary work area in DIPs
+            var wa = SystemParameters.WorkArea;
+            works.Add(new Rect(wa.Left, wa.Top, wa.Width, wa.Height));
+        }
+
+        return works;
+    }
+
+    private static (double left, double top) ClampSnappedToWorkAreasAvoidOverlap(
+        PlaylistSnapEdge snap,
+        double left,
+        double top,
+        double plW,
+        double plH,
+        Rect main,
+        IReadOnlyList<Rect> works)
+    {
+        const double minVisible = 80.0;
+
+        if (plW <= 1 || plH <= 1)
+            return (left, top);
+
+        // Candidate placements. Prefer the snapped intent; if it would overlap main due to lack of space,
+        // try the opposite side (still adjacent), then above/below within the work area.
+        var gap = SnapGapPx;
+
+        (double l, double t) ClampToWork(Rect work, double l0, double t0)
+        {
+            var l1 = Math.Clamp(l0, work.Left, work.Right - plW);
+            var t1 = Math.Clamp(t0, work.Top, work.Bottom - plH);
+            return (l1, t1);
+        }
+
+        double OverlapArea(Rect a, Rect b)
+        {
+            var i = Rect.Intersect(a, b);
+            return i.IsEmpty ? 0 : Math.Max(0, i.Width) * Math.Max(0, i.Height);
+        }
+
+        double VisibleArea(Rect a, Rect work)
+        {
+            var i = Rect.Intersect(a, work);
+            return i.IsEmpty ? 0 : Math.Max(0, i.Width) * Math.Max(0, i.Height);
+        }
+
+        var best = (l: left, t: top, visible: 0.0, overlap: double.MaxValue);
+
+        foreach (var work in works)
+        {
+            var candidates = new List<(double l, double t)>(8);
+
+            // 0) current desired (clamped to this work area)
+            candidates.Add(ClampToWork(work, left, top));
+
+            if (snap == PlaylistSnapEdge.Right || snap == PlaylistSnapEdge.Left)
+            {
+                var intendedLeft = snap == PlaylistSnapEdge.Right ? (main.Right + gap) : (main.Left - plW - gap);
+                candidates.Add(ClampToWork(work, intendedLeft, top));
+
+                var oppositeLeft = snap == PlaylistSnapEdge.Right ? (main.Left - plW - gap) : (main.Right + gap);
+                candidates.Add(ClampToWork(work, oppositeLeft, top));
+
+                candidates.Add(ClampToWork(work, intendedLeft, main.Top - plH - gap));
+                candidates.Add(ClampToWork(work, intendedLeft, main.Bottom + gap));
+            }
+            else if (snap == PlaylistSnapEdge.Bottom)
+            {
+                var intendedTop = main.Bottom + gap;
+                candidates.Add(ClampToWork(work, left, intendedTop));
+                candidates.Add(ClampToWork(work, left, main.Top - plH - gap));
+                candidates.Add(ClampToWork(work, main.Right + gap, intendedTop));
+                candidates.Add(ClampToWork(work, main.Left - plW - gap, intendedTop));
+            }
+
+            foreach (var c in candidates.Distinct())
+            {
+                var r = new Rect(c.l, c.t, plW, plH);
+                var visible = VisibleArea(r, work);
+                if (visible <= 0)
+                    continue;
+                if (Rect.Intersect(r, work).Height < Math.Min(plH, minVisible) || Rect.Intersect(r, work).Width < Math.Min(plW, minVisible))
+                    continue;
+
+                var overlap = OverlapArea(r, main);
+                if (visible > best.visible + 1e-6 || (Math.Abs(visible - best.visible) <= 1e-6 && overlap < best.overlap))
+                    best = (c.l, c.t, visible, overlap);
+            }
+        }
+
+        // As a last resort (no good candidates), clamp to the first work area to keep it reachable.
+        if (best.visible <= 0 && works.Count > 0)
+        {
+            var c0 = ClampToWork(works[0], left, top);
+            return c0;
+        }
+
+        return (best.l, best.t);
+    }
+
     private void OnMainWindowMovedOrSized()
     {
+        try
+        {
+            // If the user moves the expanded (non-compact) window after we expanded it, do not "snap back"
+            // to the pre-expand compact position on the next collapse.
+            if (!_mainWindowCompact && _mainWindowExpandedBoundsAfterExpand is { } b0 && !_mainWindowExpandedMovedSinceExpand)
+            {
+                var b1 = GetOuterBounds(this);
+                var moved =
+                    Math.Abs(b1.Left - b0.Left) > 1.0 ||
+                    Math.Abs(b1.Top - b0.Top) > 1.0;
+                if (moved)
+                    _mainWindowExpandedMovedSinceExpand = true;
+            }
+        }
+        catch { /* ignore */ }
+
         if (_playlistSnapped)
             SyncPlaylistWindowToMain();
         if (_optionsSnapped)
@@ -3899,10 +4359,26 @@ public partial class MainWindow : Window
                     _ => double.NaN
                 };
 
+                // If the target snapped position is not feasible within the current monitor work area
+                // (monitor/DPI/work-area changed), allow the clamped-on-screen position without unsnapping.
+                // Otherwise, a safety clamp would immediately be interpreted as "user dragged away".
+                var desiredFeasible = true;
+                try
+                {
+                    var works = GetAllWorkAreasDips(this);
+                    desiredFeasible = works.Any(work => _playlistSnapEdge switch
+                    {
+                        PlaylistSnapEdge.Bottom => desired >= work.Top - 1 && desired <= work.Bottom - pl.Height + 1,
+                        PlaylistSnapEdge.Right or PlaylistSnapEdge.Left => desired >= work.Left - 1 && desired <= work.Right - pl.Width + 1,
+                        _ => true
+                    });
+                }
+                catch { /* ignore */ }
+
                 var movedFar = _playlistSnapEdge switch
                 {
-                    PlaylistSnapEdge.Bottom => Math.Abs(plTop - desired) > SnapUnsnapPx || !hasHOverlap,
-                    _ => Math.Abs(plLeft - desired) > SnapUnsnapPx || !hasOverlap
+                    PlaylistSnapEdge.Bottom => (desiredFeasible && Math.Abs(plTop - desired) > SnapUnsnapPx) || !hasHOverlap,
+                    _ => (desiredFeasible && Math.Abs(plLeft - desired) > SnapUnsnapPx) || !hasOverlap
                 };
 
                 if (movedFar)
@@ -3912,11 +4388,21 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                // Update vertical dock offset only (avoid jittery re-snapping).
+                // Update dock offsets only when we are actually at the intended snapped coordinates.
+                // If we had to clamp to keep the window visible (monitor/work-area changed), do NOT overwrite
+                // the user's chosen offset — otherwise a successful safety placement would "forget" it.
                 if (_playlistSnapEdge == PlaylistSnapEdge.Bottom)
-                    _playlistDockXOffset = plLeft - mainLeft;
+                {
+                    var expectedLeft = mainLeft + _playlistDockXOffset;
+                    if (Math.Abs(plLeft - expectedLeft) <= Math.Max(2.0, SnapThresholdPx))
+                        _playlistDockXOffset = plLeft - mainLeft;
+                }
                 else
-                    _playlistDockYOffset = plTop - mainTop;
+                {
+                    var expectedTop = mainTop + _playlistDockYOffset;
+                    if (Math.Abs(plTop - expectedTop) <= Math.Max(2.0, SnapThresholdPx))
+                        _playlistDockYOffset = plTop - mainTop;
+                }
                 return;
             }
 
@@ -4238,6 +4724,36 @@ public partial class MainWindow : Window
             NowPlayingTextBlock.Text = $"[{status.Trim().ToUpperInvariant()}] {message}";
     }
 
+    private void ShowInfoToast(string message, int ms = 2500)
+    {
+        try
+        {
+            var req = Interlocked.Increment(ref _statusToastRequestId);
+            SetStatusMessage("INFO", message);
+
+            // Revert to current song/status after a short delay (unless something else updated status).
+            DispatcherTimer? t = null;
+            t = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(Math.Clamp(ms, 250, 15000)),
+            };
+            t.Tick += (_, _) =>
+            {
+                try { t.Stop(); } catch { /* ignore */ }
+                try
+                {
+                    if (req != _statusToastRequestId)
+                        return;
+                    SyncNowPlayingFromEngine();
+                    UpdatePlaylistTitleDisplayForNowPlaying();
+                }
+                catch { /* ignore */ }
+            };
+            t.Start();
+        }
+        catch { /* ignore */ }
+    }
+
     private void SyncNowPlayingFromEngine()
     {
         try
@@ -4523,6 +5039,8 @@ public partial class MainWindow : Window
             _playlistSourceText = sourceKey;
             _lastLocalPlaylistPath = sourceKey;
             try { _playlistWindow?.SetSourceText(_playlistSourceText ?? ""); } catch { /* ignore */ }
+            _playlistIsCompound = false;
+            RebuildPerItemPlaylistOriginsForCurrentPlaylist(title ?? sourceKey, sourceKey);
 
             var list = entries?.ToList() ?? new List<PlaylistEntry>();
             _originalEntries = list;
@@ -4553,6 +5071,7 @@ public partial class MainWindow : Window
             UpdateRefreshEnabled();
             if (!deferNowPlayingChanged)
                 FocusPlaylistOnNowPlaying();
+            UpdatePlaylistTitleDisplayForNowPlaying();
 
             if (!deferNowPlayingChanged)
             {
@@ -5295,6 +5814,9 @@ public partial class MainWindow : Window
         // For direct stream URLs loaded via Load URL, refresh doesn't make sense.
         if (TryParseHttpUrl(_lastLocalPlaylistPath ?? _playlistSourceText, out var u) && !LooksLikeYoutube(u))
             canRefresh = false;
+        // Compound playlists (appended / merged) can't reliably refresh all sources.
+        if (_playlistIsCompound)
+            canRefresh = false;
         _playlistWindow?.SetRefreshEnabled(canRefresh);
     }
 
@@ -5395,6 +5917,8 @@ public partial class MainWindow : Window
             _loadedPlaylistId = sourceKey;
             _playlistSourceText = sourceKey;
             _lastLocalPlaylistPath = sourceKey;
+            _playlistIsCompound = false;
+            RebuildPerItemPlaylistOriginsForCurrentPlaylist(title ?? sourceKey, sourceKey);
 
             _originalEntries = entries?.ToList() ?? new List<PlaylistEntry>();
             _currentEntries = BuildPlayOrder(_originalEntries, shuffle: _shuffleEnabled).ToList();
@@ -5417,6 +5941,7 @@ public partial class MainWindow : Window
             _hasLoadedPlaylist = true;
             UpdateRefreshEnabled();
             FocusPlaylistOnNowPlaying();
+            UpdatePlaylistTitleDisplayForNowPlaying();
 
             SetStatusMessage("INFO", _originalEntries.Count == 0 ? "Playlist is empty." : $"Loaded {_originalEntries.Count} items.");
             SyncNowPlayingFromEngine();
@@ -5571,7 +6096,7 @@ public partial class MainWindow : Window
 
         _queueItems.Clear();
         _queueItemById.Clear();
-        var isLocal = _lastPlaylistSourceType != PlaylistSourceType.YouTube;
+        var isLocal = !IsYoutubeLikeSource(_lastPlaylistSourceType);
         var pad = Math.Max(1, entries.Count.ToString().Length);
         foreach (var e in entries)
         {
@@ -5589,6 +6114,7 @@ public partial class MainWindow : Window
             _queueItemById[qi.VideoId] = qi;
         }
         _playlistWindow?.SetItemsSource(_queueItems);
+        try { _playlistWindow?.RefreshSortChoices(); } catch { /* ignore */ }
         if (selectedIndex >= 0)
             _playlistWindow?.ScrollToIndex(selectedIndex);
     }
@@ -5787,6 +6313,192 @@ public partial class MainWindow : Window
         _playlistTitle = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
         if (PlaylistTitleTextBlock is not null)
             PlaylistTitleTextBlock.Text = _playlistTitle ?? "(no playlist)";
+    }
+
+    private void SetBasePlaylistOrigin(string? label, string? source)
+    {
+        var l = string.IsNullOrWhiteSpace(label) ? null : label.Trim();
+        var s = string.IsNullOrWhiteSpace(source) ? null : source.Trim();
+        _basePlaylistOrigin = (string.IsNullOrWhiteSpace(l) && string.IsNullOrWhiteSpace(s))
+            ? null
+            : new PlaylistOriginInfo(l ?? "", s ?? "");
+    }
+
+    private void RebuildPerItemPlaylistOriginsForCurrentPlaylist(string? baseLabel, string? baseSource)
+    {
+        try
+        {
+            SetBasePlaylistOrigin(baseLabel, baseSource);
+            _playlistOriginByVideoId.Clear();
+            var b = _basePlaylistOrigin;
+            if (b is null)
+                return;
+            foreach (var e in _originalEntries)
+                _playlistOriginByVideoId[e.VideoId] = b;
+        }
+        catch { /* ignore */ }
+    }
+
+    private void UpdatePlaylistTitleDisplayForNowPlaying()
+    {
+        try
+        {
+            if (PlaylistTitleTextBlock is null)
+                return;
+
+            // Default: show the playlist title (single source / base title).
+            if (!_playlistIsCompound)
+            {
+                PlaylistTitleTextBlock.Text = _playlistTitle ?? "(no playlist)";
+                return;
+            }
+
+            var cur = _nowPlayingEntry;
+            if (cur is null)
+            {
+                PlaylistTitleTextBlock.Text = _playlistTitle ?? "(no playlist)";
+                return;
+            }
+
+            if (_playlistOriginByVideoId.TryGetValue(cur.VideoId, out var info) && !string.IsNullOrWhiteSpace(info?.Label))
+            {
+                PlaylistTitleTextBlock.Text = info.Label;
+                return;
+            }
+
+            PlaylistTitleTextBlock.Text = _playlistTitle ?? "(no playlist)";
+        }
+        catch { /* ignore */ }
+    }
+
+    private bool TryGetNowPlayingOrigin(out PlaylistOriginInfo origin)
+    {
+        origin = new PlaylistOriginInfo(Label: _playlistTitle ?? "", Source: _playlistSourceText ?? "");
+        try
+        {
+            var cur = _nowPlayingEntry;
+            if (cur is null)
+                return false;
+            if (_playlistOriginByVideoId.TryGetValue(cur.VideoId, out var o))
+            {
+                origin = o;
+                return true;
+            }
+        }
+        catch { /* ignore */ }
+        return false;
+    }
+
+    private static string? NormalizeYoutubePlaylistUrlOrNull(string? src)
+    {
+        var t = (src ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(t))
+            return null;
+        try
+        {
+            if (Uri.TryCreate(t, UriKind.Absolute, out var u) &&
+                (string.Equals(u.Scheme, "http", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(u.Scheme, "https", StringComparison.OrdinalIgnoreCase)))
+                return u.ToString();
+        }
+        catch { /* ignore */ }
+
+        // Treat as playlist ID.
+        if (t.Length >= 10 && !t.Contains(' ') && !t.Contains('/') && !t.Contains('\\'))
+            return $"https://www.youtube.com/playlist?list={Uri.EscapeDataString(t)}";
+        return null;
+    }
+
+    private static void TryOpenInBrowser(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch { /* ignore */ }
+    }
+
+    private static void TryOpenInExplorer(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
+                return;
+            }
+            if (File.Exists(path))
+            {
+                Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    private void PlaylistTitle_OpenOriginMenuItem_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (!TryGetNowPlayingOrigin(out var origin))
+                return;
+            var src = (origin.Source ?? "").Trim();
+            var yt = NormalizeYoutubePlaylistUrlOrNull(src);
+            if (!string.IsNullOrWhiteSpace(yt))
+            {
+                TryOpenInBrowser(yt);
+                return;
+            }
+            if (!string.IsNullOrWhiteSpace(src))
+                TryOpenInExplorer(src);
+        }
+        catch { /* ignore */ }
+    }
+
+    private void ApplySavedPlaylistOriginsIfAny(SavedPlaylist pl, IReadOnlyList<PlaylistEntry> entries)
+    {
+        try
+        {
+            var baseLabel = string.IsNullOrWhiteSpace(pl?.Name) ? null : pl!.Name.Trim();
+            var baseSource = string.IsNullOrWhiteSpace(pl?.Source) ? null : pl!.Source.Trim();
+            SetBasePlaylistOrigin(baseLabel, baseSource);
+
+            _playlistOriginByVideoId.Clear();
+
+            var legacy = pl?.OriginByVideoId;
+            var origins = pl?.OriginInfoByVideoId;
+            var distinct = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(baseLabel))
+                distinct.Add(baseLabel);
+
+            foreach (var e in entries ?? Array.Empty<PlaylistEntry>())
+            {
+                if (e is null || string.IsNullOrWhiteSpace(e.VideoId))
+                    continue;
+
+                string label = baseLabel ?? "";
+                string src = baseSource ?? "";
+
+                if (origins is not null && origins.TryGetValue(e.VideoId, out var oi) && oi is not null)
+                {
+                    if (!string.IsNullOrWhiteSpace(oi.Label)) label = oi.Label.Trim();
+                    if (!string.IsNullOrWhiteSpace(oi.Source)) src = oi.Source.Trim();
+                }
+                else if (legacy is not null && legacy.TryGetValue(e.VideoId, out var l0))
+                {
+                    if (!string.IsNullOrWhiteSpace(l0)) label = l0.Trim();
+                }
+
+                if (!string.IsNullOrWhiteSpace(label) || !string.IsNullOrWhiteSpace(src))
+                {
+                    _playlistOriginByVideoId[e.VideoId] = new PlaylistOriginInfo(label, src);
+                    if (!string.IsNullOrWhiteSpace(label))
+                        distinct.Add(label);
+                }
+            }
+
+            _playlistIsCompound = distinct.Count > 1;
+        }
+        catch { /* ignore */ }
     }
 
     private static void CenterListBoxItem(System.Windows.Controls.ListBox listBox, object? item, int attempt = 0)
@@ -6255,6 +6967,8 @@ public partial class MainWindow : Window
             PlaylistWindowFilter: _playlistWindow is not null
                 ? NormalizePersistedPlaylistFilter(_playlistWindow.GetPlaylistFilterText())
                 : cur.PlaylistWindowFilter,
+            PlaylistWindowSortMode: _playlistWindow is not null ? _playlistWindow.GetSortSpec().Mode.ToString() : cur.PlaylistWindowSortMode,
+            PlaylistWindowSortDirection: _playlistWindow is not null ? _playlistWindow.GetSortSpec().Direction.ToString() : cur.PlaylistWindowSortDirection,
             OptionsWindowLeft: FiniteOrNull(saveOBounds.Left) ?? cur.OptionsWindowLeft,
             OptionsWindowTop: FiniteOrNull(saveOBounds.Top) ?? cur.OptionsWindowTop,
             OptionsWindowWidth: FiniteOrNull(saveOBounds.Width) ?? cur.OptionsWindowWidth,
@@ -6298,6 +7012,7 @@ public partial class MainWindow : Window
             YtdlpEjsComponentSource: _ytdlpEjsComponentSource,
             YoutubeCookiesFromBrowserEnabled: _youtubeCookiesFromBrowserEnabled,
             YoutubeCookiesFromBrowser: string.IsNullOrWhiteSpace(_youtubeCookiesFromBrowser) ? null : _youtubeCookiesFromBrowser.Trim(),
+            YoutubeImportAppend: _youtubeImportAppend,
             AudioQuality: _audioQuality,
             AudioOutputDevice: string.IsNullOrWhiteSpace(_audioOutputDevice) ? null : _audioOutputDevice,
             AppLogLevel: _appLogLevel,
@@ -7613,7 +8328,8 @@ public partial class MainWindow : Window
         _hardcodetTrayIcon = new Hardcodet.Wpf.TaskbarNotification.TaskbarIcon
         {
             Icon = _trayIcon,
-            ToolTipText = "LyllyPlayer",
+            // Disable tray hover tooltip (Explorer-owned, not themeable).
+            ToolTipText = "",
             ContextMenu = cm,
             Visibility = Visibility.Collapsed,
         };
@@ -7686,10 +8402,11 @@ public partial class MainWindow : Window
             cbSize = (uint)Marshal.SizeOf<NOTIFYICONDATA>(),
             hWnd = hwnd,
             uID = TrayUid,
-            uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP,
+            // No NIF_TIP: disable Explorer hover tooltip (not themeable).
+            uFlags = NIF_MESSAGE | NIF_ICON,
             uCallbackMessage = WM_TRAYICON,
             hIcon = _trayIcon.Handle,
-            szTip = "LyllyPlayer",
+            szTip = "",
         };
 
         if (!Shell_NotifyIcon(NIM_ADD, ref data))
@@ -7717,10 +8434,11 @@ public partial class MainWindow : Window
             cbSize = (uint)Marshal.SizeOf<NOTIFYICONDATA>(),
             hWnd = hwnd,
             uID = TrayUid,
-            uFlags = NIF_STATE | NIF_TIP,
+            // No NIF_TIP: keep tooltip disabled even when toggling hidden/shown.
+            uFlags = NIF_STATE,
             dwStateMask = NIS_HIDDEN,
             dwState = hidden ? NIS_HIDDEN : 0,
-            szTip = "LyllyPlayer",
+            szTip = "",
         };
         _ = Shell_NotifyIcon(NIM_MODIFY, ref data);
         try
@@ -7802,7 +8520,7 @@ public partial class MainWindow : Window
                     if (_hardcodetTrayIcon is not null)
                     {
                         try { _hardcodetTrayIcon.Icon = _trayIcon; } catch { /* ignore */ }
-                        try { _hardcodetTrayIcon.ToolTipText = "LyllyPlayer"; } catch { /* ignore */ }
+                        try { _hardcodetTrayIcon.ToolTipText = ""; } catch { /* ignore */ }
                         _hardcodetTrayIcon.Visibility = showTray ? Visibility.Visible : Visibility.Collapsed;
                     }
                     if (showTray)

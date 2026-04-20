@@ -843,7 +843,7 @@ public partial class OptionsWindow : Window
             {
                 CustomBackgroundColorPreviewBorder.ClearValue(Border.BackgroundProperty);
                 CustomBackgroundColorPreviewBorder.SetResourceReference(Border.BackgroundProperty, "App.Theme.SurfaceRaised");
-                CustomBackgroundColorPreviewBorder.ToolTip = "No custom color saved — choose “Custom” and pick…";
+                CustomBackgroundColorPreviewBorder.ClearValue(FrameworkElement.ToolTipProperty);
                 return;
             }
 
@@ -851,7 +851,7 @@ public partial class OptionsWindow : Window
             var b = new System.Windows.Media.SolidColorBrush(wc);
             try { b.Freeze(); } catch { /* ignore */ }
             CustomBackgroundColorPreviewBorder.Background = b;
-            CustomBackgroundColorPreviewBorder.ToolTip = $"Custom color: {hex}";
+            CustomBackgroundColorPreviewBorder.ClearValue(FrameworkElement.ToolTipProperty);
         }
         catch { /* ignore */ }
     }

@@ -148,7 +148,6 @@
                               Content="TOP"
                               FontFamily="{StaticResource App.MonoFont}"
                               FontSize="12"
-                              ToolTip="Always on top"
                               Checked="ChromeAlwaysOnTopToggleButton_OnChecked"
                               Unchecked="ChromeAlwaysOnTopToggleButton_OnUnchecked">
                     <ToggleButton.Style>
@@ -258,8 +257,7 @@
                                 Grid.Column="0"
                                 Padding="10,8,6,0"
                                 Background="Transparent"
-                                MouseLeftButtonUp="VisualizerBorder_OnMouseLeftButtonUp"
-                                ToolTip="Click to cycle: VU meters → spectrum → off. In compact mode the strip sits between transport and volume.">
+                                MouseLeftButtonUp="VisualizerBorder_OnMouseLeftButtonUp">
                             <!-- Fixed-size inner area so VU / spectrum / off do not shift layout -->
                             <Grid x:Name="VisualizerHostGrid" Height="26" VerticalAlignment="Center" Margin="0,0,0,0">
                                 <Grid x:Name="VuGrid" VerticalAlignment="Center">
@@ -330,7 +328,15 @@
                                    FontSize="12"
                                    Foreground="{DynamicResource App.Theme.Foreground}"
                                    TextTrimming="CharacterEllipsis"
-                                   Margin="0,0,0,2"/>
+                                   Margin="0,0,0,2"
+                                   Padding="2,0,2,0"
+                                   Background="Transparent">
+                            <TextBlock.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Open origin" Click="PlaylistTitle_OpenOriginMenuItem_OnClick"/>
+                                </ContextMenu>
+                            </TextBlock.ContextMenu>
+                        </TextBlock>
                         <Grid VerticalAlignment="Center">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
