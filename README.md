@@ -9,7 +9,10 @@
 ---
 
 ### What's new, pussycat?
+Upcoming (TBA): 
+- song queue, ability to have both local and stream sources in the same playlist, M3U(8) playlist export
 
+Live:
 - 1.3.1: fixes a small bug with the playlist window getting stuck on the wrong display on multi-monitor setups
 - 1.3.0: playlist and search improvements
   - Ability to import YT playlists from your account (!!)
