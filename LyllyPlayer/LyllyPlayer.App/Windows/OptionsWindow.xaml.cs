@@ -93,6 +93,12 @@ public partial class OptionsWindow : Window
     private readonly Action<string> _setCompactModeLayout;
     private readonly Func<bool> _getKeepIncompletePlaylistOnCancel;
     private readonly Action<bool> _setKeepIncompletePlaylistOnCancel;
+    private readonly Func<bool> _getExportM3uIncludeYoutube;
+    private readonly Action<bool> _setExportM3uIncludeYoutube;
+    private readonly Func<bool> _getExportM3uPreferRelativePaths;
+    private readonly Action<bool> _setExportM3uPreferRelativePaths;
+    private readonly Func<bool> _getExportM3uIncludeLyllyMetadata;
+    private readonly Action<bool> _setExportM3uIncludeLyllyMetadata;
     private readonly Func<string> _getAppIconVisibility;
     private readonly Action<string> _setAppIconVisibility;
     private readonly Func<string> _getAppLogLevel;
@@ -158,6 +164,9 @@ public partial class OptionsWindow : Window
         public bool CompactModeHidesAuxWindows;
         public string CompactModeLayout = "Normal";
         public bool KeepIncompletePlaylistOnCancel;
+        public bool ExportM3uIncludeYoutube;
+        public bool ExportM3uPreferRelativePaths;
+        public bool ExportM3uIncludeLyllyMetadata;
         public string AppIconVisibility = "TaskbarOnly";
 
         public string NodeJsPath = "";
@@ -247,6 +256,12 @@ public partial class OptionsWindow : Window
         Action<string> setCompactModeLayout,
         Func<bool> getKeepIncompletePlaylistOnCancel,
         Action<bool> setKeepIncompletePlaylistOnCancel,
+        Func<bool> getExportM3uIncludeYoutube,
+        Action<bool> setExportM3uIncludeYoutube,
+        Func<bool> getExportM3uPreferRelativePaths,
+        Action<bool> setExportM3uPreferRelativePaths,
+        Func<bool> getExportM3uIncludeLyllyMetadata,
+        Action<bool> setExportM3uIncludeLyllyMetadata,
         Func<string> getAppIconVisibility,
         Action<string> setAppIconVisibility,
         Func<string> getAppLogLevel,
@@ -333,6 +348,12 @@ public partial class OptionsWindow : Window
         _setCompactModeLayout = setCompactModeLayout;
         _getKeepIncompletePlaylistOnCancel = getKeepIncompletePlaylistOnCancel;
         _setKeepIncompletePlaylistOnCancel = setKeepIncompletePlaylistOnCancel;
+        _getExportM3uIncludeYoutube = getExportM3uIncludeYoutube;
+        _setExportM3uIncludeYoutube = setExportM3uIncludeYoutube;
+        _getExportM3uPreferRelativePaths = getExportM3uPreferRelativePaths;
+        _setExportM3uPreferRelativePaths = setExportM3uPreferRelativePaths;
+        _getExportM3uIncludeLyllyMetadata = getExportM3uIncludeLyllyMetadata;
+        _setExportM3uIncludeLyllyMetadata = setExportM3uIncludeLyllyMetadata;
         _getAppIconVisibility = getAppIconVisibility;
         _setAppIconVisibility = setAppIconVisibility;
         _getAppLogLevel = getAppLogLevel;
@@ -447,6 +468,9 @@ public partial class OptionsWindow : Window
         try { _draft.CompactModeHidesAuxWindows = _getCompactModeHidesAuxWindows(); } catch { _draft.CompactModeHidesAuxWindows = true; }
         try { _draft.CompactModeLayout = SettingsStore.NormalizeCompactModeLayout(_getCompactModeLayout()); } catch { _draft.CompactModeLayout = "Normal"; }
         try { _draft.KeepIncompletePlaylistOnCancel = _getKeepIncompletePlaylistOnCancel(); } catch { _draft.KeepIncompletePlaylistOnCancel = false; }
+        try { _draft.ExportM3uIncludeYoutube = _getExportM3uIncludeYoutube(); } catch { _draft.ExportM3uIncludeYoutube = true; }
+        try { _draft.ExportM3uPreferRelativePaths = _getExportM3uPreferRelativePaths(); } catch { _draft.ExportM3uPreferRelativePaths = false; }
+        try { _draft.ExportM3uIncludeLyllyMetadata = _getExportM3uIncludeLyllyMetadata(); } catch { _draft.ExportM3uIncludeLyllyMetadata = true; }
         try { _draft.AppIconVisibility = SettingsStore.NormalizeAppIconVisibility(_getAppIconVisibility()); } catch { _draft.AppIconVisibility = "TaskbarOnly"; }
         try
         {
@@ -593,6 +617,9 @@ public partial class OptionsWindow : Window
         }
         catch { /* ignore */ }
         try { KeepIncompletePlaylistOnCancelCheckBox.IsChecked = _draft.KeepIncompletePlaylistOnCancel; } catch { /* ignore */ }
+        try { ExportM3uIncludeYoutubeCheckBox.IsChecked = _draft.ExportM3uIncludeYoutube; } catch { /* ignore */ }
+        try { ExportM3uPreferRelativePathsCheckBox.IsChecked = _draft.ExportM3uPreferRelativePaths; } catch { /* ignore */ }
+        try { ExportM3uIncludeLyllyMetadataCheckBox.IsChecked = _draft.ExportM3uIncludeLyllyMetadata; } catch { /* ignore */ }
 
         try
         {
@@ -1526,6 +1553,54 @@ public partial class OptionsWindow : Window
         _draft.KeepIncompletePlaylistOnCancel = false;
     }
 
+    private void ExportM3uIncludeYoutubeCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.ExportM3uIncludeYoutube = true;
+        try { _setExportM3uIncludeYoutube(true); } catch { /* ignore */ }
+    }
+
+    private void ExportM3uIncludeYoutubeCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.ExportM3uIncludeYoutube = false;
+        try { _setExportM3uIncludeYoutube(false); } catch { /* ignore */ }
+    }
+
+    private void ExportM3uPreferRelativePathsCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.ExportM3uPreferRelativePaths = true;
+        try { _setExportM3uPreferRelativePaths(true); } catch { /* ignore */ }
+    }
+
+    private void ExportM3uPreferRelativePathsCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.ExportM3uPreferRelativePaths = false;
+        try { _setExportM3uPreferRelativePaths(false); } catch { /* ignore */ }
+    }
+
+    private void ExportM3uIncludeLyllyMetadataCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.ExportM3uIncludeLyllyMetadata = true;
+        try { _setExportM3uIncludeLyllyMetadata(true); } catch { /* ignore */ }
+    }
+
+    private void ExportM3uIncludeLyllyMetadataCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.ExportM3uIncludeLyllyMetadata = false;
+        try { _setExportM3uIncludeLyllyMetadata(false); } catch { /* ignore */ }
+    }
+
     private void AlwaysOnTopPlaylistWindowCheckBox_OnChecked(object sender, RoutedEventArgs e)
     {
         if (_suppressBackgroundUiEvents)
@@ -2053,6 +2128,9 @@ public partial class OptionsWindow : Window
         try { _setCompactModeHidesAuxWindows(_draft.CompactModeHidesAuxWindows); } catch { /* ignore */ }
         try { _setCompactModeLayout(SettingsStore.NormalizeCompactModeLayout(_draft.CompactModeLayout)); } catch { /* ignore */ }
         try { _setKeepIncompletePlaylistOnCancel(_draft.KeepIncompletePlaylistOnCancel); } catch { /* ignore */ }
+        try { _setExportM3uIncludeYoutube(_draft.ExportM3uIncludeYoutube); } catch { /* ignore */ }
+        try { _setExportM3uPreferRelativePaths(_draft.ExportM3uPreferRelativePaths); } catch { /* ignore */ }
+        try { _setExportM3uIncludeLyllyMetadata(_draft.ExportM3uIncludeLyllyMetadata); } catch { /* ignore */ }
         try { _setAppIconVisibility(SettingsStore.NormalizeAppIconVisibility(_draft.AppIconVisibility)); } catch { /* ignore */ }
         try { _setAudioQuality(_draft.AudioQuality ?? "Auto"); } catch { /* ignore */ }
         try { _setAudioOutputDevice(string.IsNullOrWhiteSpace(_draft.AudioOutputDevice) ? null : _draft.AudioOutputDevice); } catch { /* ignore */ }

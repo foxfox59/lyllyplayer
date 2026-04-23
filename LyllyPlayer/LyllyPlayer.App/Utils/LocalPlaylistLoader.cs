@@ -558,6 +558,9 @@ public static class LocalPlaylistLoader
         return false;
     }
 
+    public static string CreateLocalIdFromPath(string path)
+        => LocalIdFromPath(path);
+
     private static string LocalIdFromPath(string path)
     {
         try
