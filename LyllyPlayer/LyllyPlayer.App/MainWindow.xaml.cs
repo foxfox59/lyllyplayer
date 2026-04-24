@@ -6583,7 +6583,8 @@ public partial class MainWindow : Window
         foreach (var e in entriesSnapshot)
         {
             baseIndex++;
-            var prefix = isLocal ? $"{baseIndex.ToString().PadLeft(pad, '0')}. " : null;
+            //var prefix = isLocal ? $"{baseIndex.ToString().PadLeft(pad, '0')}. " : null;
+            var prefix = $"{baseIndex.ToString().PadLeft(pad, '0')}. ";
             var qi = new QueueItem(e, prefix)
             {
                 BaseIndex = baseIndex - 1,
@@ -6649,7 +6650,8 @@ public partial class MainWindow : Window
             cancellationToken.ThrowIfCancellationRequested();
 
             baseIndex++;
-            var prefix = isLocal ? $"{baseIndex.ToString().PadLeft(pad, '0')}. " : null;
+            //var prefix = isLocal ? $"{baseIndex.ToString().PadLeft(pad, '0')}. " : null;
+            var prefix = $"{baseIndex.ToString().PadLeft(pad, '0')}. ";
             var qi = new QueueItem(e, prefix)
             {
                 BaseIndex = baseIndex - 1,

@@ -29,7 +29,7 @@ public sealed class QueueItem : INotifyPropertyChanged
     public string DisplayTitle
         => false
             ? ""
-            : $"{(IsQueued && QueueOrdinal is int q ? $"Q{q}. " : "")}{(IsLocal && !string.IsNullOrWhiteSpace(IndexPrefix) ? IndexPrefix : "")}{(IsPremium ? "[PREMIUM] " : "")}{(string.IsNullOrWhiteSpace(Channel) ? Title : $"{Title} — {Channel}")}{(RequiresCookies ? " [auth]" : "")}{(IsUnavailable ? " (Not available)" : "")}";
+            : $"{(IsQueued && QueueOrdinal is int q ? $"Q{q}. " : "")}{(!string.IsNullOrWhiteSpace(IndexPrefix) ? IndexPrefix : "")}{(IsPremium ? "[PREMIUM] " : "")}{(string.IsNullOrWhiteSpace(Channel) ? Title : $"{Title} — {Channel}")}{(RequiresCookies ? " [auth]" : "")}{(IsUnavailable ? " (Not available)" : "")}";
     public int? DurationSeconds => Entry?.DurationSeconds;
     public string WebpageUrl => Entry?.WebpageUrl ?? "";
     private bool IsLocal
