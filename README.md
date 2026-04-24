@@ -96,7 +96,6 @@ Ideas for later — **not** commitments and nothing to depend on for now:
 
 - Optimize memory usage (or change whole implementation away from WPF)
 - Improve window snapping (currently occasionally feels jittery)
-- Playlist enhancements (queue UX, adding items/URLs to existing playlists, etc)
 - Lyrics display? Not a very high priority, but it might be amusing
 - Linux builds — desktop player on Linux (would require significant changes)
 - Android release — mobile variant (requested feature by testers, would require very significant changes)
