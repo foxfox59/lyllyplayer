@@ -3265,6 +3265,14 @@ public partial class MainWindow : Window
             AppLog.Info($"Playlist bounds (open) pre-show: L={_playlistWindow.Left} T={_playlistWindow.Top} W={_playlistWindow.Width} H={_playlistWindow.Height} State={_playlistWindow.WindowState}");
             try { _playlistWindow.BeginSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
             _playlistWindow.Show();
+            try
+            {
+                var current = _engine.GetCurrent();
+                if (current is not null)
+                {
+                    _playlistWindow.CenterNowPlaying(current);
+                }
+            } catch { /* ignore */ }
             ApplyAlwaysOnTopFromSettings();
             // Restore snapped positioning relative to main window if previously snapped.
             try
