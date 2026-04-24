@@ -1241,7 +1241,8 @@ public sealed class PlaybackEngine : IDisposable
         {
             return await ResolveYoutubeStreamInputWithFallbackAsync(entry, ct, publishStatus, mark).ConfigureAwait(false);
         }
-        catch (Exception ex) when (_ytDlp.UsesCookiesFromBrowser && IsYoutubeDiskCacheEligible(entry))
+        catch (Exception ex) when (_ytDlp.UsesCookiesFromBrowser && IsYoutubeDiskCacheEligible(entry)
+                                  && !LooksLikeNonRetryableError(ex.Message))
         {
             // Some videos are public but still fail without cookies (region, age, transient googlevideo 403s).
             // Best-effort: retry via yt-dlp stdout pipe using browser cookies.
@@ -1252,6 +1253,16 @@ public sealed class PlaybackEngine : IDisposable
             }
             return new YoutubeStreamInput(entry.WebpageUrl.Trim(), null, DecodeViaYtdlpStdoutPipe: true);
         }
+    }
+
+    internal static bool LooksLikeNonRetryableError(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        return LooksLikeUnavailable(text)
+            || LooksLikePremiumRequired(text)
+            || LooksLikeAgeRestricted(text);
     }
 
     /// <summary>Resolve a direct media URL for FFmpeg (no browser cookies in JSON <c>http_headers</c>).</summary>
@@ -1268,21 +1279,20 @@ public sealed class PlaybackEngine : IDisposable
             mark?.Step("ytdlp_after_resolve_best_playback_json");
             return r;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!LooksLikeNonRetryableError(ex.Message))
         {
-            try
-            {
-                AppLog.Warn($"YouTube: JSON playback resolve failed; trying -g. {ex.Message}");
-            }
-            catch
-            {
-                // ignore
-            }
-
+            try { AppLog.Warn($"YouTube: JSON playback resolve failed; trying -g. {ex.Message}"); } catch { /* ignore */ }
             mark?.Step("ytdlp_before_resolve_best_audio_url_g_fallback");
             var url = await _ytDlp.ResolveBestAudioUrlAsync(entry.WebpageUrl, ct, statusCb).ConfigureAwait(false);
             mark?.Step("ytdlp_after_resolve_best_audio_url_g_fallback");
             return new YoutubeStreamInput(url, null);
+        }
+        catch (Exception ex)
+        {
+            // Non-recoverable error (Premium, age-restricted, unavailable) — re-throw so the
+            // exception bubbles up to HandlePlaybackFailed without wasting retries.
+            try { AppLog.Warn($"YouTube: non-recoverable resolve error, skipping -g fallback. {ex.Message}"); } catch { /* ignore */ }
+            throw;
         }
     }
 

@@ -632,6 +632,7 @@ public sealed class YtDlpClient
                     sawAgeGate = true;
                 if (ShouldTryNextStrategy(ex))
                     continue;
+                break;
             }
         }
 
@@ -660,14 +661,37 @@ public sealed class YtDlpClient
                 if (exitCode != 0)
                     throw new InvalidOperationException($"yt-dlp failed ({exitCode}). {stderr}".Trim());
 
+                // Exit 0 but stderr contains a non-recoverable error (Premium, unavailable, age-restricted).   
+                if (LooksLikeNonRecoverableYtDlpError(stderr))
+                    throw new InvalidOperationException($"yt-dlp resolve failed (status 0 with error). {stderr}".Trim());                    
+
                 if (string.IsNullOrWhiteSpace(stdout))
                     throw new InvalidOperationException("yt-dlp returned empty JSON.");
 
                 var resolved = TryExtractYoutubePlaybackFromDumpInternal(stdout);
+
                 if (resolved is null || string.IsNullOrWhiteSpace(resolved.Url))
                     throw new InvalidOperationException("No manifest or media URL in yt-dlp JSON.");
 
-                return resolved;
+                // JSON output contains an "error" field (e.g. Premium) — treat as non-recoverable.
+                if (resolved is null && !string.IsNullOrWhiteSpace(stdout))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
+                        if (doc.RootElement.TryGetProperty("error", out var errEl) && errEl.ValueKind == JsonValueKind.String)
+                        {
+                            var errorMsg = errEl.GetString() ?? "";
+                            if (!string.IsNullOrWhiteSpace(errorMsg))
+                                throw new InvalidOperationException($"yt-dlp JSON error: {errorMsg}");
+                        }
+                    }
+                    catch (JsonException) { /* not JSON — fall through to generic error */ }
+                    throw new InvalidOperationException("No manifest or media URL in yt-dlp JSON.");
+                }
+
+                if (resolved is not null)
+                    return resolved;
             }
             catch (OperationCanceledException)
             {
@@ -680,6 +704,7 @@ public sealed class YtDlpClient
                     sawAgeGate = true;
                 if (ShouldTryNextStrategy(ex))
                     continue;
+                break;
             }
         }
 
@@ -916,6 +941,9 @@ public sealed class YtDlpClient
                 var (exitCode, _, stderr) = await RunAsync(s.args, cancellationToken, longRunningLogHint: hint);
                 if (exitCode != 0)
                     throw new InvalidOperationException($"yt-dlp download failed ({exitCode}). {stderr}".Trim());
+                // yt-dlp can exit 0 but still report a non-recoverable error in stderr (e.g. Premium).
+                if (LooksLikeNonRecoverableYtDlpError(stderr))
+                    throw new InvalidOperationException($"yt-dlp download failed (status 0 with error). {stderr}".Trim());
                 last = null;
                 break;
             }
@@ -1096,6 +1124,16 @@ public sealed class YtDlpClient
                || text.Contains("video is unavailable", StringComparison.OrdinalIgnoreCase)
                || text.Contains("private video", StringComparison.OrdinalIgnoreCase)
                || text.Contains("deleted video", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeNonRecoverableYtDlpError(string? stderr)
+    {
+        if (string.IsNullOrWhiteSpace(stderr))
+            return false;
+
+        return LooksLikeUnavailable(stderr)
+            || LooksLikePremiumRequired(stderr)
+            || LooksLikeAgeRestricted(stderr);
     }
 
     internal static bool LooksLikePremiumRequired(string? text)

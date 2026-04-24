@@ -453,17 +453,10 @@ public partial class PlaylistWindow : Window
 
     private void ApplyPlaylistFilterFromTextBox()
     {
-        // try
-        // {
-        //     _playlistFilterQuery = PlaylistFilterTextBox?.Text ?? "";
-        //     _queueViewSource?.View.Refresh();
-        //     //_queuedViewSource?.View.Refresh();
-        // }
+        try { _playlistFilterQuery = PlaylistFilterTextBox?.Text ?? ""; }
+        catch { /* ignore */ }
         try { _playlistViewSource?.View.Refresh(); }
-        catch
-        {
-            // ignore
-        }
+        catch { /* ignore */ }
     }
 
     private void PlaylistFilterTextBox_TextChanged(object sender, TextChangedEventArgs e)
