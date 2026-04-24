@@ -15,6 +15,7 @@
 	- Shuffle performance improved - no longer saves unnecessary collections
     - Song queue
     - Ability to mix local and streaming sources
+    - Ability to append to current playlist instead of replacing it (with best effort duplicate removal option)
 	- Saving playlists as M3U(8)
   - Certain YT fetching issues fixed
   - Stop button added
