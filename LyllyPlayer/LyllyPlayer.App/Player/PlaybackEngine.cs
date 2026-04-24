@@ -16,6 +16,8 @@ public sealed record PlaybackPrefetchTag(string VideoId, string Category, string
 
 public sealed class PlaybackEngine : IDisposable
 {
+    public delegate PlaylistEntry? NextTrackResolver();
+    private NextTrackResolver? _nextTrackResolver;
     private readonly YtDlpClient _ytDlp;
     private readonly FfmpegDecoder _decoder;
     private readonly string _ffmpegPath;
@@ -200,7 +202,7 @@ public sealed class PlaybackEngine : IDisposable
         _currentDurationSeconds = d;
     }
 
-    public void SetQueue(IReadOnlyList<PlaylistEntry> playOrder, int startIndex = 0, bool raiseNowPlayingChanged = true)
+    public void SetQueue(IReadOnlyList<PlaylistEntry> order, int startIndex = 0, bool raiseNowPlayingChanged = false)
     {
         _queueNavLock.Wait();
         try
@@ -208,10 +210,36 @@ public sealed class PlaybackEngine : IDisposable
             ClearDeferredWarmState();
             CancelNextTrackWarmBestEffort();
             _prefetchSkipVideoIds.Clear();
-            PlayOrder = playOrder;
-            CurrentIndex = playOrder.Count == 0 ? -1 : Math.Clamp(startIndex, 0, playOrder.Count - 1);
-            if (raiseNowPlayingChanged)
-                NowPlayingChanged?.Invoke(this, GetCurrent());
+            PlayOrder = order;
+            CurrentIndex = order.Count == 0 ? -1 : Math.Clamp(startIndex, 0, order.Count - 1);
+            if (!raiseNowPlayingChanged) {}
+        }
+        finally
+        {
+            try { _queueNavLock.Release(); } catch (SemaphoreFullException) { /* ignore */ }
+        }
+    }
+
+    public void SetNextTrackResolver(NextTrackResolver resolver)
+    {
+        _nextTrackResolver = resolver;
+    }
+
+    public async Task PlayTrackAsync(PlaylistEntry entry)
+    {
+        await PlayEntryAsync(entry, 0, raiseNowPlayingChanged: true);
+    }
+
+    public void SetBasePlayOrder(IReadOnlyList<PlaylistEntry> order, int startIndex = 0)
+    {
+        _queueNavLock.Wait();
+        try
+        {
+            ClearDeferredWarmState();
+            CancelNextTrackWarmBestEffort();
+            _prefetchSkipVideoIds.Clear();
+            PlayOrder = order;
+            CurrentIndex = order.Count == 0 ? -1 : Math.Clamp(startIndex, 0, order.Count - 1);
         }
         finally
         {
@@ -222,6 +250,7 @@ public sealed class PlaybackEngine : IDisposable
     public PlaylistEntry? GetCurrent()
         => CurrentIndex >= 0 && CurrentIndex < PlayOrder.Count ? PlayOrder[CurrentIndex] : null;
 
+  
     public async Task<bool> PlayCurrentAsync()
     {
         await _queueNavLock.WaitAsync().ConfigureAwait(false);
@@ -295,38 +324,25 @@ public sealed class PlaybackEngine : IDisposable
 
     public async Task NextAsync()
     {
-        await _queueNavLock.WaitAsync().ConfigureAwait(false);
-        PlaylistEntry? toPlay = null;
-        try
+        if (_nextTrackResolver is not null)
         {
-            if (PlayOrder.Count == 0)
+            var nextR = _nextTrackResolver();
+            if (nextR is not null)
+            {
+                // Fix: IReadOnlyList doesn't have FindIndex, so convert to List temporarily
+                var idx = PlayOrder.ToList().FindIndex(e => string.Equals(e.VideoId, nextR.VideoId, StringComparison.OrdinalIgnoreCase));
+                if (idx >= 0) CurrentIndex = idx;
+                
+                await PlayEntryAsync(nextR, 0, raiseNowPlayingChanged: true);
                 return;
-
-            var idx = CurrentIndex + 1;
-            if (idx >= PlayOrder.Count)
-            {
-                CurrentIndex = PlayOrder.Count - 1;
-                toPlay = PlayOrder[CurrentIndex];
-            }
-            else
-            {
-                while (idx < PlayOrder.Count && _prefetchSkipVideoIds.ContainsKey(PlayOrder[idx].VideoId))
-                    idx++;
-                var finalIdx = idx >= PlayOrder.Count ? PlayOrder.Count - 1 : idx;
-                CurrentIndex = finalIdx;
-                toPlay = PlayOrder[finalIdx];
             }
         }
-        finally
-        {
-            try { _queueNavLock.Release(); } catch (SemaphoreFullException) { /* ignore */ }
-        }
 
-        if (toPlay is null)
-            return;
-
-        // NowPlayingChanged is raised from PlayEntryAsync (avoids UI/track mismatch before playback restarts).
-        await PlayEntryAsync(toPlay, startSeconds: 0, raiseNowPlayingChanged: true).ConfigureAwait(false);
+        // Fallback
+        var next = GetNextEntry();
+        if (next == null) return;
+        CurrentIndex++;
+        await PlayCurrentAsync();
     }
 
     public async Task PrevAsync()
@@ -1225,7 +1241,8 @@ public sealed class PlaybackEngine : IDisposable
         {
             return await ResolveYoutubeStreamInputWithFallbackAsync(entry, ct, publishStatus, mark).ConfigureAwait(false);
         }
-        catch (Exception ex) when (_ytDlp.UsesCookiesFromBrowser && IsYoutubeDiskCacheEligible(entry))
+        catch (Exception ex) when (_ytDlp.UsesCookiesFromBrowser && IsYoutubeDiskCacheEligible(entry)
+                                  && !LooksLikeNonRetryableError(ex.Message))
         {
             // Some videos are public but still fail without cookies (region, age, transient googlevideo 403s).
             // Best-effort: retry via yt-dlp stdout pipe using browser cookies.
@@ -1236,6 +1253,16 @@ public sealed class PlaybackEngine : IDisposable
             }
             return new YoutubeStreamInput(entry.WebpageUrl.Trim(), null, DecodeViaYtdlpStdoutPipe: true);
         }
+    }
+
+    internal static bool LooksLikeNonRetryableError(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        return LooksLikeUnavailable(text)
+            || LooksLikePremiumRequired(text)
+            || LooksLikeAgeRestricted(text);
     }
 
     /// <summary>Resolve a direct media URL for FFmpeg (no browser cookies in JSON <c>http_headers</c>).</summary>
@@ -1252,21 +1279,20 @@ public sealed class PlaybackEngine : IDisposable
             mark?.Step("ytdlp_after_resolve_best_playback_json");
             return r;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!LooksLikeNonRetryableError(ex.Message))
         {
-            try
-            {
-                AppLog.Warn($"YouTube: JSON playback resolve failed; trying -g. {ex.Message}");
-            }
-            catch
-            {
-                // ignore
-            }
-
+            try { AppLog.Warn($"YouTube: JSON playback resolve failed; trying -g. {ex.Message}"); } catch { /* ignore */ }
             mark?.Step("ytdlp_before_resolve_best_audio_url_g_fallback");
             var url = await _ytDlp.ResolveBestAudioUrlAsync(entry.WebpageUrl, ct, statusCb).ConfigureAwait(false);
             mark?.Step("ytdlp_after_resolve_best_audio_url_g_fallback");
             return new YoutubeStreamInput(url, null);
+        }
+        catch (Exception ex)
+        {
+            // Non-recoverable error (Premium, age-restricted, unavailable) — re-throw so the
+            // exception bubbles up to HandlePlaybackFailed without wasting retries.
+            try { AppLog.Warn($"YouTube: non-recoverable resolve error, skipping -g fallback. {ex.Message}"); } catch { /* ignore */ }
+            throw;
         }
     }
 
@@ -1294,7 +1320,8 @@ public sealed class PlaybackEngine : IDisposable
         if (entry.VideoId.StartsWith("stream:", StringComparison.OrdinalIgnoreCase) &&
             Uri.TryCreate(entry.WebpageUrl, UriKind.Absolute, out var u) &&
             (string.Equals(u.Scheme, "http", StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(u.Scheme, "https", StringComparison.OrdinalIgnoreCase)))
+             string.Equals(u.Scheme, "https", StringComparison.OrdinalIgnoreCase)) &&
+            !IsYoutubeHost(u))
         {
             mark?.Step("resolve_return_stream_url_m3u");
             return RememberResolvedInput(entry, entry.WebpageUrl);
@@ -1446,6 +1473,21 @@ public sealed class PlaybackEngine : IDisposable
         return RememberResolvedInput(entry, new YoutubeStreamInput(remoteUrl, null));
     }
 
+    private static bool IsYoutubeHost(Uri u)
+    {
+        try
+        {
+            var h = (u.Host ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(h)) return false;
+            return h.Contains("youtube.com", StringComparison.OrdinalIgnoreCase)
+                   || h.Contains("youtu.be", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static bool LooksLikeTransientYoutubeMediaUrl(string url)
     {
         if (string.IsNullOrWhiteSpace(url))
@@ -1554,6 +1596,20 @@ public sealed class PlaybackEngine : IDisposable
         ClearPrefetchNextStreamUrl();
     }
 
+    /// <summary>
+    /// Call when the play order changes while a track is playing/buffering, so we don't prefetch the wrong "next" item.
+    /// </summary>
+    public void NotifyPlayOrderChanged()
+    {
+        try { CancelNextTrackWarmBestEffort(); } catch { /* ignore */ }
+        try
+        {
+            if (GetCurrent() is { } cur)
+                _ = StartNextTrackWarmAfterAnchorFirstAudioAsync(cur);
+        }
+        catch { /* ignore */ }
+    }
+
     private void ClearDeferredWarmState()
     {
         _pendingCurrentDiskWarmEntry = null;
@@ -1578,11 +1634,16 @@ public sealed class PlaybackEngine : IDisposable
                 _pendingCurrentDiskWarmEntry = null;
             }
 
-            if (!raiseNowPlayingChanged)
-                return;
+            // if (!raiseNowPlayingChanged)
+            //     return;
 
             var next = GetNextPlayableEntryAfterCurrent();
             if (next is null)
+                return;
+
+            // Avoid redundant restart if prefetch is already in progress for the same next track.
+            if (_prefetchNextStreamUrlVideoId is not null &&
+                string.Equals(_prefetchNextStreamUrlVideoId, next.VideoId, StringComparison.Ordinal))
                 return;
 
             CancelNextTrackWarmBestEffort();
@@ -1651,6 +1712,11 @@ public sealed class PlaybackEngine : IDisposable
                 CancelNextTrackWarmBestEffort();
                 return;
             }
+
+             // Avoid redundant restart if prefetch is already in progress for the same next track.
+            if (_prefetchNextStreamUrlVideoId is not null &&
+                string.Equals(_prefetchNextStreamUrlVideoId, next.VideoId, StringComparison.Ordinal))
+                return;
 
             CancelNextTrackWarmBestEffort();
             _nextTrackWarmCts = new CancellationTokenSource();

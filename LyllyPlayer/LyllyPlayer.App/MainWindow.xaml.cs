@@ -298,7 +298,7 @@ public partial class MainWindow : Window
             return new PlaylistRestoreSnapshot
             {
                 Original = w._originalEntries.ToList(),
-                Current = w._currentEntries.ToList(),
+                // Current = w._currentEntries.ToList(),
                 PlaylistSourceText = w._playlistSourceText ?? "",
                 LastLocalPlaylistPath = w._lastLocalPlaylistPath,
                 LastSourceType = w._lastPlaylistSourceType,
@@ -312,7 +312,7 @@ public partial class MainWindow : Window
         public void Restore(MainWindow w)
         {
             w._originalEntries = Original.ToList();
-            w._currentEntries = Current.ToList();
+            // w._currentEntries = Current.ToList();
             w._playlistSourceText = PlaylistSourceText;
             w._lastLocalPlaylistPath = LastLocalPlaylistPath;
             w._lastPlaylistSourceType = LastSourceType;
@@ -323,8 +323,8 @@ public partial class MainWindow : Window
             var startIndex = 0;
             if (!string.IsNullOrWhiteSpace(CurrentVideoId))
             {
-                var idx = FindIndexByVideoId(w._currentEntries, CurrentVideoId);
-                if (idx >= 0 && idx < w._currentEntries.Count)
+                var idx = FindIndexByVideoId(w._originalEntries, CurrentVideoId);
+                if (idx >= 0 && idx < w._originalEntries.Count)
                     startIndex = idx;
             }
 
@@ -332,7 +332,7 @@ public partial class MainWindow : Window
 
             w.SetPlaylistTitle(PlaylistTitle);
             w.SetQueueList(w._originalEntries, w._originalEntries.Count == 0 ? -1 : displayIndex);
-            w._engine.SetQueue(w._currentEntries, w._currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
+            // w._engine.SetQueue(w._currentEntries, w._currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
             w.UpdateRefreshEnabled();
             w.SyncNowPlayingFromEngine();
             try { w._playlistWindow?.SetSourceText(w._playlistSourceText ?? ""); } catch { /* ignore */ }
@@ -354,11 +354,16 @@ public partial class MainWindow : Window
     private bool _youtubeCookiesFromBrowserEnabled;
     private string _youtubeCookiesFromBrowser = "";
     private bool _youtubeImportAppend;
+    private bool _exportM3uIncludeYoutube = true;
+    private bool _exportM3uPreferRelativePaths;
+    private bool _exportM3uIncludeLyllyMetadata = true;
+    private bool _localImportAppend;
+    private bool _localImportRemoveDuplicates;
     private readonly AppSettings _startupSettings;
-    private List<PlaylistEntry> _currentEntries = new();
     private List<PlaylistEntry> _originalEntries = new();
-    private readonly ObservableCollection<QueueItem> _queueItems = new();
-    private readonly Dictionary<string, QueueItem> _queueItemById = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> _recentlyPlayedVideoIds = new(5);
+    ObservableCollection<QueueItem> _queueItems = new();
+    ObservableCollection<QueueItem> _playlistItems = new ObservableCollection<QueueItem>();
     private readonly HashSet<string> _unavailableVideoIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _ageRestrictedVideoIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _premiumVideoIds = new(StringComparer.OrdinalIgnoreCase);
@@ -379,6 +384,10 @@ public partial class MainWindow : Window
     private sealed record PlaylistOriginInfo(string Label, string Source);
     private readonly Dictionary<string, PlaylistOriginInfo> _playlistOriginByVideoId = new(StringComparer.OrdinalIgnoreCase);
     private PlaylistOriginInfo? _basePlaylistOrigin;
+    private sealed record QueuedInstance(Guid Id, PlaylistEntry Entry);
+    private readonly List<QueuedInstance> _queuedNext = new();
+    private Guid? _manualQueuedPlayInstanceId;
+    private Guid? _playingQueuedInstanceId;
     private PlaylistRestoreSnapshot? _cancelPlaylistSnapshot;
     private string? _loadedPlaylistId;
     private bool _globalMediaKeysEnabled;
@@ -414,7 +423,7 @@ public partial class MainWindow : Window
     // Persist options window bounds even when it's closed.
     private Rect? _lastOptionsBounds;
     private WindowState? _lastOptionsWindowState;
-    private enum PlaylistSnapEdge { None, Left, Right, Bottom }
+    private enum PlaylistSnapEdge { None, Left, Right, Bottom, Top }
     private bool _syncingWindowMove;
     private bool _playlistSnapped;
     private PlaylistSnapEdge _playlistSnapEdge = PlaylistSnapEdge.None;
@@ -674,6 +683,11 @@ public partial class MainWindow : Window
         _youtubeCookiesFromBrowserEnabled = _startupSettings.YoutubeCookiesFromBrowserEnabled ?? false;
         _youtubeCookiesFromBrowser = _startupSettings.YoutubeCookiesFromBrowser ?? "";
         _youtubeImportAppend = _startupSettings.YoutubeImportAppend ?? false;
+        _exportM3uIncludeYoutube = _startupSettings.ExportM3uIncludeYoutube ?? true;
+        _exportM3uPreferRelativePaths = _startupSettings.ExportM3uPreferRelativePaths ?? false;
+        _exportM3uIncludeLyllyMetadata = _startupSettings.ExportM3uIncludeLyllyMetadata ?? true;
+        _localImportAppend = _startupSettings.LocalImportAppend ?? false;
+        _localImportRemoveDuplicates = _startupSettings.LocalImportRemoveDuplicates ?? false;
 
         var yInit = ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp");
         _ytDlp = new YtDlpClient(yInit.EffectiveFileName);
@@ -774,6 +788,7 @@ public partial class MainWindow : Window
         // playlist list is hosted in PlaylistWindow
 
         _engine = new PlaybackEngine(_ytDlp, ffmpegPath: _ffmpegPath);
+        _engine.SetNextTrackResolver(ResolveNextTrack);
         ApplyYtdlpPlaybackOptions();
         try { _ytDlp.SetAudioQuality(_audioQuality); } catch { /* ignore */ }
         try { _engine.NotifyYoutubeAudioQualityChanged(); } catch { /* ignore */ }
@@ -794,12 +809,21 @@ public partial class MainWindow : Window
         {
             Dispatcher.Invoke(() =>
             {
-                // Invalidate in-progress seek so mouse-up cannot SeekAsync against a stale thumb after Next/Prev.
                 _isSeeking = false;
                 _seekMouseDownVideoId = null;
                 try { SeekSlider.ReleaseMouseCapture(); } catch { /* ignore */ }
 
                 _nowPlayingEntry = entry;
+                try
+                {
+                    if (_manualQueuedPlayInstanceId is Guid qid &&
+                        (entry is null || !_queuedNext.Any(q => q.Id == qid && q.Entry.VideoId.Equals(entry.VideoId))))
+                    {
+                        _manualQueuedPlayInstanceId = null;
+                    }
+                }
+                catch { /* ignore */ }
+
                 _nowPlayingStatus = entry is null ? "STOPPED" : "FETCHING";
                 UpdateNowPlayingText();
                 UpdatePlaylistTitleDisplayForNowPlaying();
@@ -808,6 +832,9 @@ public partial class MainWindow : Window
                     SelectAndScrollToNowPlaying(entry);
                 UpdateDurationUi(entry?.DurationSeconds);
                 try { ApplyMainWindowShellIntegration(); } catch { /* ignore */ }
+
+                // ← MOVE THIS INSIDE Dispatcher.Invoke:
+                try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
             });
 
             _ = EnrichLocalNowPlayingAsync(entry);
@@ -843,63 +870,52 @@ public partial class MainWindow : Window
         });
         _engine.TrackEnded += (_, payload) => Dispatcher.Invoke(async () =>
         {
-            // Stream/cache starvation or transient URL expiry — or YouTube ending slightly short of metadata duration.
-            if (payload.endedEarly)
+            // 1. Consume the ended track from queue (if it was a queued track)
+            //    AND track its ID so ResolveNextTrack() skips it
+            if (_nowPlayingEntry is not null && _queuedNext.Count > 0 &&
+                string.Equals(_queuedNext[0].Entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
             {
-                // Log line is emitted in PlaybackEngine (single WARN per early end).
-                // Do not flash FETCHING when repeating the same track — resolve will reuse disk cache / watch URL.
-                if (_repeatMode != RepeatMode.Single)
-                {
-                    _nowPlayingStatus = "FETCHING";
-                    UpdateNowPlayingText();
-                }
+                // CONSUME — remove from queue now that playback ended
+                _queuedNext.RemoveAt(0);
+                if (_queueItems.Count > 0 && _queueItems[0].IsQueued)
+                    _queueItems.RemoveAt(0);
+                UpdateQueueOrdinals();
+                _playlistWindow?.RefreshQueueView();
+                RequestPersistSnapshot();
+                if (_queuedNext.Count == 0)
+                    try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
 
-                if (_engine.PlayOrder.Count == 0)
-                    return;
-                if (_repeatMode == RepeatMode.Single)
-                {
-                    await _engine.PlayCurrentAsync();
-                    return;
-                }
+                // Track so ResolveNextTrack() skips it
+                _playingQueuedInstanceId = _queuedNext.Count > 0 ? _queuedNext[0].Id : (Guid?)null;
+            }
+            else
+            {
+                // Track isn't queued — reset
+                _playingQueuedInstanceId = null;
+            }
 
-                if (_engine.CurrentIndex >= _engine.PlayOrder.Count - 1)
-                {
-                    if (_repeatMode == RepeatMode.Playlist)
-                    {
-                        _engine.SetQueue(_engine.PlayOrder, startIndex: 0, raiseNowPlayingChanged: true);
-                        await _engine.PlayCurrentAsync();
-                    }
-                    return;
-                }
-                await _engine.NextAsync();
+            // 2. Repeat:Single
+            if (_repeatMode == RepeatMode.Single)
+            {
+                await _engine.PlayCurrentAsync();
                 return;
             }
 
-            switch (_repeatMode)
+            // 3. End of play order checks
+            if (_engine.PlayOrder.Count == 0)
+                return;
+            if (_engine.CurrentIndex >= _engine.PlayOrder.Count - 1)
             {
-                case RepeatMode.Single:
+                if (_repeatMode == RepeatMode.Playlist)
+                {
+                    _engine.SetQueue(_engine.PlayOrder, startIndex: 0, raiseNowPlayingChanged: true);
                     await _engine.PlayCurrentAsync();
-                    return;
-                case RepeatMode.Playlist:
-                    if (_engine.PlayOrder.Count == 0)
-                        return;
-                    if (_engine.CurrentIndex >= _engine.PlayOrder.Count - 1)
-                    {
-                        _engine.SetQueue(_engine.PlayOrder, startIndex: 0, raiseNowPlayingChanged: true);
-                        await _engine.PlayCurrentAsync();
-                        return;
-                    }
-                    await _engine.NextAsync();
-                    return;
-                default:
-                    // None: fall through to normal next, but stop at end.
-                    if (_engine.PlayOrder.Count == 0)
-                        return;
-                    if (_engine.CurrentIndex >= _engine.PlayOrder.Count - 1)
-                        return;
-                    await _engine.NextAsync();
-                    return;
+                }
+                return;
             }
+
+            // 4. Advance to next track
+            await _engine.NextAsync();
         });
 
         _shuffleEnabled = _startupSettings.ShuffleEnabled ?? false;
@@ -1192,7 +1208,6 @@ public partial class MainWindow : Window
         };
 
     }
-
     private async Task EnrichLocalNowPlayingAsync(PlaylistEntry? entry)
     {
         try
@@ -1345,7 +1360,7 @@ public partial class MainWindow : Window
                 break;
             }
 
-            if (_currentEntries is List<PlaylistEntry> curList)
+            if (_originalEntries is List<PlaylistEntry> curList)
             {
                 for (var i = 0; i < curList.Count; i++)
                 {
@@ -1383,22 +1398,45 @@ public partial class MainWindow : Window
                 catch { /* ignore */ }
             }
 
-            // Update queue UI item by replacing the QueueItem instance.
-            if (_queueItemById.TryGetValue(videoId, out var existing))
+            // Update playlist items by VideoId
+            for (var i = 0; i < _playlistItems.Count; i++)
             {
-                var idx = _queueItems.IndexOf(existing);
-                if (idx >= 0)
+                if (_playlistItems[i].IsQueued) continue;
+                if (!string.Equals(_playlistItems[i].VideoId, videoId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var orig = _playlistItems[i];
+                var updatedEntry2 = orig.Entry! with { Title = string.IsNullOrWhiteSpace(title) ? 
+                    orig.Entry.Title : title!, Channel = artist, DurationSeconds = durationSeconds };
+                _playlistItems[i] = new QueueItem(updatedEntry2, orig.IndexPrefix)
                 {
-                    var replacement = new QueueItem(updatedEntry, existing.IndexPrefix)
-                    {
-                        IsUnavailable = existing.IsUnavailable,
-                        IsAgeRestricted = existing.IsAgeRestricted,
-                        IsPremium = existing.IsPremium,
-                        IsNowPlaying = existing.IsNowPlaying,
-                    };
-                    _queueItems[idx] = replacement;
-                    _queueItemById[videoId] = replacement;
-                }
+                    BaseIndex = orig.BaseIndex,
+                    IsInQueue = orig.IsInQueue,
+                    IsUnavailable = orig.IsUnavailable,
+                    IsAgeRestricted = orig.IsAgeRestricted,
+                    IsPremium = orig.IsPremium,
+                    IsNowPlaying = orig.IsNowPlaying,
+                };
+            }
+
+            // Update queue items by VideoId
+            for (var i = 0; i < _queueItems.Count; i++)
+            {
+                if (!_queueItems[i].IsQueued) continue;
+                if (!string.Equals(_queueItems[i].VideoId, videoId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var orig = _queueItems[i];
+                var updatedEntry2 = orig.Entry! with { Title = string.IsNullOrWhiteSpace(title) ? 
+                    orig.Entry.Title : title!, Channel = artist, DurationSeconds = durationSeconds };
+                _queueItems[i] = new QueueItem(updatedEntry2, orig.IndexPrefix)
+                {
+                    IsQueued = true,
+                    QueueOrdinal = orig.QueueOrdinal,
+                    QueueInstanceId = orig.QueueInstanceId,
+                    IsUnavailable = orig.IsUnavailable,
+                    IsAgeRestricted = orig.IsAgeRestricted,
+                    IsPremium = orig.IsPremium,
+                    IsNowPlaying = orig.IsNowPlaying,
+                };
             }
         }
         catch
@@ -2906,33 +2944,7 @@ public partial class MainWindow : Window
             }
 
             _playlistWindow = new PlaylistWindow(
-                loadUrlAsync: async (src) =>
-                {
-                    _playlistSourceText = src;
-
-                    // Accept direct stream URLs (Icecast/Shoutcast/etc) as a single-item playlist.
-                    if (TryParseHttpUrl(src, out var uri) && !LooksLikeYoutube(uri))
-                    {
-                        _lastPlaylistSourceType = PlaylistSourceType.M3U;
-                        _lastLocalPlaylistPath = src;
-
-                        var entries = new List<PlaylistEntry>
-                        {
-                            new PlaylistEntry(
-                                VideoId: StreamIdFromUrl(src),
-                                Title: uri.Host,
-                                Channel: null,
-                                DurationSeconds: null,
-                                WebpageUrl: src
-                            )
-                        };
-
-                        await LoadPlaylistFromEntriesAsync(entries, title: uri.Host, sourceKey: src, isStartupAutoLoad: false);
-                        return;
-                    }
-
-                    await LoadPlaylistFromSourceAsync(forceFetch: false, isStartupAutoLoad: false);
-                },
+                loadUrlAsync: async (src) => await LoadUrlAsync(src, CancellationToken.None).ConfigureAwait(true),
                 getSearchDefaults: () => (_searchDefaultCount, _searchMinLengthSeconds),
                 setSearchDefaults: (count, minLenSeconds) =>
                 {
@@ -2941,6 +2953,7 @@ public partial class MainWindow : Window
                     RequestPersistSnapshot();
                 },
                 openYoutubeModalAsync: async (owner, ct) => await OpenYoutubeModalAsync(owner, ct).ConfigureAwait(true),
+                openLocalFilesModalAsync: async (owner, ct) => await OpenLocalFilesModalAsync(owner, ct).ConfigureAwait(true),
                 applySortAsync: async (spec, ct) => await ApplyPlaylistSortAsync(spec, ct).ConfigureAwait(true),
                 getIsYoutubeSource: () => IsYoutubeLikeSource(_lastPlaylistSourceType),
                 savePlaylistToFileAsync: async (path, displayName) =>
@@ -2948,19 +2961,41 @@ public partial class MainWindow : Window
                     try
                     {
                         var name = string.IsNullOrWhiteSpace(displayName) ? (_playlistTitle ?? "Playlist") : displayName.Trim();
-                        var srcType = _lastPlaylistSourceType.ToString();
-                        var src = _playlistSourceText ?? "";
-                        var pl = SavedPlaylistFile.FromEntries(
-                            name,
-                            srcType,
-                            src,
-                            _originalEntries,
-                            originInfoByVideoId: _playlistOriginByVideoId.ToDictionary(
+                        var ext = (Path.GetExtension(path) ?? "").Trim().ToLowerInvariant();
+                        if (ext is ".m3u" or ".m3u8")
+                        {
+                            var origin = _playlistOriginByVideoId.ToDictionary(
                                 k => k.Key,
                                 v => new LyllyPlayer.Models.SavedPlaylistOrigin(v.Value.Label, v.Value.Source),
-                                StringComparer.OrdinalIgnoreCase));
-                        SavedPlaylistFile.Save(path, pl);
-                        ShowInfoToast($"Saved playlist: {Path.GetFileName(path)}");
+                                StringComparer.OrdinalIgnoreCase);
+                            LyllyPlayer.Utils.M3uPlaylistFile.Save(
+                                path,
+                                name,
+                                _originalEntries,
+                                new LyllyPlayer.Utils.M3uPlaylistFile.ExportOptions(
+                                    IncludeYoutube: _exportM3uIncludeYoutube,
+                                    PreferRelativePaths: _exportM3uPreferRelativePaths,
+                                    IncludeLyllyMetadata: _exportM3uIncludeLyllyMetadata
+                                ),
+                                originInfoByVideoId: origin);
+                            ShowInfoToast($"Saved M3U: {Path.GetFileName(path)}");
+                        }
+                        else
+                        {
+                            var srcType = _lastPlaylistSourceType.ToString();
+                            var src = _playlistSourceText ?? "";
+                            var pl = SavedPlaylistFile.FromEntries(
+                                name,
+                                srcType,
+                                src,
+                                _originalEntries,
+                                originInfoByVideoId: _playlistOriginByVideoId.ToDictionary(
+                                    k => k.Key,
+                                    v => new LyllyPlayer.Models.SavedPlaylistOrigin(v.Value.Label, v.Value.Source),
+                                    StringComparer.OrdinalIgnoreCase));
+                            SavedPlaylistFile.Save(path, pl);
+                            ShowInfoToast($"Saved playlist: {Path.GetFileName(path)}");
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -3077,7 +3112,45 @@ public partial class MainWindow : Window
                 doubleClickPlayAsync: async (videoId) =>
                 {
                     if (_engine.PlayOrder.Count == 0) return;
-                    var playIdx = FindPlayOrderIndexByVideoId(videoId);
+                    var playIdx = -1;
+                    if (!string.IsNullOrWhiteSpace(videoId) &&
+                        videoId.StartsWith("queue:", StringComparison.OrdinalIgnoreCase) &&
+                        Guid.TryParse(videoId["queue:".Length..], out var qid))
+                    {
+                        try
+                        {
+                            var inst = _queuedNext.FirstOrDefault(q => q.Id == qid);
+                            if (inst is not null)
+                            {
+                                _manualQueuedPlayInstanceId = qid;
+                                // _currentEntries = BuildEffectivePlayOrder(inst.Entry, _shuffleEnabled).ToList();
+                                playIdx = _originalEntries.FindIndex(e => e.VideoId.Equals(inst.Entry.VideoId));
+                                _engine.SetQueue(_originalEntries, startIndex: playIdx, raiseNowPlayingChanged: true);
+                            }
+                        }
+                        catch { /* ignore */ }
+                    }
+                    else
+                    {
+                        // Manual play from base playlist: rebuild effective order around this new "current"
+                        // so the next track becomes the first queued item (not the next shuffled base item).
+                        var selectedEntry = _originalEntries.FirstOrDefault(e =>
+                            string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
+                        if (selectedEntry is null)
+                        {
+                            playIdx = FindPlayOrderIndexByVideoId(videoId);
+                        }
+                        else
+                        {
+                            _manualQueuedPlayInstanceId = null;
+                            //_currentEntries = BuildEffectivePlayOrder(selectedEntry, _shuffleEnabled).ToList();
+                            playIdx = _originalEntries.FindIndex(e => e.VideoId.Equals(selectedEntry.VideoId));
+                            if (playIdx < 0)
+                                playIdx = FindIndexByVideoId(_originalEntries, selectedEntry.VideoId);
+                            if (playIdx >= 0)
+                                _engine.SetQueue(_originalEntries, startIndex: playIdx, raiseNowPlayingChanged: true);
+                        }
+                    }
                     if (playIdx < 0)
                     {
                         try { AppLog.Warn($"Double-click play: VideoId not in current play order ({videoId})."); } catch { /* ignore */ }
@@ -3092,6 +3165,30 @@ public partial class MainWindow : Window
                     _engine.SetQueue(_engine.PlayOrder, startIndex: playIdx, raiseNowPlayingChanged: true);
                     UpdateTimelineUi();
                     await _engine.PlayCurrentAsync();
+                },
+                addToQueueAsync: (entry) =>
+                {
+                    try
+                    {
+                        AddToQueue(entry);
+                        // NO rebuild needed - queue is handled separately
+                        RequestPersistSnapshot();
+                    }
+                    catch { /* ignore */ }
+                    return Task.CompletedTask;
+                },
+                removeQueuedInstanceAsync: (id) =>
+                {
+                    try
+                    {
+                        if (RemoveQueuedInstance(id))
+                        {
+                            // NO rebuild needed
+                            RequestPersistSnapshot();
+                        }
+                    }
+                    catch { /* ignore */ }
+                    return Task.CompletedTask;
                 }
             )
             {
@@ -3156,7 +3253,7 @@ public partial class MainWindow : Window
                 // If user closes Playlist, clear the compact "pin open" override.
                 _compactUserOpenedPlaylistWindow = false;
             };
-            _playlistWindow.SetItemsSource(_queueItems);
+            _playlistWindow.SetItemsSource(_queueItems, _playlistItems);
             UpdateRefreshEnabled();
             try { _playlistWindow.ApplyPersistedPlaylistFilter(latestSettings.PlaylistWindowFilter); } catch { /* ignore */ }
             ApplyPlaylistWindowSettings(latestSettings, _playlistWindow);
@@ -3168,6 +3265,14 @@ public partial class MainWindow : Window
             AppLog.Info($"Playlist bounds (open) pre-show: L={_playlistWindow.Left} T={_playlistWindow.Top} W={_playlistWindow.Width} H={_playlistWindow.Height} State={_playlistWindow.WindowState}");
             try { _playlistWindow.BeginSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
             _playlistWindow.Show();
+            try
+            {
+                var current = _engine.GetCurrent();
+                if (current is not null)
+                {
+                    _playlistWindow.CenterNowPlaying(current);
+                }
+            } catch { /* ignore */ }
             ApplyAlwaysOnTopFromSettings();
             // Restore snapped positioning relative to main window if previously snapped.
             try
@@ -3251,9 +3356,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // Ensure it's visible even if centering math bails out.
-            _playlistWindow.ScrollToIndex(idx);
-            _playlistWindow.CenterIndex(idx);
+            //try { _playlistWindow.CenterNowPlaying(cur); } catch { /* ignore */ }
         }
         catch
         {
@@ -3274,6 +3377,14 @@ public partial class MainWindow : Window
             listAccountPlaylistsAsync: async (count, ct) => await _ytDlp.ResolveAccountPlaylistsBestEffortAsync(count, ct).ConfigureAwait(true),
             importPlaylistAsync: async (urlOrId, append, dedupe, ct) => await ImportYoutubePlaylistAsync(urlOrId, append, dedupe, ct).ConfigureAwait(true),
             tryGetPlaylistItemCountAsync: async (urlOrId, ct) => await _ytDlp.TryGetPlaylistItemCountBestEffortAsync(urlOrId, ct).ConfigureAwait(true),
+            getLastUrl: () => _lastYoutubeUrl,
+            setLastUrl: url =>
+            {
+                var t = PlaylistSourcePathHeuristics.SanitizePersistedLastYoutubeUrl(url);
+                if (!string.IsNullOrEmpty(t))
+                    _lastYoutubeUrl = t;
+            },
+            openUrlAsync: async (url, ct) => await LoadUrlAsync(url, ct).ConfigureAwait(true),
             searchDefaults: (_searchDefaultCount, _searchMinLengthSeconds),
             importAppendDefault: _youtubeImportAppend,
             setImportAppendDefault: v =>
@@ -3292,6 +3403,81 @@ public partial class MainWindow : Window
 
         try { dlg.Title = $"{GetAppTitleBase()} — YouTube"; } catch { /* ignore */ }
         // Modeless: allow interacting with Playlist/Main while the YouTube modal is open.
+        dlg.ShowActivated = true;
+        dlg.Show();
+        return Task.CompletedTask;
+    }
+
+    private async Task LoadUrlAsync(string src, CancellationToken ct)
+    {
+        var s = (src ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(s))
+            return;
+
+        ct.ThrowIfCancellationRequested();
+
+        _playlistSourceText = s;
+
+        // Accept direct stream URLs (Icecast/Shoutcast/etc) as a single-item playlist.
+        if (TryParseHttpUrl(s, out var uri) && !LooksLikeYoutube(uri))
+        {
+            _lastPlaylistSourceType = PlaylistSourceType.M3U;
+            _lastLocalPlaylistPath = s;
+
+            var entries = new List<PlaylistEntry>
+            {
+                new PlaylistEntry(
+                    VideoId: StreamIdFromUrl(s),
+                    Title: uri.Host,
+                    Channel: null,
+                    DurationSeconds: null,
+                    WebpageUrl: s
+                )
+            };
+
+            await LoadPlaylistFromEntriesAsync(entries, title: uri.Host, sourceKey: s, isStartupAutoLoad: false, cancellationToken: ct).ConfigureAwait(true);
+            return;
+        }
+
+        await LoadPlaylistFromSourceAsync(forceFetch: false, isStartupAutoLoad: false).ConfigureAwait(true);
+    }
+
+    private Task OpenLocalFilesModalAsync(Window owner, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var dlg = new LocalFilesModal(
+            getAppendDefault: () => _localImportAppend,
+            setAppendDefault: v =>
+            {
+                try
+                {
+                    _localImportAppend = v;
+                    SaveSettingsSnapshot();
+                }
+                catch { /* ignore */ }
+            },
+            getRemoveDuplicatesDefault: () => _localImportRemoveDuplicates,
+            setRemoveDuplicatesDefault: v =>
+            {
+                try
+                {
+                    _localImportRemoveDuplicates = v;
+                    SaveSettingsSnapshot();
+                }
+                catch { /* ignore */ }
+            },
+            getReadMetadataOnLoad: () => _readMetadataOnLoad,
+            getIncludeSubfoldersOnFolderLoad: () => _includeSubfoldersOnFolderLoad,
+            addFolderAsync: async (folder, append, dedupe, forceNoMetadata, ct, progress) =>
+                await AddFolderAsync(folder, append, dedupe, forceNoMetadata, ct, progress).ConfigureAwait(true),
+            addFilesAsync: async (files, append, dedupe, ct, progress) => await AddFilesAsync(files, append, dedupe, ct, progress).ConfigureAwait(true)
+        )
+        {
+            Owner = owner,
+        };
+
+        try { dlg.Title = $"{GetAppTitleBase()} — Local files"; } catch { /* ignore */ }
         dlg.ShowActivated = true;
         dlg.Show();
         return Task.CompletedTask;
@@ -3331,6 +3517,201 @@ public partial class MainWindow : Window
             try { RollbackCancelPlaylistSnapshot(); } catch { /* ignore */ }
             throw;
         }
+    }
+
+    private async Task AddFolderAsync(
+    string folder,
+    bool append,
+    bool removeDuplicates,
+    bool forceNoMetadata,
+    CancellationToken cancellationToken,
+    IProgress<(int done, int total)>? progress = null)  // <-- new parameter
+    {
+        var f = (folder ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(f))
+            return;
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var includeSub = _includeSubfoldersOnFolderLoad;
+        var readMeta = _readMetadataOnLoad && !forceNoMetadata;
+
+        var entries = await LocalPlaylistLoader.LoadFolderAsync(
+            f,
+            includeSub,
+            _ffmpegPath,
+            readMetadataOnLoad: readMeta,
+            cancellationToken,
+            metadataProgress: progress).ConfigureAwait(true);
+
+        var title = "";
+        try { title = Path.GetFileName(f.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)); } catch { title = ""; }
+        if (string.IsNullOrWhiteSpace(title))
+            title = "Folder";
+
+        if (!append)
+        {
+            _lastPlaylistSourceType = PlaylistSourceType.Folder;
+            _lastLocalPlaylistPath = f;
+            _playlistSourceText = f;
+            await LoadPlaylistFromEntriesAsync(entries, title: title, sourceKey: f, isStartupAutoLoad: false, cancellationToken: cancellationToken).ConfigureAwait(true);
+            return;
+        }
+
+        AppendEntriesPreserveCurrent(entries, originLabel: title, originSource: f, removeDuplicates, cancellationToken);
+    }
+
+    private async Task AddFilesAsync(IReadOnlyList<string> files, bool append, bool removeDuplicates, CancellationToken cancellationToken, IProgress<(int done, int total)>? progress = null)
+    {
+        var list = files?.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim()).Where(p => p.Length > 0).ToList()
+                   ?? new List<string>();
+        if (list.Count == 0)
+            return;
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var readMeta = _readMetadataOnLoad;
+        var entries = await LoadLocalFilesEntriesAsync(list, readMeta, cancellationToken, progress).ConfigureAwait(true);
+
+        var title = list.Count == 1 ? "File" : "Files";
+        var sourceKey = list.Count == 1 ? list[0] : "Local files";
+
+        if (!append)
+        {
+            _lastPlaylistSourceType = PlaylistSourceType.Folder;
+            _lastLocalPlaylistPath = sourceKey;
+            _playlistSourceText = sourceKey;
+            await LoadPlaylistFromEntriesAsync(entries, title: title, sourceKey: sourceKey, isStartupAutoLoad: false, cancellationToken: cancellationToken).ConfigureAwait(true);
+            return;
+        }
+
+        AppendEntriesPreserveCurrent(entries, originLabel: title, originSource: sourceKey, removeDuplicates, cancellationToken);
+    }
+
+    private async Task<List<PlaylistEntry>> LoadLocalFilesEntriesAsync(IReadOnlyList<string> files, bool readMetadata, CancellationToken ct, IProgress<(int done, int total)>? progress = null)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var done = 0;
+
+        if (!readMetadata)
+        {
+            var acc = new List<PlaylistEntry>(files.Count);
+            foreach (var file in files)
+            {
+                ct.ThrowIfCancellationRequested();
+                var t = "";
+                try { t = Path.GetFileNameWithoutExtension(file); } catch { t = file; }
+                acc.Add(new PlaylistEntry(
+                    VideoId: LocalPlaylistLoader.CreateLocalIdFromPath(file),
+                    Title: t,
+                    Channel: null,
+                    DurationSeconds: null,
+                    WebpageUrl: file));
+                progress?.Report((Interlocked.Increment(ref done), files.Count));
+            }
+            return acc;
+        }
+
+        using var sem = new SemaphoreSlim(4, 4);
+        async Task<PlaylistEntry> OneAsync(string file)
+        {
+            var title = "";
+            try { title = Path.GetFileNameWithoutExtension(file); } catch { title = file; }
+            string? artist = null;
+            int? duration = null;
+            await sem.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                var info = await LocalMetadataService.TryGetInfoAsync(_ffmpegPath, file, ct).ConfigureAwait(false);
+                if (info is not null)
+                {
+                    if (!string.IsNullOrWhiteSpace(info.Title))
+                        title = info.Title!.Trim();
+                    artist = string.IsNullOrWhiteSpace(info.Artist) ? null : info.Artist.Trim();
+                    duration = info.DurationSeconds is > 0 ? info.DurationSeconds : null;
+                }
+                progress?.Report((Interlocked.Increment(ref done), files.Count));
+            }
+            catch { /* ignore */ }
+            finally { try { sem.Release(); } catch { /* ignore */ } }
+
+            return new PlaylistEntry(
+                VideoId: LocalPlaylistLoader.CreateLocalIdFromPath(file),
+                Title: title,
+                Channel: artist,
+                DurationSeconds: duration,
+                WebpageUrl: file);
+        }
+
+        var res = await Task.WhenAll(files.Select(OneAsync)).ConfigureAwait(false);
+        return res.ToList();
+    }
+
+    private void AppendEntriesPreserveCurrent(
+        IReadOnlyList<PlaylistEntry> toAppend,
+        string originLabel,
+        string originSource,
+        bool removeDuplicates,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var cur = _engine.GetCurrent();
+
+        var appended = toAppend?.ToList() ?? new List<PlaylistEntry>();
+        if (removeDuplicates)
+            appended = RemoveLocalDuplicatesByFullPath(appended);
+
+        if (appended.Count == 0)
+            return;
+
+        _playlistIsCompound = true;
+        UpdateRefreshEnabled();
+
+        foreach (var e in appended)
+            _originalEntries.Add(e);
+
+        // Per-item origins for appended entries.
+        foreach (var e in appended)
+            _playlistOriginByVideoId[e.VideoId] = new PlaylistOriginInfo(originLabel, originSource);
+
+        // Rebuild play order around the current track; do not change playback.
+        // RebuildEffectivePlayOrderPreserveCurrent(raiseNowPlayingChanged: false);
+        _engine.SetQueue(_originalEntries, startIndex: _engine.CurrentIndex); // , raiseNowPlayingChanged: false);
+        SetQueueList(_originalEntries, selectedIndex: -1);
+        UpdatePlaylistTitleDisplayForNowPlaying();
+        RequestPersistSnapshot();
+    }
+
+    private List<PlaylistEntry> RemoveLocalDuplicatesByFullPath(List<PlaylistEntry> entries)
+    {
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var e in _originalEntries.ToArray())
+        {
+            if (LocalPlaylistLoader.TryGetLocalPath(e.WebpageUrl, out var p))
+                existing.Add(NormalizeLocalPathKey(p));
+        }
+
+        var acc = new List<PlaylistEntry>(entries.Count);
+        foreach (var e in entries)
+        {
+            if (LocalPlaylistLoader.TryGetLocalPath(e.WebpageUrl, out var p))
+            {
+                var k = NormalizeLocalPathKey(p);
+                if (existing.Contains(k))
+                    continue;
+                existing.Add(k);
+            }
+            acc.Add(e);
+        }
+        return acc;
+    }
+
+    private static string NormalizeLocalPathKey(string path)
+    {
+        try { return Path.GetFullPath(path).Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
+        catch { return (path ?? "").Trim(); }
     }
 
     private async Task ImportYoutubePlaylistAsync(string playlistUrlOrId, bool append, bool dedupe, CancellationToken cancellationToken)
@@ -3398,9 +3779,9 @@ public partial class MainWindow : Window
 
         // Apply list without stopping playback; preserve current track if possible.
         _originalEntries = merged;
-        _currentEntries = BuildPlayOrder(_originalEntries, shuffle: _shuffleEnabled).ToList();
-        var startIndex = FindIndexByVideoId(_currentEntries, curId);
-        _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : (startIndex >= 0 ? startIndex : 0), raiseNowPlayingChanged: false);
+        //_currentEntries = BuildEffectivePlayOrder(_engine.GetCurrent(), _shuffleEnabled).ToList();
+        var startIndex = FindIndexByVideoId(_originalEntries, curId);
+        _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : (startIndex >= 0 ? startIndex : 0), raiseNowPlayingChanged: false);
 
         var displayIndex = GetOriginalIndexByVideoId(curId) ?? 0;
         SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
@@ -3457,10 +3838,39 @@ public partial class MainWindow : Window
             return LocalFileNameFallback(e);
         }
 
-        string ChannelOrPathKey(PlaylistEntry e)
+        string SourceKey(PlaylistEntry e)
         {
+            try
+            {
+                if (_playlistOriginByVideoId.TryGetValue(e.VideoId, out var origin))
+                    return (origin.Label ?? "").Trim();
+            }
+            catch { /* ignore */ }
+
             if (isYoutube)
                 return (e.Channel ?? "").Trim();
+
+            try
+            {
+                if (LocalPlaylistLoader.TryGetLocalPath(e.WebpageUrl, out var p))
+                {
+                    var dir = Path.GetDirectoryName(p) ?? "";
+                    var name = string.IsNullOrWhiteSpace(dir) ? "" : (Path.GetFileName(dir) ?? dir);
+                    return name;
+                }
+            }
+            catch { /* ignore */ }
+
+            try
+            {
+                var u = (e.WebpageUrl ?? "").Trim();
+                if (Uri.TryCreate(u, UriKind.Absolute, out var uri) &&
+                    (uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ||
+                     uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase)))
+                    return (uri.Host ?? "").Trim();
+            }
+            catch { /* ignore */ }
+
             return LocalPathOrUrl(e);
         }
 
@@ -3473,7 +3883,7 @@ public partial class MainWindow : Window
                     .OrderByDescending(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
                 PlaylistSortMode.ChannelOrPath => _originalEntries
-                    .OrderByDescending(ChannelOrPathKey, StringComparer.OrdinalIgnoreCase)
+                    .OrderByDescending(SourceKey, StringComparer.OrdinalIgnoreCase)
                     .ThenByDescending(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
                 PlaylistSortMode.Duration => _originalEntries
@@ -3493,7 +3903,7 @@ public partial class MainWindow : Window
                     .OrderBy(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
                 PlaylistSortMode.ChannelOrPath => _originalEntries
-                    .OrderBy(ChannelOrPathKey, StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(SourceKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
                 PlaylistSortMode.Duration => _originalEntries
@@ -3509,9 +3919,9 @@ public partial class MainWindow : Window
         var sorted = ordered.ToList();
 
         _originalEntries = sorted;
-        _currentEntries = BuildPlayOrder(_originalEntries, shuffle: _shuffleEnabled).ToList();
-        var startIndex = FindIndexByVideoId(_currentEntries, curId);
-        _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : (startIndex >= 0 ? startIndex : 0), raiseNowPlayingChanged: false);
+        //_currentEntries = BuildEffectivePlayOrder(_engine.GetCurrent(), _shuffleEnabled).ToList();
+        var startIndex = FindIndexByVideoId(_originalEntries, curId);
+        _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : (startIndex >= 0 ? startIndex : 0), raiseNowPlayingChanged: false);
 
         var displayIndex = GetOriginalIndexByVideoId(curId) ?? 0;
         SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
@@ -3761,6 +4171,24 @@ public partial class MainWindow : Window
                     _keepIncompletePlaylistOnCancel = v;
                     RequestPersistSnapshot();
                 },
+                getExportM3uIncludeYoutube: () => _exportM3uIncludeYoutube,
+                setExportM3uIncludeYoutube: (v) =>
+                {
+                    _exportM3uIncludeYoutube = v;
+                    RequestPersistSnapshot();
+                },
+                getExportM3uPreferRelativePaths: () => _exportM3uPreferRelativePaths,
+                setExportM3uPreferRelativePaths: (v) =>
+                {
+                    _exportM3uPreferRelativePaths = v;
+                    RequestPersistSnapshot();
+                },
+                getExportM3uIncludeLyllyMetadata: () => _exportM3uIncludeLyllyMetadata,
+                setExportM3uIncludeLyllyMetadata: (v) =>
+                {
+                    _exportM3uIncludeLyllyMetadata = v;
+                    RequestPersistSnapshot();
+                },
                 getAppIconVisibility: () => _appIconVisibility,
                 setAppIconVisibility: (v) =>
                 {
@@ -3900,11 +4328,12 @@ public partial class MainWindow : Window
             var desiredTop = _playlistSnapEdge switch
             {
                 PlaylistSnapEdge.Bottom => mainBottom + SnapGapPx,
+                PlaylistSnapEdge.Top => mainTop - pl.Height - SnapGapPx,
                 _ => mainTop + _playlistDockYOffset
             };
 
             // For bottom snap we preserve horizontal offset.
-            if (_playlistSnapEdge == PlaylistSnapEdge.Bottom)
+            if (_playlistSnapEdge == PlaylistSnapEdge.Bottom || _playlistSnapEdge == PlaylistSnapEdge.Top)
                 desiredLeft = mainLeft + _playlistDockXOffset;
 
             // If the computed snapped position would be mostly off-screen (monitor changes / DPI changes),
@@ -4020,6 +4449,14 @@ public partial class MainWindow : Window
                     var intendedTop = main.Bottom + gap;
                     candidates.Add(ClampToWork(work, left, intendedTop));
                     candidates.Add(ClampToWork(work, left, main.Top - plH - gap));
+                    candidates.Add(ClampToWork(work, main.Right + gap, intendedTop));
+                    candidates.Add(ClampToWork(work, main.Left - plW - gap, intendedTop));
+                }
+                else if (snap == PlaylistSnapEdge.Top)
+                {
+                    var intendedTop = main.Top - plH - gap;
+                    candidates.Add(ClampToWork(work, left, intendedTop));
+                    candidates.Add(ClampToWork(work, left, main.Bottom + gap));
                     candidates.Add(ClampToWork(work, main.Right + gap, intendedTop));
                     candidates.Add(ClampToWork(work, main.Left - plW - gap, intendedTop));
                 }
@@ -4359,10 +4796,12 @@ public partial class MainWindow : Window
             var desiredRightLeft = mainRight + SnapGapPx;
             var desiredLeftLeft = mainLeft - pl.Width - SnapGapPx;
             var desiredBottomTop = mainBottom + SnapGapPx;
+            var desiredTopTop = mainTop - pl.Height - SnapGapPx;
 
             var distToRight = Math.Abs(plLeft - desiredRightLeft);
             var distToLeft = Math.Abs(plLeft - desiredLeftLeft);
             var distToBottom = Math.Abs(plTop - desiredBottomTop);
+            var distToTop = Math.Abs(plTop - desiredTopTop);
 
             // If already snapped, keep snapped unless user drags far away.
             if (_playlistSnapped)
@@ -4379,6 +4818,7 @@ public partial class MainWindow : Window
                     PlaylistSnapEdge.Right => desiredRightLeft,
                     PlaylistSnapEdge.Left => desiredLeftLeft,
                     PlaylistSnapEdge.Bottom => desiredBottomTop,
+                    PlaylistSnapEdge.Top => desiredTopTop,
                     _ => double.NaN
                 };
 
@@ -4392,6 +4832,7 @@ public partial class MainWindow : Window
                     desiredFeasible = works.Any(work => _playlistSnapEdge switch
                     {
                         PlaylistSnapEdge.Bottom => desired >= work.Top - 1 && desired <= work.Bottom - pl.Height + 1,
+                        PlaylistSnapEdge.Top => desired >= work.Top - 1 && desired <= work.Bottom - pl.Height + 1,
                         PlaylistSnapEdge.Right or PlaylistSnapEdge.Left => desired >= work.Left - 1 && desired <= work.Right - pl.Width + 1,
                         _ => true
                     });
@@ -4400,7 +4841,7 @@ public partial class MainWindow : Window
 
                 var movedFar = _playlistSnapEdge switch
                 {
-                    PlaylistSnapEdge.Bottom => (desiredFeasible && Math.Abs(plTop - desired) > SnapUnsnapPx) || !hasHOverlap,
+                    PlaylistSnapEdge.Bottom or PlaylistSnapEdge.Top => (desiredFeasible && Math.Abs(plTop - desired) > SnapUnsnapPx) || !hasHOverlap,
                     _ => (desiredFeasible && Math.Abs(plLeft - desired) > SnapUnsnapPx) || !hasOverlap
                 };
 
@@ -4414,7 +4855,7 @@ public partial class MainWindow : Window
                 // Update dock offsets only when we are actually at the intended snapped coordinates.
                 // If we had to clamp to keep the window visible (monitor/work-area changed), do NOT overwrite
                 // the user's chosen offset — otherwise a successful safety placement would "forget" it.
-                if (_playlistSnapEdge == PlaylistSnapEdge.Bottom)
+                if (_playlistSnapEdge == PlaylistSnapEdge.Bottom || _playlistSnapEdge == PlaylistSnapEdge.Top)
                 {
                     var expectedLeft = mainLeft + _playlistDockXOffset;
                     if (Math.Abs(plLeft - expectedLeft) <= Math.Max(2.0, SnapThresholdPx))
@@ -4453,6 +4894,15 @@ public partial class MainWindow : Window
                 _playlistSnapEdge = PlaylistSnapEdge.Bottom;
                 _playlistDockXOffset = plLeft - mainLeft;
                 SnapPlaylistToEdge(mainLeft + _playlistDockXOffset, desiredBottomTop);
+                return;
+            }
+
+            if (hasHOverlap && distToTop <= SnapThresholdPx)
+            {
+                _playlistSnapped = true;
+                _playlistSnapEdge = PlaylistSnapEdge.Top;
+                _playlistDockXOffset = plLeft - mainLeft;
+                SnapPlaylistToEdge(mainLeft + _playlistDockXOffset, desiredTopTop);
                 return;
             }
 
@@ -4919,19 +5369,19 @@ public partial class MainWindow : Window
                     _originalEntries = cached.Entries.ToList();
                     // Only apply saved play-order from startup settings on initial app startup.
                     var applyIds = !_hasLoadedPlaylist ? _startupSettings.PlayOrderVideoIds : null;
-                    _currentEntries = ApplySavedOrderIfAny(_originalEntries, applyIds, shuffle: _shuffleEnabled).ToList();
+                    // _currentEntries = ApplySavedOrderIfAny(_originalEntries, applyIds, shuffle: _shuffleEnabled).ToList();
 
                     var cacheStartIndex = 0;
                     var cacheDesiredId = isStartupAutoLoad ? _startupSettings.CurrentVideoId : (_originalEntries.Count > 0 ? _originalEntries[0].VideoId : null);
                     if (!string.IsNullOrWhiteSpace(cacheDesiredId))
                     {
-                        var idx = FindIndexByVideoId(_currentEntries, cacheDesiredId);
-                        if (idx >= 0 && idx < _currentEntries.Count)
+                        var idx = FindIndexByVideoId(_originalEntries, cacheDesiredId);
+                        if (idx >= 0 && idx < _originalEntries.Count)
                             cacheStartIndex = idx;
                     }
 
                     var cacheDisplayIndex = GetOriginalIndexByVideoId(cacheDesiredId) ?? 0;
-                    _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : cacheStartIndex, raiseNowPlayingChanged: true);
+                    _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : cacheStartIndex, raiseNowPlayingChanged: true);
                     SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : cacheDisplayIndex);
                     _hasLoadedPlaylist = true;
                     UpdateRefreshEnabled();
@@ -4975,7 +5425,7 @@ public partial class MainWindow : Window
             _originalEntries = entries.ToList();
             // Only apply saved play-order from startup settings on initial app startup.
             var applyIds2 = !_hasLoadedPlaylist ? _startupSettings.PlayOrderVideoIds : null;
-            _currentEntries = ApplySavedOrderIfAny(_originalEntries, applyIds2, shuffle: _shuffleEnabled).ToList();
+            // _currentEntries = ApplySavedOrderIfAny(_originalEntries, applyIds2, shuffle: _shuffleEnabled).ToList();
 
             var startIndex = 0;
             var desiredId = isStartupAutoLoad
@@ -4983,15 +5433,15 @@ public partial class MainWindow : Window
                 : (_originalEntries.Count > 0 ? _originalEntries[0].VideoId : null);
             if (!string.IsNullOrWhiteSpace(desiredId))
             {
-                var idx = FindIndexByVideoId(_currentEntries, desiredId);
-                if (idx >= 0 && idx < _currentEntries.Count)
+                var idx = FindIndexByVideoId(_originalEntries, desiredId);
+                if (idx >= 0 && idx < _originalEntries.Count)
                     startIndex = idx;
             }
 
             SetStatusMessage("INFO", entries.Count == 0 ? "Playlist is empty." : $"Loaded {entries.Count} items.");
             SyncNowPlayingFromEngine();
 
-            _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
+            _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
             // Playlist window always shows original playlist order.
             var displayIndex = GetOriginalIndexByVideoId(desiredId) ?? 0;
             SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
@@ -5050,13 +5500,13 @@ public partial class MainWindow : Window
             var sourceChanged = _hasLoadedPlaylist &&
                                 !string.IsNullOrWhiteSpace(_loadedPlaylistId) &&
                                 !string.Equals(_loadedPlaylistId, sourceKey, StringComparison.OrdinalIgnoreCase);
-            if (sourceChanged)
-            {
+            //if (sourceChanged)
+            //{
                 try { _engine.Stop(); } catch { /* ignore */ }
                 _pendingResumeSeconds = 0;
                 _pendingResumeVideoId = null;
                 ResetTimelineUiToStart();
-            }
+            //}
 
             _loadedPlaylistId = sourceKey;
             _playlistSourceText = sourceKey;
@@ -5065,11 +5515,28 @@ public partial class MainWindow : Window
             _playlistIsCompound = false;
             RebuildPerItemPlaylistOriginsForCurrentPlaylist(title ?? sourceKey, sourceKey);
 
+            // Replacing the playlist clears the transient queue.
+            ClearQueue();
+
             var list = entries?.ToList() ?? new List<PlaylistEntry>();
             _originalEntries = list;
+
+            // Restore queue only for startup auto-load (internal state), not when user explicitly loads a playlist file.
+            if (isStartupAutoLoad && !_hasLoadedPlaylist && _startupSettings.QueuedVideoIds is { Count: > 0 } qids)
+            {
+                foreach (var id in qids)
+                {
+                    if (string.IsNullOrWhiteSpace(id)) continue;
+                    var match = _originalEntries.FirstOrDefault(e => string.Equals(e.VideoId, id, StringComparison.OrdinalIgnoreCase));
+                    if (match is not null)
+                        AddToQueue(match);
+                }
+            }
+
             // Only apply saved play-order from startup settings on initial app startup.
             var applyIds3 = !_hasLoadedPlaylist ? _startupSettings.PlayOrderVideoIds : null;
-            _currentEntries = ApplySavedOrderIfAny(_originalEntries, applyIds3, shuffle: _shuffleEnabled).ToList();
+            // var baseOrder = ApplySavedOrderIfAny(_originalEntries, applyIds3, shuffle: _shuffleEnabled).ToList();
+            // _currentEntries = (_queuedNext.Count == 0 ? baseOrder : _queuedNext.Select(q => q.Entry).Concat(baseOrder)).ToList();
 
             var startIndex = 0;
             var desiredId = isStartupAutoLoad
@@ -5077,14 +5544,14 @@ public partial class MainWindow : Window
                 : (_originalEntries.Count > 0 ? _originalEntries[0].VideoId : null);
             if (!string.IsNullOrWhiteSpace(desiredId))
             {
-                var idx = FindIndexByVideoId(_currentEntries, desiredId);
-                if (idx >= 0 && idx < _currentEntries.Count)
+                var idx = FindIndexByVideoId(_originalEntries, desiredId);
+                if (idx >= 0 && idx < _originalEntries.Count)
                     startIndex = idx;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
             SetPlaylistTitle(title);
-            _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: !deferNowPlayingChanged);
+            _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: !deferNowPlayingChanged);
             var displayIndex = GetOriginalIndexByVideoId(desiredId) ?? 0;
             await SetQueueListAsync(
                 _originalEntries,
@@ -5381,6 +5848,18 @@ public partial class MainWindow : Window
         _ = _engine.PrevAsync();
     }
 
+    private void StopButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _engine.Stop();
+            _pendingResumeSeconds = 0;
+            _pendingResumeVideoId = null;
+            ResetTimelineUiToStart();
+        }
+        catch { /* ignore */ }
+    }
+
     private void PlayPauseButton_OnClick(object sender, RoutedEventArgs e)
     {
         if (_engine.GetCurrent() is null)
@@ -5420,8 +5899,21 @@ public partial class MainWindow : Window
     private void NextButton_OnClick(object sender, RoutedEventArgs e)
     {
         _pendingResumeSeconds = 0;
-        _pendingResumeVideoId = null;
-        _suppressAutoScrollVideoId = null;
+
+        // Consume current track from queue if it's queued (manual Next doesn't fire TrackEnded)
+        if (_nowPlayingEntry is not null && _queuedNext.Count > 0 &&
+            string.Equals(_queuedNext[0].Entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
+        {
+            _queuedNext.RemoveAt(0);
+            if (_queueItems.Count > 0 && _queueItems[0].IsQueued)
+                _queueItems.RemoveAt(0);
+            UpdateQueueOrdinals();
+            _playlistWindow?.RefreshQueueView();
+            RequestPersistSnapshot();
+            if (_queuedNext.Count == 0)
+                try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
+        }
+
         _ = _engine.NextAsync();
     }
 
@@ -5593,7 +6085,11 @@ public partial class MainWindow : Window
                 CompactRepeatButton.SetResourceReference(BackgroundProperty, System.Windows.SystemColors.HighlightBrushKey);
                 CompactRepeatButton.SetResourceReference(ForegroundProperty, System.Windows.SystemColors.HighlightTextBrushKey);
                 CompactRepeatButton.ClearValue(FrameworkElement.ToolTipProperty);
-                CompactRepeatButton.Content = _repeatMode == RepeatMode.Single ? "Ro" : "Ra";
+                CompactRepeatButton.Content = _repeatMode switch
+                {
+                    RepeatMode.Single => "Ro",
+                    _ => "Ra",
+                };
             }
         }
         catch { /* ignore */ }
@@ -5680,22 +6176,22 @@ public partial class MainWindow : Window
             SetPlaylistTitle(resolved.PlaylistTitle);
             var entries = resolved.Entries;
             _originalEntries = entries.ToList();
-            _currentEntries = BuildPlayOrder(_originalEntries, shuffle: _shuffleEnabled).ToList();
+            // _currentEntries = BuildEffectivePlayOrder(_engine.GetCurrent(), _shuffleEnabled).ToList();
             _loadedPlaylistId = playlistId;
 
             var startIndex = 0;
             if (!string.IsNullOrWhiteSpace(currentVideoId))
             {
-                var idx = FindIndexByVideoId(_currentEntries, currentVideoId);
-                if (idx >= 0 && idx < _currentEntries.Count)
+                var idx = FindIndexByVideoId(_originalEntries, currentVideoId);
+                if (idx >= 0 && idx < _originalEntries.Count)
                     startIndex = idx;
             }
 
-            _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
+            _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
             var displayIndex = GetOriginalIndexByVideoId(currentVideoId) ?? 0;
             SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
 
-            SetStatusMessage("INFO", _currentEntries.Count == 0 ? "Playlist is empty." : $"Refreshed {_currentEntries.Count} items.");
+            SetStatusMessage("INFO", _originalEntries.Count == 0 ? "Playlist is empty." : $"Refreshed {_originalEntries.Count} items.");
             SyncNowPlayingFromEngine();
 
             // Update cache so future launches avoid yt-dlp unless refreshed/changed.
@@ -5832,6 +6328,21 @@ public partial class MainWindow : Window
 
     private void UpdateRefreshEnabled()
     {
+        try
+        {
+            // Safety: compound can also be inferred from origins (e.g. loaded from saved playlist file).
+            // If multiple distinct origins exist, treat as compound even if a flag wasn't set.
+            if (!_playlistIsCompound && _playlistOriginByVideoId.Count > 0)
+            {
+                var distinct = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var o in _playlistOriginByVideoId.Values)
+                    distinct.Add($"{o.Label}||{o.Source}");
+                if (distinct.Count > 1)
+                    _playlistIsCompound = true;
+            }
+        }
+        catch { /* ignore */ }
+
         // Refresh is supported for both YouTube and local sources.
         var canRefresh = _hasLoadedPlaylist && _lastPlaylistSourceType != PlaylistSourceType.SearchYoutubeMusic;
         // For direct stream URLs loaded via Load URL, refresh doesn't make sense.
@@ -5944,13 +6455,13 @@ public partial class MainWindow : Window
             RebuildPerItemPlaylistOriginsForCurrentPlaylist(title ?? sourceKey, sourceKey);
 
             _originalEntries = entries?.ToList() ?? new List<PlaylistEntry>();
-            _currentEntries = BuildPlayOrder(_originalEntries, shuffle: _shuffleEnabled).ToList();
+            // _currentEntries = BuildEffectivePlayOrder(_engine.GetCurrent(), _shuffleEnabled).ToList();
 
             var startIndex = 0;
             if (!string.IsNullOrWhiteSpace(preserveCurrentVideoId))
             {
-                var idx = FindIndexByVideoId(_currentEntries, preserveCurrentVideoId);
-                if (idx >= 0 && idx < _currentEntries.Count)
+                var idx = FindIndexByVideoId(_originalEntries, preserveCurrentVideoId);
+                if (idx >= 0 && idx < _originalEntries.Count)
                     startIndex = idx;
             }
 
@@ -5960,8 +6471,10 @@ public partial class MainWindow : Window
                 _originalEntries,
                 selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex,
                 cancellationToken: cancellationToken);
-            _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
+            // _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
+            _engine.SetBasePlayOrder(_originalEntries, startIndex: 0);
             _hasLoadedPlaylist = true;
+             _recentlyPlayedVideoIds.Clear();
             UpdateRefreshEnabled();
             FocusPlaylistOnNowPlaying();
             UpdatePlaylistTitleDisplayForNowPlaying();
@@ -6018,19 +6531,19 @@ public partial class MainWindow : Window
     {
         var currentVideoId = _engine.GetCurrent()?.VideoId;
 
-        _currentEntries = BuildPlayOrder(_originalEntries, shuffle: _shuffleEnabled).ToList();
+        // _currentEntries = BuildEffectivePlayOrder(_engine.GetCurrent(), _shuffleEnabled).ToList();
 
         var startIndex = 0;
         if (!string.IsNullOrWhiteSpace(currentVideoId))
         {
-            var idx = FindIndexByVideoId(_currentEntries, currentVideoId);
-            if (idx >= 0 && idx < _currentEntries.Count)
+            var idx = FindIndexByVideoId(_originalEntries, currentVideoId);
+            if (idx >= 0 && idx < _originalEntries.Count)
                 startIndex = idx;
         }
 
         // Shuffle is only changing play order; avoid raising NowPlayingChanged (it can auto-center the playlist and
         // look like the list "jerks" even when the current track didn't change).
-        _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: false);
+        _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: false);
 
         // Playlist window always shows the original playlist order. Shuffle only changes engine play order — do not
         // clear/rebind the list when rows are already the same (that flashes the Playlist window).
@@ -6058,57 +6571,6 @@ public partial class MainWindow : Window
         return -1;
     }
 
-    private IReadOnlyList<PlaylistEntry> BuildPlayOrder(IReadOnlyList<PlaylistEntry> entries, bool shuffle)
-    {
-        if (!shuffle || entries.Count <= 1)
-            return entries;
-
-        var list = entries.ToList();
-
-        // Fisher-Yates
-        for (var i = list.Count - 1; i > 0; i--)
-        {
-            var j = _rng.Next(i + 1);
-            (list[i], list[j]) = (list[j], list[i]);
-        }
-
-        return list;
-    }
-
-    private IReadOnlyList<PlaylistEntry> ApplySavedOrderIfAny(
-        IReadOnlyList<PlaylistEntry> entries,
-        List<string>? savedOrderIds,
-        bool shuffle)
-    {
-        if (savedOrderIds is null || savedOrderIds.Count == 0)
-            return BuildPlayOrder(entries, shuffle);
-
-        var byId = entries
-            .GroupBy(e => e.VideoId, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-
-        var ordered = new List<PlaylistEntry>(entries.Count);
-        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var id in savedOrderIds)
-        {
-            if (string.IsNullOrWhiteSpace(id)) continue;
-            if (byId.TryGetValue(id, out var e))
-            {
-                ordered.Add(e);
-                used.Add(id);
-            }
-        }
-
-        foreach (var e in entries)
-        {
-            if (!used.Contains(e.VideoId))
-                ordered.Add(e);
-        }
-
-        return ordered;
-    }
-
     private void SetQueueList(IReadOnlyList<PlaylistEntry> entries, int selectedIndex, bool forceFullRebuild = true)
     {
         if (!forceFullRebuild && PlaylistDisplaysSameEntryOrder(entries))
@@ -6117,26 +6579,39 @@ public partial class MainWindow : Window
             return;
         }
 
-        _queueItems.Clear();
-        _queueItemById.Clear();
+        // Clear playlist items (queue is cleared by caller when loading new playlist)
+        _playlistItems.Clear();
+
+        var entriesSnapshot = CopyEntriesSnapshot(entries);
         var isLocal = !IsYoutubeLikeSource(_lastPlaylistSourceType);
-        var pad = Math.Max(1, entries.Count.ToString().Length);
-        foreach (var e in entries)
+        var pad = Math.Max(1, entriesSnapshot.Length.ToString().Length);
+        var current = _engine.GetCurrent();
+
+        var baseIndex = 0;
+        foreach (var e in entriesSnapshot)
         {
-            var prefix = isLocal ? $"{( _queueItems.Count + 1).ToString().PadLeft(pad, '0')}. " : null;
-            var qi = new QueueItem(e, prefix);
+            baseIndex++;
+            //var prefix = isLocal ? $"{baseIndex.ToString().PadLeft(pad, '0')}. " : null;
+            var prefix = $"{baseIndex.ToString().PadLeft(pad, '0')}. ";
+            var qi = new QueueItem(e, prefix)
+            {
+                BaseIndex = baseIndex - 1,
+                //IsInQueue = _queuedNext.Any(q => string.Equals(q.Entry.VideoId, e.VideoId, StringComparison.OrdinalIgnoreCase)),
+                IsInQueue = false,  // Always false — IsQueued is the authoritative flag
+                IsQueued = false,
+            };
             if (_unavailableVideoIds.Contains(qi.VideoId) || LooksLikeUnavailableTitle(qi.Title))
                 qi.IsUnavailable = true;
             if (_ageRestrictedVideoIds.Contains(qi.VideoId))
                 qi.IsAgeRestricted = true;
             if (_premiumVideoIds.Contains(qi.VideoId))
                 qi.IsPremium = true;
-            if (_engine.GetCurrent() is { } cur && string.Equals(cur.VideoId, qi.VideoId, StringComparison.OrdinalIgnoreCase))
+            if (current is { } cur && string.Equals(cur.VideoId, qi.VideoId, StringComparison.OrdinalIgnoreCase))
                 qi.IsNowPlaying = true;
-            _queueItems.Add(qi);
-            _queueItemById[qi.VideoId] = qi;
+            _playlistItems.Add(qi);
         }
-        _playlistWindow?.SetItemsSource(_queueItems);
+
+        _playlistWindow?.SetItemsSource(_queueItems, _playlistItems);
         try { _playlistWindow?.RefreshSortChoices(); } catch { /* ignore */ }
         if (selectedIndex >= 0)
             _playlistWindow?.ScrollToIndex(selectedIndex);
@@ -6163,22 +6638,34 @@ public partial class MainWindow : Window
             return;
         }
 
+        _playlistItems.Clear(); // fox
         _queueItems.Clear();
-        _queueItemById.Clear();
 
-        var isLocal = _lastPlaylistSourceType != PlaylistSourceType.YouTube;
-        var pad = Math.Max(1, entries.Count.ToString().Length);
-        var current = _engine.GetCurrent();
+        // Snapshot by index: List<T> enumerators are invalidated even by item assignment (metadata enrichment),
+        // so never foreach over the live list here.
+         var entriesSnapshot = CopyEntriesSnapshot(entries);
+         var isLocal = _lastPlaylistSourceType != PlaylistSourceType.YouTube;
+         var pad = Math.Max(1, entriesSnapshot.Length.ToString().Length);
+         var current = _engine.GetCurrent();
 
         // Yield periodically so building huge playlists doesn't freeze the main window (e.g. when skipping metadata).
         const int batch = 200;
         var i = 0;
-        foreach (var e in entries)
+        var baseIndex = 0;
+        for (var idx = 0; idx < entriesSnapshot.Length; idx++)
         {
+            var e = entriesSnapshot[idx];
             cancellationToken.ThrowIfCancellationRequested();
 
-            var prefix = isLocal ? $"{(_queueItems.Count + 1).ToString().PadLeft(pad, '0')}. " : null;
-            var qi = new QueueItem(e, prefix);
+            baseIndex++;
+            //var prefix = isLocal ? $"{baseIndex.ToString().PadLeft(pad, '0')}. " : null;
+            var prefix = $"{baseIndex.ToString().PadLeft(pad, '0')}. ";
+            var qi = new QueueItem(e, prefix)
+            {
+                BaseIndex = baseIndex - 1,
+                // IsInQueue = _queuedNext.Any(q => string.Equals(q.Entry.VideoId, e.VideoId, StringComparison.OrdinalIgnoreCase)),
+                IsInQueue = false  // Always false — IsQueued is the authoritative flag
+            };
             if (_unavailableVideoIds.Contains(qi.VideoId) || LooksLikeUnavailableTitle(qi.Title))
                 qi.IsUnavailable = true;
             if (_ageRestrictedVideoIds.Contains(qi.VideoId))
@@ -6188,36 +6675,285 @@ public partial class MainWindow : Window
             if (current is { } cur && string.Equals(cur.VideoId, qi.VideoId, StringComparison.OrdinalIgnoreCase))
                 qi.IsNowPlaying = true;
 
-            _queueItems.Add(qi);
-            _queueItemById[qi.VideoId] = qi;
+            _playlistItems.Add(qi); // fox
 
             i++;
             if (i % batch == 0)
                 await Dispatcher.Yield(DispatcherPriority.Background);
         }
 
-        _playlistWindow?.SetItemsSource(_queueItems);
+         _playlistWindow?.SetItemsSource(_queueItems, _playlistItems);
         if (selectedIndex >= 0)
+        {
             _playlistWindow?.ScrollToIndex(selectedIndex);
+        }
     }
 
     private bool PlaylistDisplaysSameEntryOrder(IReadOnlyList<PlaylistEntry> entries)
     {
-        if (_queueItems.Count != entries.Count)
+        // Queue items are in a separate collection now — only compare playlist items
+        if (_playlistItems.Count != entries.Count)
             return false;
         for (var i = 0; i < entries.Count; i++)
         {
-            if (!string.Equals(_queueItems[i].VideoId, entries[i].VideoId, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(_playlistItems[i].VideoId, entries[i].VideoId, StringComparison.OrdinalIgnoreCase))
                 return false;
         }
-
         return true;
     }
 
-    private void UpdateNowPlayingFlag(PlaylistEntry? now)
+    private static PlaylistEntry[] CopyEntriesSnapshot(IReadOnlyList<PlaylistEntry> entries)
+    {
+        try
+        {
+            var n = entries.Count;
+            var arr = new PlaylistEntry[n];
+            for (var i = 0; i < n; i++)
+                arr[i] = entries[i];
+            return arr;
+        }
+        catch
+        {
+            // Fallback: best effort empty snapshot.
+            return Array.Empty<PlaylistEntry>();
+        }
+    }
+
+    private static PlaylistEntry CloneEntry(PlaylistEntry e) => e with { };
+
+    private PlaylistEntry? ResolveNextTrack()
+    {
+        // 1. Queue Priority: If queue has items, return first one that isn't currently playing
+        if (_queuedNext.Count > 0)
+        {
+            foreach (var q in _queuedNext)
+            {
+                if (q.Id != _playingQueuedInstanceId)
+                {
+                    return q.Entry;
+                }
+            }
+        }
+
+        // 2. Base Playlist Logic
+        if (_originalEntries.Count == 0) return null;
+
+        if (_shuffleEnabled)
+        {
+            // Shuffle Mode: Pick random, skip unavailable/recent
+            var attempts = 0;
+            var maxAttempts = _originalEntries.Count * 2; // Safety limit
+            var currentVideoId = _engine.GetCurrent()?.VideoId;
+
+            while (attempts < maxAttempts)
+            {
+                var idx = _rng.Next(_originalEntries.Count);
+                var candidate = _originalEntries[idx];
+                attempts++;
+
+                // Skip unavailable/age/premium
+                if (_unavailableVideoIds.Contains(candidate.VideoId) ||
+                    _ageRestrictedVideoIds.Contains(candidate.VideoId) ||
+                    _premiumVideoIds.Contains(candidate.VideoId))
+                    continue;
+
+                // Skip recently played or currently playing
+                if (string.Equals(candidate.VideoId, currentVideoId, StringComparison.OrdinalIgnoreCase) ||
+                    _recentlyPlayedVideoIds.Contains(candidate.VideoId))
+                    continue;
+
+                return candidate;
+            }
+
+            // Fallback if all attempts exhausted
+            return _originalEntries.FirstOrDefault(e =>
+                !_unavailableVideoIds.Contains(e.VideoId) &&
+                !_ageRestrictedVideoIds.Contains(e.VideoId) &&
+                !_premiumVideoIds.Contains(e.VideoId));
+        }
+        else
+        {
+            // Sequential Mode: Increment index, handle Repeat:Playlist loop
+            int nextIndex = _engine.CurrentIndex + 1;
+
+            if (_repeatMode == RepeatMode.Playlist && nextIndex >= _originalEntries.Count)
+            {
+                nextIndex = 0; // Loop back to start
+            }
+
+            if (nextIndex >= _originalEntries.Count) return null; // End of list (Repeat:None)
+
+            return _originalEntries[nextIndex];
+        }
+    }
+
+    private QueueItem CreateQueueItemForQueuedInstance(QueuedInstance qe, int ordinal)
+    {
+        var qi = new QueueItem(qe.Entry)
+        {
+            IsQueued = true,
+            QueueOrdinal = ordinal,
+            QueueInstanceId = qe.Id,
+        };
+        if (_unavailableVideoIds.Contains(qi.VideoId) || LooksLikeUnavailableTitle(qi.Title))
+            qi.IsUnavailable = true;
+        if (_ageRestrictedVideoIds.Contains(qi.VideoId))
+            qi.IsAgeRestricted = true;
+        if (_premiumVideoIds.Contains(qi.VideoId))
+            qi.IsPremium = true;
+        if (_engine.GetCurrent() is { } cur && cur.VideoId.Equals(qi.VideoId))
+            qi.IsNowPlaying = true;
+        return qi;
+    }
+
+    private void UpdateQueueOrdinals()
+    {
+        for (var i = 0; i < _queueItems.Count; i++)
+        {
+            if (_queueItems[i].IsQueued)
+                _queueItems[i].QueueOrdinal = i + 1;
+        }
+    }
+
+    private void RebuildQueueUiFromBackingList()
+    {
+        _queueItems.Clear();
+        var n = 0;
+        foreach (var qe in _queuedNext)
+        {
+            n++;
+            var qi = new QueueItem(qe.Entry)
+            {
+                IsQueued = true,
+                QueueOrdinal = n,
+                QueueInstanceId = qe.Id,
+            };
+            if (_unavailableVideoIds.Contains(qi.VideoId) || LooksLikeUnavailableTitle(qi.Title))
+                qi.IsUnavailable = true;
+            if (_ageRestrictedVideoIds.Contains(qi.VideoId))
+                qi.IsAgeRestricted = true;
+            if (_premiumVideoIds.Contains(qi.VideoId))
+                qi.IsPremium = true;
+            if (_engine.GetCurrent() is { } cur && cur.VideoId.Equals(qi.VideoId))
+                qi.IsNowPlaying = true;
+            _queueItems.Add(qi);
+        }
+        _playlistWindow?.RefreshQueueView();
+    }
+
+   private void ClearQueue()
+    {
+        if (_queuedNext.Count == 0) return;
+        _queuedNext.Clear();
+        _queueItems.Clear();
+        _playlistWindow?.RefreshQueueView();
+    }
+
+    private void AddToQueue(PlaylistEntry entry)
+    {
+        var cloned = CloneEntry(entry);
+        var instance = new QueuedInstance(Guid.NewGuid(), cloned);
+        _queuedNext.Add(instance);
+
+        // Append to queue collection — O(1), no shift of playlist items
+        var qi = new QueueItem(cloned)
+        {
+            IsQueued = true,
+            QueueOrdinal = _queuedNext.Count,
+            QueueInstanceId = instance.Id,
+        };
+        if (_unavailableVideoIds.Contains(qi.VideoId) || LooksLikeUnavailableTitle(qi.Title))
+            qi.IsUnavailable = true;
+        if (_ageRestrictedVideoIds.Contains(qi.VideoId))
+            qi.IsAgeRestricted = true;
+        if (_premiumVideoIds.Contains(qi.VideoId))
+            qi.IsPremium = true;
+        if (_engine.GetCurrent() is { } cur && cur.VideoId.Equals(qi.VideoId))
+            qi.IsNowPlaying = true;
+
+        _queueItems.Add(qi);
+        _playlistWindow?.RefreshQueueView();
+    }
+
+    private void QueueNextByVideoId(string videoId)
+    {
+        var entry = _originalEntries.FirstOrDefault(e => string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
+        if (entry is null) return;
+
+        // Check if already in queue
+        if (_queuedNext.Any(q => q.Entry.VideoId == entry.VideoId)) return;
+
+        var id = Guid.NewGuid();
+        var queuedInstance = new QueuedInstance(id, entry);
+        
+        _queuedNext.Insert(0, queuedInstance);
+        _queueItems.Insert(0, new QueueItem(queuedInstance.Entry));
+        
+        UpdateQueueOrdinals();
+        _playlistWindow?.RefreshQueueView();
+    }
+
+    private void QueueLastByVideoId(string videoId)
+    {
+        var entry = _originalEntries.FirstOrDefault(e => string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
+        if (entry is null) return;
+
+        // Check if already in queue
+        if (_queuedNext.Any(q => q.Entry.VideoId == entry.VideoId)) return;
+
+        var id = Guid.NewGuid();
+        var queuedInstance = new QueuedInstance(id, entry);
+        
+        _queuedNext.Add(queuedInstance);
+        _queueItems.Add(new QueueItem(queuedInstance.Entry));
+        
+        UpdateQueueOrdinals();
+        _playlistWindow?.RefreshQueueView();
+    }
+
+   private bool RemoveQueuedInstance(Guid id)
+    {
+        // Remove from backing list
+        var listIndex = -1;
+        for (var i = 0; i < _queuedNext.Count; i++)
+        {
+            if (_queuedNext[i].Id == id)
+            {
+                _queuedNext.RemoveAt(i);
+                listIndex = i;
+                break;
+            }
+        }
+        if (listIndex < 0) return false;
+
+        // Remove from queue collection only (small collection, fast)
+        var uiIndex = -1;
+        for (var i = 0; i < _queueItems.Count; i++)
+        {
+            if (_queueItems[i].IsQueued && _queueItems[i].QueueInstanceId == id)
+            {
+                uiIndex = i;
+                break;
+            }
+        }
+        if (uiIndex >= 0)
+            _queueItems.RemoveAt(uiIndex);
+
+        UpdateQueueOrdinals();
+        _playlistWindow?.RefreshQueueView();
+        return true;
+    }
+
+     private void UpdateNowPlayingFlag(PlaylistEntry? now)
     {
         foreach (var qi in _queueItems)
+        {
+            qi.IsNowPlaying = now is not null && qi.Entry is not null && qi.Entry.VideoId.Equals(now.VideoId);
+        }
+        foreach (var qi in _playlistItems)
+        {
             qi.IsNowPlaying = now is not null && string.Equals(qi.VideoId, now.VideoId, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private static bool LooksLikeUnavailableTitle(string? title)
@@ -6292,22 +7028,13 @@ public partial class MainWindow : Window
 
     private void SelectAndScrollToNowPlaying(PlaylistEntry? entry)
     {
-        if (entry is null)
-            return;
+        if (entry is null || _playlistWindow is null) return;
 
-        if (_originalEntries.Count == 0)
-            return;
-
-        var idx = _originalEntries
-            .Select((e, i) => (e, i))
-            .FirstOrDefault(x => string.Equals(x.e.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
-            .i;
-
-        if (idx < 0 || idx >= _originalEntries.Count)
-            return;
-
-        // Center the now playing item without affecting selection (avoid extra selection highlight).
-        _playlistWindow?.CenterIndex(idx);
+        try
+        {
+            _playlistWindow.CenterNowPlaying(entry);
+        }
+        catch { /* ignore */ }
     }
 
     private void CapturePlaylistWindowBounds()
@@ -6524,60 +7251,6 @@ public partial class MainWindow : Window
         catch { /* ignore */ }
     }
 
-    private static void CenterListBoxItem(System.Windows.Controls.ListBox listBox, object? item, int attempt = 0)
-    {
-        if (item is null)
-            return;
-
-        // Defer until container is generated (virtualization).
-        listBox.Dispatcher.BeginInvoke(new Action(() =>
-        {
-            try
-            {
-                listBox.ApplyTemplate();
-                var scrollViewer = FindListBoxScrollViewer(listBox);
-                if (scrollViewer is null)
-                    return;
-
-                if (scrollViewer.ViewportHeight <= 0)
-                    return;
-
-                // First, ensure the item is realized and at least visible.
-                listBox.ScrollIntoView(item);
-                listBox.UpdateLayout();
-
-                var container = listBox.ItemContainerGenerator.ContainerFromItem(item) as FrameworkElement;
-                if (container is null)
-                {
-                    if (attempt < 3)
-                        CenterListBoxItem(listBox, item, attempt + 1);
-                    return;
-                }
-
-                // Compute delta from viewport center, then adjust current offset.
-                // This avoids coordinate-space confusion and prevents "jump to top".
-                var p = container.TransformToAncestor(scrollViewer).Transform(new System.Windows.Point(0, 0));
-                var itemMidInViewport = p.Y + (container.ActualHeight / 2.0);
-                var delta = itemMidInViewport - (scrollViewer.ViewportHeight / 2.0);
-                var target = scrollViewer.VerticalOffset + delta;
-
-                var max = Math.Max(0, scrollViewer.ExtentHeight - scrollViewer.ViewportHeight);
-                if (target < 0) target = 0;
-                if (target > max) target = max;
-
-                scrollViewer.ScrollToVerticalOffset(target);
-
-                // If virtualization/layout caused a mismatch, retry a couple times.
-                if (attempt < 2 && Math.Abs(delta) > Math.Max(2, container.ActualHeight))
-                    CenterListBoxItem(listBox, item, attempt + 1);
-            }
-            catch
-            {
-                // ignore UI scrolling failures
-            }
-        }), DispatcherPriority.ContextIdle);
-    }
-
     private static ScrollViewer? FindListBoxScrollViewer(System.Windows.Controls.ListBox listBox)
     {
         // Prefer the ListBox template's scrollviewer if present.
@@ -6612,20 +7285,44 @@ public partial class MainWindow : Window
             if (string.Equals(tag.Category, "Premium", StringComparison.OrdinalIgnoreCase))
             {
                 _premiumVideoIds.Add(tag.VideoId);
-                if (_queueItemById.TryGetValue(tag.VideoId, out var item))
-                    item.IsPremium = true;
+                foreach (var qi in _queueItems)
+                {
+                    if (qi.IsQueued && string.Equals(qi.VideoId, tag.VideoId, StringComparison.OrdinalIgnoreCase))
+                        qi.IsPremium = true;
+                }
+                foreach (var qi in _playlistItems)
+                {
+                    if (!qi.IsQueued && string.Equals(qi.VideoId, tag.VideoId, StringComparison.OrdinalIgnoreCase))
+                        qi.IsPremium = true;
+                }
             }
             else if (string.Equals(tag.Category, "AgeRestricted", StringComparison.OrdinalIgnoreCase))
             {
                 _ageRestrictedVideoIds.Add(tag.VideoId);
-                if (_queueItemById.TryGetValue(tag.VideoId, out var item))
-                    item.IsAgeRestricted = true;
+                foreach (var qi in _queueItems)
+                {
+                    if (qi.IsQueued && string.Equals(qi.VideoId, tag.VideoId, StringComparison.OrdinalIgnoreCase))
+                        qi.IsAgeRestricted = true;
+                }
+                foreach (var qi in _playlistItems)
+                {
+                    if (!qi.IsQueued && string.Equals(qi.VideoId, tag.VideoId, StringComparison.OrdinalIgnoreCase))
+                        qi.IsAgeRestricted = true;
+                }
             }
             else
             {
                 _unavailableVideoIds.Add(tag.VideoId);
-                if (_queueItemById.TryGetValue(tag.VideoId, out var item))
-                    item.IsUnavailable = true;
+                foreach (var qi in _queueItems)
+            {
+                if (qi.IsQueued && string.Equals(qi.VideoId, tag.VideoId, StringComparison.OrdinalIgnoreCase))
+                    qi.IsUnavailable = true;
+            }
+            foreach (var qi in _playlistItems)
+            {
+                if (!qi.IsQueued && string.Equals(qi.VideoId, tag.VideoId, StringComparison.OrdinalIgnoreCase))
+                    qi.IsUnavailable = true;
+            }
             }
 
             try
@@ -6655,22 +7352,46 @@ public partial class MainWindow : Window
         if (isPremium)
         {
             _premiumVideoIds.Add(entry.VideoId);
-            if (_queueItemById.TryGetValue(entry.VideoId, out var item))
-                item.IsPremium = true;
+            foreach (var qi in _queueItems)
+            {
+                if (qi.IsQueued && string.Equals(qi.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                    qi.IsPremium = true;
+            }
+            foreach (var qi in _playlistItems)
+            {
+                if (!qi.IsQueued && string.Equals(qi.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                    qi.IsPremium = true;
+            }
             _nowPlayingStatus = "PREMIUM";
         }
         else if (isAge)
         {
             _ageRestrictedVideoIds.Add(entry.VideoId);
-            if (_queueItemById.TryGetValue(entry.VideoId, out var item))
-                item.IsAgeRestricted = true;
+            foreach (var qi in _queueItems)
+            {
+                if (qi.IsQueued && string.Equals(qi.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                    qi.IsAgeRestricted = true;
+            }
+            foreach (var qi in _playlistItems)
+            {
+                if (!qi.IsQueued && string.Equals(qi.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                    qi.IsAgeRestricted = true;
+            }
             _nowPlayingStatus = "AGE";
         }
         else
         {
             _unavailableVideoIds.Add(entry.VideoId);
-            if (_queueItemById.TryGetValue(entry.VideoId, out var item))
-                item.IsUnavailable = true;
+            foreach (var qi in _queueItems)
+            {
+                if (qi.IsQueued && string.Equals(qi.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                    qi.IsPremium = true;
+            }
+            foreach (var qi in _playlistItems)
+            {
+                if (!qi.IsQueued && string.Equals(qi.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                    qi.IsPremium = true;
+            }
             _nowPlayingStatus = "UNAVAILABLE";
         }
 
@@ -6967,6 +7688,7 @@ public partial class MainWindow : Window
             RepeatMode: _repeatMode.ToString(),
             CurrentVideoId: _engine.GetCurrent()?.VideoId,
             PlayOrderVideoIds: _engine.PlayOrder.Select(e => e.VideoId).ToList(),
+            QueuedVideoIds: _queuedNext.Select(e => e.Entry.VideoId).ToList(),
             CurrentPositionSeconds: overridePositionSeconds ?? _engine.CurrentPositionSeconds,
             WasPlaying: overrideWasPlaying ?? _engine.IsPlaying,
             CacheMaxMb: _cacheMaxMb,
@@ -7036,6 +7758,11 @@ public partial class MainWindow : Window
             YoutubeCookiesFromBrowserEnabled: _youtubeCookiesFromBrowserEnabled,
             YoutubeCookiesFromBrowser: string.IsNullOrWhiteSpace(_youtubeCookiesFromBrowser) ? null : _youtubeCookiesFromBrowser.Trim(),
             YoutubeImportAppend: _youtubeImportAppend,
+            ExportM3uIncludeYoutube: _exportM3uIncludeYoutube,
+            ExportM3uPreferRelativePaths: _exportM3uPreferRelativePaths,
+            ExportM3uIncludeLyllyMetadata: _exportM3uIncludeLyllyMetadata,
+            LocalImportAppend: _localImportAppend,
+            LocalImportRemoveDuplicates: _localImportRemoveDuplicates,
             AudioQuality: _audioQuality,
             AudioOutputDevice: string.IsNullOrWhiteSpace(_audioOutputDevice) ? null : _audioOutputDevice,
             AppLogLevel: _appLogLevel,
@@ -8320,14 +9047,6 @@ public partial class MainWindow : Window
         prevItem.Click += (_, _) => { try { PrevButton_OnClick(this, new RoutedEventArgs()); } catch { /* ignore */ } };
         cm.Items.Add(prevItem);
 
-        var playPauseItem = new System.Windows.Controls.MenuItem { Header = "Play/Pause" };
-        playPauseItem.Click += (_, _) => { try { PlayPauseButton_OnClick(this, new RoutedEventArgs()); } catch { /* ignore */ } };
-        cm.Items.Add(playPauseItem);
-
-        var nextItem = new System.Windows.Controls.MenuItem { Header = "Next" };
-        nextItem.Click += (_, _) => { try { NextButton_OnClick(this, new RoutedEventArgs()); } catch { /* ignore */ } };
-        cm.Items.Add(nextItem);
-
         var stopItem = new System.Windows.Controls.MenuItem { Header = "Stop" };
         stopItem.Click += (_, _) =>
         {
@@ -8340,7 +9059,15 @@ public partial class MainWindow : Window
             }
             catch { /* ignore */ }
         };
-        cm.Items.Add(stopItem);
+        cm.Items.Add(stopItem);   
+
+        var playPauseItem = new System.Windows.Controls.MenuItem { Header = "Play/Pause" };
+        playPauseItem.Click += (_, _) => { try { PlayPauseButton_OnClick(this, new RoutedEventArgs()); } catch { /* ignore */ } };
+        cm.Items.Add(playPauseItem);
+
+        var nextItem = new System.Windows.Controls.MenuItem { Header = "Next" };
+        nextItem.Click += (_, _) => { try { NextButton_OnClick(this, new RoutedEventArgs()); } catch { /* ignore */ } };
+        cm.Items.Add(nextItem);
 
         cm.Items.Add(new System.Windows.Controls.Separator());
 

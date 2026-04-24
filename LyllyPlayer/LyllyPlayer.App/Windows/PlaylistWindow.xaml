@@ -138,7 +138,6 @@
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
@@ -151,32 +150,23 @@
                     Margin="0,0,8,0"
                     Click="RefreshButton_OnClick"/>
 
-            <TextBox x:Name="SourceTextBox"
-                     Grid.Row="0"
-                     Grid.Column="1"
-                     VerticalContentAlignment="Center"
-                     Height="30"
-                     MinWidth="220"
-                     IsReadOnly="True"
-                     IsReadOnlyCaretVisible="False"/>
-
-            <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0">
+            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
                 <Button x:Name="SavePlaylistButton"
                         Content="Save playlist..."
                         MinWidth="110"
                         Height="30"
                         Margin="0,0,6,0"
                         Click="SavePlaylistButton_OnClick"/>
-                <Button x:Name="LoadSavedButton"
-                        Content="Load saved..."
-                        MinWidth="104"
+                <Button x:Name="LoadPlaylistButton"
+                        Content="Load playlist..."
+                        MinWidth="110"
                         Height="30"
-                        Click="LoadSavedButton_OnClick"/>
+                        Click="LoadPlaylistButton_OnClick"/>
             </StackPanel>
 
             <StackPanel Grid.Row="1"
                         Grid.Column="0"
-                        Grid.ColumnSpan="3"
+                        Grid.ColumnSpan="2"
                         Orientation="Horizontal"
                         Margin="0,8,0,0">
                 <Button x:Name="SearchYoutubeButton"
@@ -185,21 +175,9 @@
                         Height="30"
                         Margin="0,0,6,0"
                         Click="SearchYoutubeButton_OnClick"/>
-                <Button x:Name="LoadUrlButton"
-                        Content="Load URL"
-                        MinWidth="82"
-                        Height="30"
-                        Margin="0,0,6,0"
-                        Click="LoadUrlButton_OnClick"/>
-                <Button x:Name="LoadM3uButton"
-                        Content="Load M3U"
-                        MinWidth="78"
-                        Height="30"
-                        Margin="0,0,6,0"
-                        Click="LoadM3uButton_OnClick"/>
                 <Button x:Name="LoadFolderButton"
-                        Content="Load folder"
-                        MinWidth="92"
+                        Content="Local files..."
+                        MinWidth="104"
                         Height="30"
                         Click="LoadFolderButton_OnClick"/>
             </StackPanel>
@@ -208,6 +186,13 @@
             <TextBlock Text="Sort"
                        VerticalAlignment="Center"
                        Margin="0,0,8,0"/>
+            <ToggleButton x:Name="SortDescToggleButton"
+                          Width="70"
+                          Height="28"
+                          Margin="0,0,8,0"
+                          Content="Asc"
+                          Checked="SortDescToggleButton_OnChecked"
+                          Unchecked="SortDescToggleButton_OnUnchecked"/>
             <ComboBox x:Name="SortModeComboBox"
                       Width="170"
                       Height="28"
@@ -217,16 +202,130 @@
                       BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}"
                       VerticalContentAlignment="Center"
                       SelectionChanged="SortModeComboBox_OnSelectionChanged"/>
-            <ToggleButton x:Name="SortDescToggleButton"
-                          Width="70"
-                          Height="28"
-                          Content="Asc"
-                          Checked="SortDescToggleButton_OnChecked"
-                          Unchecked="SortDescToggleButton_OnUnchecked"/>
+            <Button x:Name="ApplySortButton"
+                    Content="Sort"
+                    MinWidth="62"
+                    Height="28"
+                    Margin="0,0,8,0"
+                    Click="ApplySortButton_OnClick"/>
         </StackPanel>
 
         <Grid Grid.Row="2" Margin="12,0,12,8">
-            <ListBox x:Name="QueueListBox"
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Border x:Name="QueuedPanel"
+                    Grid.Row="0"
+                    Margin="0,0,0,8"
+                    Padding="8"
+                    CornerRadius="6"
+                    Background="{DynamicResource App.Theme.SurfaceRaised}"
+                    BorderBrush="{DynamicResource App.Theme.Border}"
+                    BorderThickness="1"
+                    MaxHeight="220"
+                    Visibility="Collapsed">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock x:Name="QueuedHeaderTextBlock"
+                               Text="Queue"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,6"
+                               Foreground="{DynamicResource App.Theme.Foreground}"/>
+                    <ListBox x:Name="QueuedListBox"
+                             Grid.Row="1"
+                             Background="Transparent"
+                             VirtualizingStackPanel.IsVirtualizing="True"
+                             VirtualizingStackPanel.VirtualizationMode="Recycling"
+                             ScrollViewer.CanContentScroll="True"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             Focusable="False"
+                             PreviewMouseLeftButtonDown="QueueListBox_OnPreviewMouseLeftButtonDown"
+                             MouseDoubleClick="QueueListBox_OnMouseDoubleClick">
+                        <ListBox.Resources>
+                            <ContextMenu x:Key="QueueItemContextMenuQueued"
+                                         Opened="QueueItemContextMenu_OnOpened">
+                                <MenuItem x:Name="OpenMenuItem"
+                                          Header="Open"
+                                          Click="OpenMenuItem_OnClick"/>
+                                <Separator/>
+                                <MenuItem x:Name="AddToQueueMenuItem"
+                                          Header="Add to queue"
+                                          Click="AddToQueueMenuItem_OnClick"/>
+                                <MenuItem x:Name="RemoveFromQueueMenuItem"
+                                          Header="Remove from queue"
+                                          Click="RemoveFromQueueMenuItem_OnClick"/>
+                            </ContextMenu>
+                        </ListBox.Resources>
+
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="6,3"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="BorderBrush" Value="Transparent"/>
+                                <Setter Property="ContextMenu" Value="{StaticResource QueueItemContextMenuQueued}"/>
+                                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                <Setter Property="Focusable" Value="False"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border Background="{TemplateBinding Background}"
+                                                    SnapsToDevicePixels="True">
+                                                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                                  Margin="{TemplateBinding Padding}"
+                                                                  SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource App.Theme.Hover}"/>
+                                    </Trigger>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource App.Theme.Selection}"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource App.Theme.SelectionText}"/>
+                                    </Trigger>
+                                    <DataTrigger Binding="{Binding IsNowPlaying}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource App.Theme.Pressed}"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel LastChildFill="True">
+                                    <TextBlock DockPanel.Dock="Left"
+                                               Text="{Binding SourceGlyph}"
+                                               Width="18"
+                                               Margin="0,0,6,0"
+                                               FontFamily="Segoe UI Emoji"
+                                               FontSize="13"
+                                               FontWeight="SemiBold"
+                                               Opacity="0.85"
+                                               VerticalAlignment="Center"
+                                               TextAlignment="Center"/>
+                                    <TextBlock Text="{Binding DisplayTitle}"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <ListBox x:Name="PlaylistListBox"
+                     Grid.Row="1"
                      Background="{DynamicResource {x:Static SystemColors.ControlLightBrushKey}}"
                      VirtualizingStackPanel.IsVirtualizing="True"
                      VirtualizingStackPanel.VirtualizationMode="Recycling"
@@ -236,14 +335,39 @@
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                      Focusable="False"
                      PreviewMouseLeftButtonDown="QueueListBox_OnPreviewMouseLeftButtonDown"
-                     MouseDoubleClick="QueueListBox_OnMouseDoubleClick"
-                     DisplayMemberPath="DisplayTitle">
+                     MouseDoubleClick="QueueListBox_OnMouseDoubleClick">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <DockPanel LastChildFill="True">
+                            <TextBlock DockPanel.Dock="Left"
+                                       Text="{Binding SourceGlyph}"
+                                       Width="18"
+                                       Margin="0,0,6,0"
+                                       FontFamily="Segoe UI Emoji"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Opacity="0.85"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Center"/>
+                            <TextBlock Text="{Binding DisplayTitle}"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </DockPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
                 <ListBox.Resources>
                     <ContextMenu x:Key="QueueItemContextMenu"
                                  Opened="QueueItemContextMenu_OnOpened">
                         <MenuItem x:Name="OpenMenuItem"
                                   Header="Open"
                                   Click="OpenMenuItem_OnClick"/>
+                        <Separator/>
+                        <MenuItem x:Name="AddToQueueMenuItem"
+                                  Header="Add to queue"
+                                  Click="AddToQueueMenuItem_OnClick"/>
+                        <MenuItem x:Name="RemoveFromQueueMenuItem"
+                                  Header="Remove from queue"
+                                  Click="RemoveFromQueueMenuItem_OnClick"/>
                     </ContextMenu>
                 </ListBox.Resources>
 
@@ -275,6 +399,12 @@
                             </Setter.Value>
                         </Setter>
                         <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsQueued}" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource App.Theme.SurfaceRaised}"/>
+                                <Setter Property="BorderBrush" Value="Transparent"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                            </DataTrigger>
+
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter Property="Background" Value="{DynamicResource App.Theme.Hover}"/>
                             </Trigger>

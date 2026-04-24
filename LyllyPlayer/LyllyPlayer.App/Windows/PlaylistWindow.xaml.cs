@@ -48,6 +48,7 @@ public partial class PlaylistWindow : Window
     private readonly Func<(int count, int minLengthSeconds)> _getSearchDefaults;
     private readonly Action<int, int> _setSearchDefaults;
     private readonly Func<Window, CancellationToken, Task> _openYoutubeModalAsync;
+    private readonly Func<Window, CancellationToken, Task> _openLocalFilesModalAsync;
     private readonly Func<PlaylistSortSpec, CancellationToken, Task> _applySortAsync;
     private readonly Func<bool> _getIsYoutubeSource;
     private readonly Func<string, string, Task> _savePlaylistToFileAsync;
@@ -69,6 +70,8 @@ public partial class PlaylistWindow : Window
     private readonly Func<CancellationToken, Task> _refreshLocalWithoutMetadataAsync;
     private readonly Action<string> _selectedVideoIdChanged;
     private readonly Func<string, Task> _doubleClickPlayAsync;
+    private readonly Func<PlaylistEntry, Task> _addToQueueAsync;
+    private readonly Func<Guid, Task> _removeQueuedInstanceAsync;
     private int _lastClickedIndex = -1;
     private int _centerRequestId;
     /// <summary>Avoid one frame at the top of the list before <see cref="CenterListBoxOnQueueItem"/> runs (initial open).</summary>
@@ -93,17 +96,24 @@ public partial class PlaylistWindow : Window
 
     private ObservableCollection<QueueItem>? _queueSource;
     private CollectionViewSource? _queueViewSource;
+    // private CollectionViewSource? _queuedViewSource;
     private string _playlistFilterQuery = "";
     private readonly DispatcherTimer _playlistFilterDebounceTimer;
 
     private bool _suppressSortUiEvents;
     private PlaylistSortSpec _lastSortSpec = new(PlaylistSortMode.None, PlaylistSortDirection.Asc);
+    ObservableCollection<QueueItem>? _playlistItemsSource;
+    CollectionViewSource? _playlistViewSource;
+
+    public IEnumerable<QueueItem>? PlaylistItems => PlaylistListBox.ItemsSource as IEnumerable<QueueItem>;
+    public IEnumerable<QueueItem>? QueueItems => QueuedListBox.ItemsSource as IEnumerable<QueueItem>;
 
     public PlaylistWindow(
         Func<string, Task> loadUrlAsync,
         Func<(int count, int minLengthSeconds)> getSearchDefaults,
         Action<int, int> setSearchDefaults,
         Func<Window, CancellationToken, Task> openYoutubeModalAsync,
+        Func<Window, CancellationToken, Task> openLocalFilesModalAsync,
         Func<PlaylistSortSpec, CancellationToken, Task> applySortAsync,
         Func<bool> getIsYoutubeSource,
         Func<string, string, Task> savePlaylistToFileAsync,
@@ -124,13 +134,16 @@ public partial class PlaylistWindow : Window
         Func<bool> getRefreshOffersMetadataSkip,
         Func<CancellationToken, Task> refreshLocalWithoutMetadataAsync,
         Action<string> selectedVideoIdChanged,
-        Func<string, Task> doubleClickPlayAsync
+        Func<string, Task> doubleClickPlayAsync,
+        Func<PlaylistEntry, Task> addToQueueAsync,
+        Func<Guid, Task> removeQueuedInstanceAsync
     )
     {
         _loadUrlAsync = loadUrlAsync;
         _getSearchDefaults = getSearchDefaults;
         _setSearchDefaults = setSearchDefaults;
         _openYoutubeModalAsync = openYoutubeModalAsync;
+        _openLocalFilesModalAsync = openLocalFilesModalAsync;
         _applySortAsync = applySortAsync;
         _getIsYoutubeSource = getIsYoutubeSource;
         _savePlaylistToFileAsync = savePlaylistToFileAsync;
@@ -152,10 +165,12 @@ public partial class PlaylistWindow : Window
         _refreshLocalWithoutMetadataAsync = refreshLocalWithoutMetadataAsync;
         _selectedVideoIdChanged = selectedVideoIdChanged;
         _doubleClickPlayAsync = doubleClickPlayAsync;
+        _addToQueueAsync = addToQueueAsync;
+        _removeQueuedInstanceAsync = removeQueuedInstanceAsync;
 
         InitializeComponent();
 
-        SourceTextBox.Text = _getSource();
+        UpdateTitleFromSource(_getSource());
         InitializeSortUi();
 
         _playlistFilterDebounceTimer = new DispatcherTimer(DispatcherPriority.Background)
@@ -201,7 +216,7 @@ public partial class PlaylistWindow : Window
             {
                 new(PlaylistSortMode.None, "None"),
                 new(PlaylistSortMode.NameOrTitle, isYoutube ? "Title" : "Name"),
-                new(PlaylistSortMode.ChannelOrPath, isYoutube ? "Channel" : "Path + filename"),
+                new(PlaylistSortMode.ChannelOrPath, "Source"),
                 new(PlaylistSortMode.Duration, "Duration"),
             };
 
@@ -255,8 +270,6 @@ public partial class PlaylistWindow : Window
         if (_busyCount > 0)
             return;
         var spec = GetSortSpecFromUi();
-        if (spec.Equals(_lastSortSpec))
-            return;
         _lastSortSpec = spec;
 
         using var cts = new CancellationTokenSource();
@@ -283,27 +296,33 @@ public partial class PlaylistWindow : Window
         }
     }
 
-    private async void SortModeComboBox_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void SortModeComboBox_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressSortUiEvents)
             return;
-        await ApplySortFromUiAsync();
+        try { _lastSortSpec = GetSortSpecFromUi(); } catch { /* ignore */ }
     }
 
-    private async void SortDescToggleButton_OnChecked(object sender, RoutedEventArgs e)
+    private void SortDescToggleButton_OnChecked(object sender, RoutedEventArgs e)
     {
         try { SortDescToggleButton.Content = "Desc"; } catch { /* ignore */ }
         if (_suppressSortUiEvents)
             return;
-        await ApplySortFromUiAsync();
+        try { _lastSortSpec = GetSortSpecFromUi(); } catch { /* ignore */ }
     }
 
-    private async void SortDescToggleButton_OnUnchecked(object sender, RoutedEventArgs e)
+    private void SortDescToggleButton_OnUnchecked(object sender, RoutedEventArgs e)
     {
         try { SortDescToggleButton.Content = "Asc"; } catch { /* ignore */ }
         if (_suppressSortUiEvents)
             return;
-        await ApplySortFromUiAsync();
+        try { _lastSortSpec = GetSortSpecFromUi(); } catch { /* ignore */ }
+    }
+
+    private async void ApplySortButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try { await ApplySortFromUiAsync(); }
+        catch { /* ignore */ }
     }
 
     private void ChromeCloseButton_OnClick(object sender, RoutedEventArgs e)
@@ -373,43 +392,48 @@ public partial class PlaylistWindow : Window
         MouseLeftButtonUp -= ChromeDrag_MouseLeftButtonUp;
     }
 
-    public void SetItemsSource(IEnumerable itemsSource)
+    public void SetItemsSource(ObservableCollection<QueueItem> queueItems, ObservableCollection<QueueItem> playlistItems)
     {
-        if (itemsSource is not ObservableCollection<QueueItem> oc)
+        // Queue ListBox — direct binding, no filter
+        if (_queueViewSource is null || !ReferenceEquals(_queueSource, queueItems))
         {
-            _queueSource = null;
-            _queueViewSource = null;
-            QueueListBox.ItemsSource = itemsSource;
-            return;
-        }
-
-        if (_queueViewSource is null || !ReferenceEquals(_queueSource, oc))
-        {
-            _queueSource = oc;
+            _queueSource = queueItems;
             _queueViewSource = new CollectionViewSource { Source = _queueSource };
-            _queueViewSource.View.Filter = QueueFilterPredicate;
-            QueueListBox.ItemsSource = _queueViewSource.View;
+            //QueuedListBox.ItemsSource = _queueViewSource.View;
+        }
+        QueuedListBox.ItemsSource = queueItems;
+
+        // Playlist ListBox — direct binding with search filter
+        if (_playlistViewSource is null || !ReferenceEquals(_playlistItemsSource, playlistItems))
+        {
+            _playlistItemsSource = playlistItems;
+            _playlistViewSource = new CollectionViewSource { Source = _playlistItemsSource };
+            _playlistViewSource.View.Filter = PlaylistFilterPredicate;
+            PlaylistListBox.ItemsSource = _playlistViewSource.View;
+        }
+        else
+        {
+            _playlistViewSource.View.Refresh();
         }
 
+        // Update queue count display
         try
         {
-            _queueViewSource.View.Refresh();
+            var count = _queueSource?.Count ?? 0;
+            try { QueuedHeaderTextBlock.Text = count > 0 ? $"Queue ({count})" : "Queue"; } catch { /* ignore */ }
+            try { QueuedPanel.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
         }
-        catch
-        {
-            // ignore
-        }
+        catch { /* ignore */ }
     }
 
-    private bool QueueFilterPredicate(object obj)
+    private bool PlaylistFilterPredicate(object obj)
     {
         if (obj is not QueueItem qi)
             return false;
-
+        // Queue items are now in a separate collection — no need to exclude them
         var q = (_playlistFilterQuery ?? "").Trim();
         if (q.Length == 0)
             return true;
-
         return MatchesPlaylistFilterTokens(q, qi);
     }
 
@@ -429,15 +453,10 @@ public partial class PlaylistWindow : Window
 
     private void ApplyPlaylistFilterFromTextBox()
     {
-        try
-        {
-            _playlistFilterQuery = PlaylistFilterTextBox?.Text ?? "";
-            _queueViewSource?.View.Refresh();
-        }
-        catch
-        {
-            // ignore
-        }
+        try { _playlistFilterQuery = PlaylistFilterTextBox?.Text ?? ""; }
+        catch { /* ignore */ }
+        try { _playlistViewSource?.View.Refresh(); }
+        catch { /* ignore */ }
     }
 
     private void PlaylistFilterTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -464,8 +483,9 @@ public partial class PlaylistWindow : Window
             _playlistFilterQuery = "";
             if (PlaylistFilterTextBox is not null)
                 PlaylistFilterTextBox.Text = "";
-            _queueViewSource?.View.Refresh();
-        }
+            //_queueViewSource?.View.Refresh();
+        } catch {}
+        try { _playlistViewSource?.View.Refresh(); }
         catch
         {
             // ignore
@@ -491,10 +511,11 @@ public partial class PlaylistWindow : Window
             // ignore
         }
 
-        try
-        {
-            _queueViewSource?.View.Refresh();
-        }
+        // try
+        // {
+        //     _queueViewSource?.View.Refresh();
+        // }
+        try { _playlistViewSource?.View.Refresh(); }
         catch
         {
             // ignore
@@ -504,18 +525,27 @@ public partial class PlaylistWindow : Window
     public void SetRefreshEnabled(bool enabled) => RefreshButton.IsEnabled = enabled;
     public void SetSourceText(string source)
     {
-        try { SourceTextBox.Text = source ?? ""; } catch { /* ignore */ }
+        UpdateTitleFromSource(source);
+    }
+
+    private void UpdateTitleFromSource(string? source)
+    {
+        try
+        {
+            var s = (source ?? "").Trim();
+            if (s.Length > 64) s = s.Substring(0, 64) + "\u2026";
+            Title = string.IsNullOrWhiteSpace(s) ? "LyllyPlayer — Playlist" : $"LyllyPlayer — Playlist — {s}";
+        }
+        catch { /* ignore */ }
     }
     public void SetLoadEnabled(bool enabled)
     {
         if (_busyCount > 0)
             enabled = false;
         SearchYoutubeButton.IsEnabled = enabled;
-        LoadUrlButton.IsEnabled = enabled;
-        LoadM3uButton.IsEnabled = enabled;
         LoadFolderButton.IsEnabled = enabled;
         SavePlaylistButton.IsEnabled = enabled;
-        LoadSavedButton.IsEnabled = enabled;
+        LoadPlaylistButton.IsEnabled = enabled;
         try { PlaylistFilterTextBox.IsEnabled = enabled; } catch { /* ignore */ }
         try { PlaylistFilterClearButton.IsEnabled = enabled; } catch { /* ignore */ }
     }
@@ -710,19 +740,15 @@ public partial class PlaylistWindow : Window
 
     public void ScrollToIndex(int index)
     {
-        if (index < 0)
-            return;
-        if (_queueSource is null || index >= _queueSource.Count)
-            return;
-
+        if (index < 0) return;
+        if (_queueSource is null) return;
         try
         {
-            QueueListBox.ScrollIntoView(_queueSource[index]);
+            var item = _queueSource.FirstOrDefault(q => !q.IsQueued && q.BaseIndex == index);
+            if (item is null) return;
+            PlaylistListBox.ScrollIntoView(item);
         }
-        catch
-        {
-            // ignore
-        }
+        catch { /* ignore */ }
     }
 
     /// <summary>Call before <see cref="Window.Show"/> so the first paint does not flash the top of the list before scroll-to-now-playing.</summary>
@@ -731,7 +757,7 @@ public partial class PlaylistWindow : Window
         try
         {
             _suppressQueueListUntilInitialScroll = true;
-            QueueListBox.Opacity = 0;
+            PlaylistListBox.Opacity = 0;
             if (_initialScrollMaskFailsafeTimer is null)
             {
                 _initialScrollMaskFailsafeTimer = new DispatcherTimer(DispatcherPriority.Background)
@@ -760,7 +786,7 @@ public partial class PlaylistWindow : Window
             if (!_suppressQueueListUntilInitialScroll)
                 return;
             _suppressQueueListUntilInitialScroll = false;
-            QueueListBox.Opacity = 1;
+            PlaylistListBox.Opacity = 1;
             try { _initialScrollMaskFailsafeTimer?.Stop(); } catch { /* ignore */ }
         }
         catch
@@ -769,58 +795,50 @@ public partial class PlaylistWindow : Window
         }
     }
 
-    public void CenterIndex(int index)
+    public void CenterNowPlaying(PlaylistEntry? entry)
     {
-        if (index < 0)
-            return;
-        if (_queueSource is null || index >= _queueSource.Count)
-            return;
+        if (entry is null) return;
 
-        var item = _queueSource[index];
-        var req = Interlocked.Increment(ref _centerRequestId);
-        CenterListBoxOnQueueItem(QueueListBox, item, req);
-    }
-
-    private async void LoadUrlButton_OnClick(object sender, RoutedEventArgs e)
-    {
         try
         {
-            if (_busyCount > 0)
-                return;
-
-            var initial = "";
-            try { initial = _getLastYoutubeUrl() ?? ""; } catch { initial = ""; }
-            var dlg = new LoadUrlDialog(initial) { Owner = GetDialogOwnerWindow() };
-            if (dlg.ShowDialog() != true)
-                return;
-
-            var url = dlg.UrlText;
-            if (string.IsNullOrWhiteSpace(url))
-                return;
-
-            // Update the read-only textbox to reflect the current source.
-            SourceTextBox.Text = url;
-            _sourceChanged(url);
-            try { _setLastYoutubeUrl(url); } catch { /* ignore */ }
-            Interlocked.Increment(ref _busyCount);
-            SetLoadEnabled(false);
-            SetBusy("Loading...");
-            try
+            // 1. Search Queue First
+            if (_queueSource is not null && _queueSource.Any())
             {
-                await _loadUrlAsync(url);
+                var queuedItem = _queueSource.FirstOrDefault(q =>
+                    q.IsQueued &&
+                    q.Entry is not null &&
+                    string.Equals(q.Entry.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase));
+
+                if (queuedItem is not null)
+                {
+                    CenterListBoxOnQueueItem(QueuedListBox, queuedItem, Interlocked.Increment(ref _centerRequestId));
+                    return;
+                }
             }
-            finally
+
+            // 2. Fallback to Base Playlist
+            if (_playlistItemsSource is not null && _playlistItemsSource.Any())
             {
-                ClearBusy();
-                Interlocked.Decrement(ref _busyCount);
-                SetLoadEnabled(true);
+                var baseItem = _playlistItemsSource.FirstOrDefault(q =>
+                    !q.IsQueued &&
+                    q.Entry is not null &&
+                    string.Equals(q.Entry.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase));
+
+                if (baseItem is not null)
+                {
+                //    System.Windows.MessageBox.Show($"CenterNowPlaying → QueuedListBox\n" +
+                //         $"VideoId: {baseItem.VideoId}\n" +
+                //         $"Entry.VideoId: {baseItem.Entry.VideoId}\n" +
+                //         $"IsQueued: {baseItem.IsQueued}");     
+                    CenterListBoxOnQueueItem(PlaylistListBox, baseItem, Interlocked.Increment(ref _centerRequestId));
+                    return;
+                }
             }
         }
-        catch
-        {
-            // ignore
-        }
+        catch { }
     }
+
+    // Load URL moved into the YouTube modal.
 
     private async void SearchYoutubeButton_OnClick(object sender, RoutedEventArgs e)
     {
@@ -860,14 +878,15 @@ public partial class PlaylistWindow : Window
             if (_busyCount > 0)
                 return;
 
-            var s = (SourceTextBox.Text ?? "").Trim();
+            var s = "";
+            try { s = (_getSource() ?? "").Trim(); } catch { s = ""; }
             var safe = string.IsNullOrWhiteSpace(s) ? "playlist" : MakeSafeFileName(s);
             if (safe.Length > 80) safe = safe.Substring(0, 80);
 
             var dlg = new Microsoft.Win32.SaveFileDialog
             {
                 Title = "Save playlist",
-                Filter = "Playlist JSON (*.json)|*.json|All files (*.*)|*.*",
+                Filter = "Playlist JSON (*.json)|*.json|M3U playlist (*.m3u;*.m3u8)|*.m3u;*.m3u8|All files (*.*)|*.*",
                 AddExtension = true,
                 DefaultExt = ".json",
                 FileName = $"{safe}.json",
@@ -899,7 +918,7 @@ public partial class PlaylistWindow : Window
         }
     }
 
-    private async void LoadSavedButton_OnClick(object sender, RoutedEventArgs e)
+    private async void LoadPlaylistButton_OnClick(object sender, RoutedEventArgs e)
     {
         try
         {
@@ -908,8 +927,8 @@ public partial class PlaylistWindow : Window
 
             var dlg = new Microsoft.Win32.OpenFileDialog
             {
-                Title = "Load saved playlist",
-                Filter = "Playlist JSON (*.json)|*.json|All files (*.*)|*.*",
+                Title = "Load playlist",
+                Filter = "Playlists (*.json;*.m3u;*.m3u8)|*.json;*.m3u;*.m3u8|Playlist JSON (*.json)|*.json|M3U playlist (*.m3u;*.m3u8)|*.m3u;*.m3u8|All files (*.*)|*.*",
                 CheckFileExists = true,
                 CheckPathExists = true,
                 Multiselect = false
@@ -918,12 +937,23 @@ public partial class PlaylistWindow : Window
             if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
                 return;
 
+            var path = dlg.FileName;
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            var ext = (Path.GetExtension(path) ?? "").Trim().ToLowerInvariant();
+            if (ext is ".m3u" or ".m3u8")
+            {
+                await LoadM3uFromPathAsync(path);
+                return;
+            }
+
             Interlocked.Increment(ref _busyCount);
             SetLoadEnabled(false);
             SetBusy("Loading...");
             try
             {
-                await _loadPlaylistFromFileAsync(dlg.FileName);
+                await _loadPlaylistFromFileAsync(path);
             }
             finally
             {
@@ -953,26 +983,12 @@ public partial class PlaylistWindow : Window
         return s.Trim();
     }
 
-    private async void LoadM3uButton_OnClick(object sender, RoutedEventArgs e)
+    private async Task LoadM3uFromPathAsync(string path)
     {
         try
         {
             if (_busyCount > 0)
                 return;
-
-            var dlg = new Microsoft.Win32.OpenFileDialog
-            {
-                Title = "Select M3U playlist",
-                Filter = "M3U playlist (*.m3u;*.m3u8)|*.m3u;*.m3u8|All files (*.*)|*.*",
-                CheckFileExists = true,
-                CheckPathExists = true,
-                Multiselect = false
-            };
-
-            if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
-                return;
-
-            var path = dlg.FileName;
             var readMeta = false;
             try { readMeta = _getReadMetadataOnLoad(); } catch { readMeta = false; }
 
@@ -990,8 +1006,8 @@ public partial class PlaylistWindow : Window
                     readMetadataOnLoad: readMeta,
                     cts.Token,
                     metadataProgress: readMeta ? CreateMetadataLoadProgress() : null).ConfigureAwait(true);
-                SourceTextBox.Text = path;
                 _sourceChanged(path);
+                UpdateTitleFromSource(path);
                 await _loadEntriesAsync(entries, title, path, cts.Token).ConfigureAwait(true);
                 try { _commitPlaylistCancelRestore?.Invoke(); } catch { /* ignore */ }
             }
@@ -1007,8 +1023,8 @@ public partial class PlaylistWindow : Window
                             _getFfmpegPath(),
                             readMetadataOnLoad: false,
                             CancellationToken.None).ConfigureAwait(true);
-                        SourceTextBox.Text = path;
                         _sourceChanged(path);
+                        UpdateTitleFromSource(path);
                         await _loadEntriesAsync(entriesFast, titleFast, path, CancellationToken.None).ConfigureAwait(true);
                         try { _commitPlaylistCancelRestore?.Invoke(); } catch { /* ignore */ }
                     }
@@ -1050,90 +1066,7 @@ public partial class PlaylistWindow : Window
             if (_busyCount > 0)
                 return;
 
-            using var dlg = new Forms.FolderBrowserDialog
-            {
-                Description = "Select folder containing audio files",
-                UseDescriptionForTitle = true,
-                ShowNewFolderButton = false
-            };
-
-            var owner = new Win32OwnerWrapper(new System.Windows.Interop.WindowInteropHelper(GetDialogOwnerWindow()).Handle);
-            var result = dlg.ShowDialog(owner);
-            if (result != Forms.DialogResult.OK)
-                return;
-
-            var folder = dlg.SelectedPath;
-            if (string.IsNullOrWhiteSpace(folder))
-                return;
-
-            var includeSub = false;
-            try { includeSub = _getIncludeSubfoldersOnFolderLoad(); } catch { includeSub = false; }
-            var readMeta = false;
-            try { readMeta = _getReadMetadataOnLoad(); } catch { readMeta = false; }
-
-            using var cts = new CancellationTokenSource();
-            Interlocked.Exchange(ref _folderMetadataBusyUserChoice, 0);
-            Interlocked.Increment(ref _busyCount);
-            SetLoadEnabled(false);
-            try { _capturePlaylistForCancelRestore?.Invoke(); } catch { /* ignore */ }
-            SetBusy("Loading...", cts, showSkipFolderMetadata: readMeta);
-            try
-            {
-                var entries = await LocalPlaylistLoader.LoadFolderAsync(
-                    folder,
-                    includeSub,
-                    _getFfmpegPath(),
-                    readMetadataOnLoad: readMeta,
-                    cts.Token,
-                    metadataProgress: readMeta ? CreateMetadataLoadProgress() : null).ConfigureAwait(true);
-                SourceTextBox.Text = folder;
-                _sourceChanged(folder);
-                await _loadEntriesAsync(entries, Path.GetFileName(folder), folder, cts.Token).ConfigureAwait(true);
-                try { _commitPlaylistCancelRestore?.Invoke(); } catch { /* ignore */ }
-            }
-            catch (OperationCanceledException)
-            {
-                var choice = Interlocked.Exchange(ref _folderMetadataBusyUserChoice, 0);
-                if (choice == 2 && readMeta)
-                {
-                    try
-                    {
-                        var entriesFast = await LocalPlaylistLoader.LoadFolderAsync(
-                            folder,
-                            includeSub,
-                            _getFfmpegPath(),
-                            readMetadataOnLoad: false,
-                            CancellationToken.None).ConfigureAwait(true);
-                        SourceTextBox.Text = folder;
-                        _sourceChanged(folder);
-                        await _loadEntriesAsync(entriesFast, Path.GetFileName(folder), folder, CancellationToken.None)
-                            .ConfigureAwait(true);
-                        try { _commitPlaylistCancelRestore?.Invoke(); } catch { /* ignore */ }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        try { _rollbackPlaylistCancelRestore?.Invoke(); } catch { /* ignore */ }
-                    }
-                    catch
-                    {
-                        try { _commitPlaylistCancelRestore?.Invoke(); } catch { /* ignore */ }
-                    }
-                }
-                else
-                {
-                    try { _rollbackPlaylistCancelRestore?.Invoke(); } catch { /* ignore */ }
-                }
-            }
-            catch
-            {
-                try { _commitPlaylistCancelRestore?.Invoke(); } catch { /* ignore */ }
-            }
-            finally
-            {
-                ClearBusy();
-                Interlocked.Decrement(ref _busyCount);
-                SetLoadEnabled(true);
-            }
+            await _openLocalFilesModalAsync(GetDialogOwnerWindow(), CancellationToken.None);
         }
         catch
         {
@@ -1205,7 +1138,7 @@ public partial class PlaylistWindow : Window
         }
     }
 
-    // SourceTextBox is read-only; loading happens via dialog.
+    // Source is reflected in window title; loading happens via dialog.
 
     private static bool TryGetLocalPath(string? webpageUrlOrPath, out string path)
     {
@@ -1219,16 +1152,86 @@ public partial class PlaylistWindow : Window
             if (sender is not ContextMenu cm)
                 return;
 
-            if (cm.Items.OfType<MenuItem>().FirstOrDefault() is not MenuItem mi)
+            var items = cm.Items.OfType<object>().ToList();
+            var openMi = items.OfType<MenuItem>().FirstOrDefault();
+            var addMi = items.OfType<MenuItem>().FirstOrDefault(x => string.Equals(x.Name, "AddToQueueMenuItem", StringComparison.Ordinal));
+            var removeMi = items.OfType<MenuItem>().FirstOrDefault(x => string.Equals(x.Name, "RemoveFromQueueMenuItem", StringComparison.Ordinal));
+
+            if (openMi is null)
                 return;
 
             var qi = cm.PlacementTarget is FrameworkElement fe ? fe.DataContext as QueueItem : null;
             if (qi is null)
                 return;
 
-            mi.Header = TryGetLocalPath(qi.WebpageUrl, out _)
+            openMi.Header = TryGetLocalPath(qi.WebpageUrl, out _)
                 ? "Open file location"
                 : "Open in browser";
+
+            // Menu visibility rules:
+            // - Base playlist rows: only "Add to queue"
+            // - Queued rows: "Queue next/last" + "Remove from queue" (no add; queue interactions never create duplicates)
+            var isQueuedRow = qi.IsQueued;
+
+            if (addMi is not null)
+            {
+                addMi.Visibility = isQueuedRow ? Visibility.Collapsed : Visibility.Visible;
+                addMi.IsEnabled = !isQueuedRow && qi.Entry is not null;
+            }
+
+            if (removeMi is not null)
+            {
+                removeMi.Visibility = isQueuedRow ? Visibility.Visible : Visibility.Collapsed;
+                removeMi.IsEnabled = isQueuedRow && qi.QueueInstanceId is not null;
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private async void AddToQueueMenuItem_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (sender is not MenuItem mi)
+                return;
+            if (mi.Parent is not ContextMenu cm)
+                return;
+            if (cm.PlacementTarget is not FrameworkElement fe)
+                return;
+            if (fe.DataContext is not QueueItem qi)
+                return;
+            if (qi.Entry is null)
+                return;
+            if (qi.IsQueued)
+                return;
+
+            await _addToQueueAsync(qi.Entry);
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private async void RemoveFromQueueMenuItem_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (sender is not MenuItem mi)
+                return;
+            if (mi.Parent is not ContextMenu cm)
+                return;
+            if (cm.PlacementTarget is not FrameworkElement fe)
+                return;
+            if (fe.DataContext is not QueueItem qi)
+                return;
+            if (!qi.IsQueued || qi.QueueInstanceId is not Guid id)
+                return;
+
+            await _removeQueuedInstanceAsync(id);
         }
         catch
         {
@@ -1270,12 +1273,14 @@ public partial class PlaylistWindow : Window
 
     private void QueueListBox_OnPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        var idx = TryGetIndexFromOriginalSource(e.OriginalSource as DependencyObject);
+        if (sender is not System.Windows.Controls.ListBox lb)
+            return;
+        var idx = TryGetIndexFromOriginalSource(lb, e.OriginalSource as DependencyObject);
         _lastClickedIndex = idx ?? -1;
-        if (_lastClickedIndex < 0 || _lastClickedIndex >= QueueListBox.Items.Count)
+        if (_lastClickedIndex < 0 || _lastClickedIndex >= lb.Items.Count)
             return;
 
-        if (QueueListBox.Items[_lastClickedIndex] is not QueueItem qi)
+        if (lb.Items[_lastClickedIndex] is not QueueItem qi)
             return;
 
         _selectedVideoIdChanged(qi.VideoId);
@@ -1284,17 +1289,25 @@ public partial class PlaylistWindow : Window
     private async void QueueListBox_OnMouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         // Resolve row from the double-click hit (virtualized list + fast clicks can leave _lastClickedIndex stale).
-        var idx = TryGetIndexFromOriginalSource(e.OriginalSource as DependencyObject);
-        if (idx is null || idx.Value < 0 || idx.Value >= QueueListBox.Items.Count)
+        if (sender is not System.Windows.Controls.ListBox lb)
+            return;
+        var idx = TryGetIndexFromOriginalSource(lb, e.OriginalSource as DependencyObject);
+        if (idx is null || idx.Value < 0 || idx.Value >= lb.Items.Count)
             return;
 
-        if (QueueListBox.Items[idx.Value] is not QueueItem qi)
+        if (lb.Items[idx.Value] is not QueueItem qi)
             return;
+
+        if (qi.IsQueued && qi.QueueInstanceId is Guid qid)
+        {
+            await _doubleClickPlayAsync($"queue:{qid:D}");
+            return;
+        }
 
         await _doubleClickPlayAsync(qi.VideoId);
     }
 
-    private int? TryGetIndexFromOriginalSource(DependencyObject? original)
+    private int? TryGetIndexFromOriginalSource(System.Windows.Controls.ListBox listBox, DependencyObject? original)
     {
         if (original is null)
             return null;
@@ -1306,7 +1319,7 @@ public partial class PlaylistWindow : Window
         if (cur is not ListBoxItem lbi)
             return null;
 
-        return QueueListBox.ItemContainerGenerator.IndexFromContainer(lbi);
+        return listBox.ItemContainerGenerator.IndexFromContainer(lbi);
     }
 
     // (Moved to OpenMenuItem_OnClick)
@@ -1315,86 +1328,40 @@ public partial class PlaylistWindow : Window
     {
         void Work()
         {
-            var endInitialScrollMask = true;
-            try
+            //  System.Windows.MessageBox.Show($"CenterListBoxOnQueueItem.Work\n" +
+            //     $"requestId: {requestId}\n" +
+            //     $"_centerRequestId: {_centerRequestId}\n" +
+            //     $"item.VideoId: {item.VideoId}\n" +
+            //     $"Match: {(requestId == _centerRequestId ? "YES" : "NO")}");
+            if (requestId != _centerRequestId)
             {
-                if (requestId != _centerRequestId)
-                {
-                    endInitialScrollMask = false;
-                    return;
-                }
-
-                listBox.ApplyTemplate();
-                var scrollViewer = FindListBoxScrollViewer(listBox);
-                if (scrollViewer is null || scrollViewer.ViewportHeight <= 0)
-                {
-                    if (attempt < 3)
-                    {
-                        endInitialScrollMask = false;
-                        listBox.Dispatcher.BeginInvoke(new Action(() => CenterListBoxOnQueueItem(listBox, item, requestId, attempt + 1)), DispatcherPriority.Loaded);
-                    }
-                    return;
-                }
-
-                listBox.ScrollIntoView(item);
-                listBox.UpdateLayout();
-
-                var viewIndex = -1;
-                for (var i = 0; i < listBox.Items.Count; i++)
-                {
-                    if (ReferenceEquals(listBox.Items[i], item))
-                    {
-                        viewIndex = i;
-                        break;
-                    }
-                }
-
-                if (viewIndex < 0)
-                    return;
-
-                var container = listBox.ItemContainerGenerator.ContainerFromIndex(viewIndex) as FrameworkElement;
-                if (container is null)
-                {
-                    if (attempt < 3)
-                    {
-                        endInitialScrollMask = false;
-                        listBox.Dispatcher.BeginInvoke(new Action(() => CenterListBoxOnQueueItem(listBox, item, requestId, attempt + 1)), DispatcherPriority.Loaded);
-                    }
-                    return;
-                }
-
-                // Robust centering: compute relative to the ScrollViewer itself.
-                // (Using template internals can produce bogus transforms under virtualization.)
-                var p = container.TransformToAncestor(scrollViewer).Transform(new System.Windows.Point(0, 0));
-                var itemMidInViewport = p.Y + (container.ActualHeight / 2.0);
-                var delta = itemMidInViewport - (scrollViewer.ViewportHeight / 2.0);
-                var target = scrollViewer.VerticalOffset + delta;
-
-                var max = Math.Max(0, scrollViewer.ExtentHeight - scrollViewer.ViewportHeight);
-                if (target < 0) target = 0;
-                if (target > max) target = max;
-
-                // If the computed delta is wildly off, fall back to ScrollIntoView only.
-                if (double.IsNaN(target) || double.IsInfinity(target) || Math.Abs(delta) > scrollViewer.ExtentHeight + 1000)
-                    return;
-
-                scrollViewer.ScrollToVerticalOffset(target);
-
-                if (attempt < 2 && Math.Abs(delta) > Math.Max(2, container.ActualHeight))
-                {
-                    endInitialScrollMask = false;
-                    listBox.Dispatcher.BeginInvoke(new Action(() => CenterListBoxOnQueueItem(listBox, item, requestId, attempt + 1)), DispatcherPriority.Loaded);
-                }
+                EndSuppressQueueListUntilInitialScroll();
+                return;
             }
-            catch
+
+            listBox.ApplyTemplate();
+            var scrollViewer = FindListBoxScrollViewer(listBox);
+            if (scrollViewer is null || scrollViewer.ViewportHeight <= 0)
             {
-                // ignore
-            }
-            finally
-            {
-                if (endInitialScrollMask)
+                if (attempt < 3)
+                {
                     EndSuppressQueueListUntilInitialScroll();
+                    listBox.Dispatcher.BeginInvoke(
+                        new Action(() => CenterListBoxOnQueueItem(listBox, item, requestId, attempt + 1)),
+                        DispatcherPriority.Render);
+                }
+                return;
             }
+
+            // ScrollIntoView forces the container to be generated, then we defer the
+            // centering math until AFTER layout settles so p.Y is the correct post-scroll position.
+            listBox.ScrollIntoView(item);
+            listBox.UpdateLayout();
+
+            var sv = scrollViewer; // capture for callback
+            listBox.Dispatcher.BeginInvoke(
+                new Action(() => PerformCentering(listBox, item, requestId, sv, attempt)),
+                DispatcherPriority.Render);
         }
 
         if (listBox.Dispatcher.CheckAccess() && attempt == 0)
@@ -1403,6 +1370,74 @@ public partial class PlaylistWindow : Window
             listBox.Dispatcher.BeginInvoke(Work, DispatcherPriority.ContextIdle);
         else
             listBox.Dispatcher.BeginInvoke(Work, DispatcherPriority.Loaded);
+
+        // ── Phase 2: centering calculation (runs on Loaded priority after ScrollIntoView settles) ──
+        void PerformCentering(System.Windows.Controls.ListBox lb, QueueItem it, int rid, ScrollViewer sv, int att)
+        {
+            if (rid != _centerRequestId)
+            {
+                // System.Windows.MessageBox.Show($"ABORTED: rid={rid}, _centerRequestId={_centerRequestId}");
+                EndSuppressQueueListUntilInitialScroll();
+                return;
+            }
+
+            lb.ApplyTemplate();
+
+            // BUG FIX: use ContainerFromItem directly (reference pattern) instead of
+            // the fragile two-step "find index by iterating Items then ContainerFromIndex"
+            var container = lb.ItemContainerGenerator.ContainerFromItem(it) as FrameworkElement;
+            if (container is null)
+            {
+                // The item was consumed (e.g. first queue item played and removed).
+                // Scroll to whatever is now first in the queue so the user sees what's next.
+                if (lb == QueuedListBox && lb.Items.Count > 0)
+                {
+                    var firstItem = lb.Items[0];
+                    if (firstItem is QueueItem firstQueueItem)
+                    {
+                        lb.SelectedItem = firstQueueItem;
+                        lb.ScrollIntoView(firstQueueItem);
+                        lb.UpdateLayout();
+                        // Defer centering for the new item too — use Loaded
+                        lb.Dispatcher.BeginInvoke(
+                            new Action(() => PerformCentering(lb, firstQueueItem, rid, sv, att)),
+                            DispatcherPriority.Loaded);
+                    }
+                }
+                EndSuppressQueueListUntilInitialScroll();
+                return;
+            }
+
+            // Center the item in the visible viewport
+            int index = lb.Items.IndexOf(it);
+            if (index < 0) 
+            {
+                // Item not found (shouldn't happen if logic is correct, but safe fallback)
+                EndSuppressQueueListUntilInitialScroll();
+                return;
+            }
+
+            // 2. Calculate the average height of an item
+            // sv.ExtentHeight is the total scrollable height.
+            // lb.Items.Count is the number of items.
+            double totalItems = lb.Items.Count;
+            if (totalItems <= 0) return;
+
+            double itemHeight = sv.ExtentHeight / totalItems;
+
+            // 3. Calculate the target scroll offset to center that specific index
+            // Formula: (Index * AvgHeight) + (HalfItemHeight) - (HalfViewportHeight)
+            double target = (index * itemHeight) + (itemHeight / 2.0) - (sv.ViewportHeight / 2.0);
+
+            // 4. Clamp the target to the valid range
+            double maxOffset = Math.Max(0, sv.ExtentHeight - sv.ViewportHeight);
+            target = Math.Max(0, Math.Min(target, maxOffset));
+
+            // 5. Scroll
+            sv.ScrollToVerticalOffset(target);
+
+            EndSuppressQueueListUntilInitialScroll();
+        }
     }
 
     private static ScrollViewer? FindListBoxScrollViewer(System.Windows.Controls.ListBox listBox)
@@ -1426,6 +1461,15 @@ public partial class PlaylistWindow : Window
         }
         return null;
     }
+
+    public void RefreshQueueView()
+    {
+        try
+        {
+            var count = _queueSource?.Count ?? 0;
+            try { QueuedHeaderTextBlock.Text = count > 0 ? $"Queue ({count})" : "Queue"; } catch { /* ignore */ }
+            try { QueuedPanel.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
+        }
+        catch { /* ignore */ }
+    }
 }
-
-

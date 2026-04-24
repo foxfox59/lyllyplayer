@@ -9,11 +9,19 @@
 ---
 
 ### What's new, pussycat?
-Upcoming (TBA): 
-- song queue, ability to have both local and stream sources in the same playlist, M3U(8) playlist export
 
-Live:
-- 1.3.1: fixes a small bug with the playlist window getting stuck on the wrong display on multi-monitor setups
+- 1.4.0: various quality of life updates
+  - Playlist:
+	- Shuffle performance improved - no longer saves unnecessary collections
+    - Song queue
+    - Ability to mix local and streaming sources
+	- Saving playlists as M3U(8)
+  - Certain YT fetching issues fixed
+  - Stop button added
+  - Feature forgotten from previous release notes: ability to toggle the app visibility between taskbar, notification area, or both
+	- Notification area has a context menu for playback
+  - Known issues:
+    - Playlist becomes slow (but not unusable) with large playlists - around ~15000 items for me, YMMV
 - 1.3.0: playlist and search improvements
   - Ability to import YT playlists from your account (!!)
     - Best-effort using yt-dlp and browser cookie. This might not work for you and/or break at any given time. I'm intentionally trying to avoid having to use API tokens as I want this to be as turnkey as possible.
@@ -45,8 +53,8 @@ Simple visualizer: off, VU bars, or a frequency spectrum
 
 I am a software developer, so I have some qualifications to supervise and suggest solutions, but unless otherwise specified:  
 
-**all of the actual code is AI slop.**  
-All I touch manually is the documentation. This is partially an experiment in how far can I push things before the codebase gets too complicated for the AI to track. Also a test of patience - many things would have been faster fixed by hand but I deliberately chose not to.  
+**99.9% of the actual code is AI slop.**  
+All I touch manually is the documentation (recently I had to start doing some fixes manually). This is partially an experiment in how far can I push things before the codebase gets too complicated for the AI to track. Also a test of patience - many things would have been faster fixed by hand but I deliberately chose not to.  
 
 **Exit now or accept that.**
 
@@ -88,7 +96,6 @@ Ideas for later — **not** commitments and nothing to depend on for now:
 
 - Optimize memory usage (or change whole implementation away from WPF)
 - Improve window snapping (currently occasionally feels jittery)
-- Playlist enhancements (queue UX, adding items/URLs to existing playlists, etc)
 - Lyrics display? Not a very high priority, but it might be amusing
 - Linux builds — desktop player on Linux (would require significant changes)
 - Android release — mobile variant (requested feature by testers, would require very significant changes)

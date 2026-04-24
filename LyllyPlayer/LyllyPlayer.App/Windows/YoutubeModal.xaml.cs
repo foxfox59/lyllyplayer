@@ -15,6 +15,9 @@ public partial class YoutubeModal : Window
     private readonly Func<string, bool, bool, CancellationToken, Task> _importPlaylistAsync;
     private readonly Func<string, CancellationToken, Task<int?>> _tryGetPlaylistItemCountAsync;
     private readonly Action<bool> _setImportAppendDefault;
+    private readonly Func<string> _getLastUrl;
+    private readonly Action<string> _setLastUrl;
+    private readonly Func<string, CancellationToken, Task> _openUrlAsync;
 
     public YoutubeModal(
         Func<string, int, int, CancellationToken, Task> searchVideosAsync,
@@ -22,6 +25,9 @@ public partial class YoutubeModal : Window
         Func<int, CancellationToken, Task<IReadOnlyList<YoutubePlaylistHit>>> listAccountPlaylistsAsync,
         Func<string, bool, bool, CancellationToken, Task> importPlaylistAsync,
         Func<string, CancellationToken, Task<int?>> tryGetPlaylistItemCountAsync,
+        Func<string> getLastUrl,
+        Action<string> setLastUrl,
+        Func<string, CancellationToken, Task> openUrlAsync,
         (int count, int minLenSeconds) searchDefaults,
         bool importAppendDefault,
         Action<bool> setImportAppendDefault)
@@ -32,8 +38,13 @@ public partial class YoutubeModal : Window
         _importPlaylistAsync = importPlaylistAsync;
         _tryGetPlaylistItemCountAsync = tryGetPlaylistItemCountAsync;
         _setImportAppendDefault = setImportAppendDefault;
+        _getLastUrl = getLastUrl;
+        _setLastUrl = setLastUrl;
+        _openUrlAsync = openUrlAsync;
 
         InitializeComponent();
+
+        try { OpenUrlTextBox.Text = _getLastUrl() ?? ""; } catch { /* ignore */ }
 
         try { SearchVideosCountTextBox.Text = searchDefaults.count.ToString(); } catch { /* ignore */ }
         try { SearchVideosMinLenTextBox.Text = searchDefaults.minLenSeconds.ToString(); } catch { /* ignore */ }
@@ -103,6 +114,39 @@ public partial class YoutubeModal : Window
         finally
         {
             SearchVideosButton.IsEnabled = true;
+        }
+    }
+
+    private async void OpenUrlButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        OpenUrlStatusTextBlock.Text = "";
+        var url = (OpenUrlTextBox.Text ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            OpenUrlStatusTextBlock.Text = "Enter a URL.";
+            return;
+        }
+
+        try { _setLastUrl(url); } catch { /* ignore */ }
+
+        try
+        {
+            OpenUrlButton.IsEnabled = false;
+            OpenUrlStatusTextBlock.Text = "Opening…";
+            await _openUrlAsync(url, CancellationToken.None);
+            OpenUrlStatusTextBlock.Text = "Done.";
+        }
+        catch (OperationCanceledException)
+        {
+            OpenUrlStatusTextBlock.Text = "Cancelled.";
+        }
+        catch (Exception ex)
+        {
+            OpenUrlStatusTextBlock.Text = ex.Message;
+        }
+        finally
+        {
+            OpenUrlButton.IsEnabled = true;
         }
     }
 

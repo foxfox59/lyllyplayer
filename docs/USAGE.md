@@ -1,4 +1,4 @@
-# LyllyPlayer — usage guide
+# LyllyPlayer — usage guide (outdated - for v1.3.0)
 
 This document describes the **current** behavior of the Windows desktop app (main window, playlist window, options, and persistence). Use it as a checklist while you review the product; adjust wording or sections if you change the UI later.
 

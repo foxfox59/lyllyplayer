@@ -414,6 +414,7 @@
                                     Margin="0,0,6,0"
                                     TextElement.FontSize="11">
                             <Button x:Name="PrevButton" Content="&lt;&lt;" MinWidth="40" Margin="0,0,6,0" Padding="6,4" Click="PrevButton_OnClick"/>
+                            <Button x:Name="StopButton" Content="■" MinWidth="40" Margin="0,0,6,0" Padding="6,4" Click="StopButton_OnClick"/>                            
                             <Button x:Name="PlayPauseButton" Content="&gt;" MinWidth="40" Margin="0,0,6,0" Padding="6,4" Click="PlayPauseButton_OnClick"/>
                             <Button x:Name="NextButton" Content="&gt;&gt;" MinWidth="40" Margin="0,0,6,0" Padding="6,4" Click="NextButton_OnClick"/>
 

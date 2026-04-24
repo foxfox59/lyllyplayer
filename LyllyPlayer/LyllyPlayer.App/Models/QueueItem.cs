@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 
 namespace LyllyPlayer.Models;
@@ -11,16 +12,69 @@ public sealed class QueueItem : INotifyPropertyChanged
         IndexPrefix = indexPrefix;
     }
 
-    public PlaylistEntry Entry { get; }
-    public string VideoId => Entry.VideoId;
-    public string Title => Entry.Title;
-    public string? Channel => Entry.Channel;
+    private QueueItem() { }
+
+    public PlaylistEntry? Entry { get; init; }
+    public string VideoId => Entry?.VideoId ?? "";
+    public string Title => Entry?.Title ?? "";
+    public string? Channel => Entry?.Channel;
     public string? IndexPrefix { get; }
+    public bool IsQueued { get; init; }
+    /// <summary>True when this base playlist row currently exists in queue (reorder instead of add).</summary>
+    public bool IsInQueue { get; init; }
+    /// <summary>0-based row index for base playlist items; null for queued items.</summary>
+    public int? BaseIndex { get; init; }
+    public Guid? QueueInstanceId { get; init; }
+    public int? QueueOrdinal { get; set; }
     public string DisplayTitle
-        => $"{(IsLocal && !string.IsNullOrWhiteSpace(IndexPrefix) ? IndexPrefix : "")}{(IsPremium ? "[PREMIUM] " : "")}{(string.IsNullOrWhiteSpace(Channel) ? Title : $"{Title} — {Channel}")}{(RequiresCookies ? " [auth]" : "")}{(IsUnavailable ? " (Not available)" : "")}";
-    public int? DurationSeconds => Entry.DurationSeconds;
-    public string WebpageUrl => Entry.WebpageUrl;
-    private bool IsLocal => VideoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase);
+        => false
+            ? ""
+            : $"{(IsQueued && QueueOrdinal is int q ? $"Q{q}. " : "")}{(!string.IsNullOrWhiteSpace(IndexPrefix) ? IndexPrefix : "")}{(IsPremium ? "[PREMIUM] " : "")}{(string.IsNullOrWhiteSpace(Channel) ? Title : $"{Title} — {Channel}")}{(RequiresCookies ? " [auth]" : "")}{(IsUnavailable ? " (Not available)" : "")}";
+    public int? DurationSeconds => Entry?.DurationSeconds;
+    public string WebpageUrl => Entry?.WebpageUrl ?? "";
+    private bool IsLocal
+    {
+        get
+        {
+            if (VideoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
+                return true;
+            try { return Path.IsPathRooted(WebpageUrl); } catch { return false; }
+        }
+    }
+
+    private bool IsStream
+    {
+        get
+        {
+            if (IsLocal) return false;
+            var s = WebpageUrl;
+            if (string.IsNullOrWhiteSpace(s)) return false;
+            if (!Uri.TryCreate(s, UriKind.Absolute, out var uri)) return false;
+            if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                return false;
+            var h = uri.Host ?? "";
+            if (h.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) || h.Contains("youtu.be", StringComparison.OrdinalIgnoreCase))
+                return false;
+            return true;
+        }
+    }
+
+    private bool IsYoutube
+    {
+        get
+        {
+            if (IsLocal) return false;
+            var s = WebpageUrl;
+            if (string.IsNullOrWhiteSpace(s)) return false;
+            if (!Uri.TryCreate(s, UriKind.Absolute, out var uri)) return false;
+            var h = uri.Host ?? "";
+            return h.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) || h.Contains("youtu.be", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    public string SourceGlyph
+        => IsLocal ? "\uD83D\uDCC1" : (IsStream ? "\u2248" : (IsYoutube ? "\u25B6" : ""));
 
     private bool _isPremium;
     public bool IsPremium
@@ -77,7 +131,7 @@ public sealed class QueueItem : INotifyPropertyChanged
     /// True when yt-dlp's flat metadata reported <c>availability = needs_auth</c> or <c>is_private</c>.
     /// These items will play only when browser cookies are configured; without them they produce 403s.
     /// </summary>
-    public bool RequiresCookies => Entry.RequiresCookies;
+    public bool RequiresCookies => Entry?.RequiresCookies ?? false;
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null)

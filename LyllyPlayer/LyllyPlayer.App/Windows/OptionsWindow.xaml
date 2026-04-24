@@ -691,6 +691,34 @@
                                           Checked="KeepIncompletePlaylistOnCancelCheckBox_OnChecked"
                                           Unchecked="KeepIncompletePlaylistOnCancelCheckBox_OnUnchecked"/>
 
+                                <TextBlock Text="Playlist export (M3U)"
+                                           FontWeight="SemiBold"
+                                           Margin="0,16,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="M3U is widely compatible for local files and direct stream URLs. YouTube URLs are typically not playable in other players; you can still include them for reference."/>
+                                <CheckBox x:Name="ExportM3uIncludeYoutubeCheckBox"
+                                          Content="Include YouTube entries (as webpage URLs)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="ExportM3uIncludeYoutubeCheckBox_OnChecked"
+                                          Unchecked="ExportM3uIncludeYoutubeCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="ExportM3uPreferRelativePathsCheckBox"
+                                          Content="Prefer relative paths (when exporting to the same folder tree)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="ExportM3uPreferRelativePathsCheckBox_OnChecked"
+                                          Unchecked="ExportM3uPreferRelativePathsCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="ExportM3uIncludeLyllyMetadataCheckBox"
+                                          Content="Include LyllyPlayer rich metadata comments (#LYLLY:...)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="ExportM3uIncludeLyllyMetadataCheckBox_OnChecked"
+                                          Unchecked="ExportM3uIncludeLyllyMetadataCheckBox_OnUnchecked"/>
+
                                 <TextBlock Text="Window"
                                            FontWeight="SemiBold"
                                            Margin="0,16,0,6"

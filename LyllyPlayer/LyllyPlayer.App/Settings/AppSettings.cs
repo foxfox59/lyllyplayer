@@ -12,6 +12,8 @@ public sealed record AppSettings(
     string? RepeatMode,
     string? CurrentVideoId,
     List<string>? PlayOrderVideoIds,
+    /// <summary>Queue (play next) instances, in order; duplicates allowed. Not exported with saved playlist files.</summary>
+    List<string>? QueuedVideoIds,
     double? CurrentPositionSeconds,
     bool? WasPlaying,
     int? CacheMaxMb,
@@ -89,6 +91,16 @@ public sealed record AppSettings(
     string? YoutubeCookiesFromBrowser,
     /// <summary>Last used YouTube playlist import behavior: true = Append, false = Replace.</summary>
     bool? YoutubeImportAppend,
+    /// <summary>M3U export: include YouTube webpage URLs (not playable in most players).</summary>
+    bool? ExportM3uIncludeYoutube,
+    /// <summary>M3U export: prefer relative paths for local files under the export folder.</summary>
+    bool? ExportM3uPreferRelativePaths,
+    /// <summary>M3U export: include LyllyPlayer rich comment metadata (lines starting with #LYLLY:).</summary>
+    bool? ExportM3uIncludeLyllyMetadata,
+    /// <summary>Last used Local files import behavior: true = Append, false = Replace.</summary>
+    bool? LocalImportAppend,
+    /// <summary>Last used Local files import behavior: remove duplicates (local: full path).</summary>
+    bool? LocalImportRemoveDuplicates,
     string? AudioQuality,
     string? AudioOutputDevice,
     /// <summary>ErrorsAndWarnings | Basic | Verbose — controls INFO lines in app.log.</summary>
