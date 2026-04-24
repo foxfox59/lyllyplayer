@@ -1,4 +1,4 @@
-# LyllyPlayer screenshots (as of 1.2.0)
+# LyllyPlayer screenshots (1.2.0 - slightly outdated)
 
 ## Default view, no settings changed, 100% UI scale
 

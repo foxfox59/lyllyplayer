@@ -18,6 +18,10 @@
 	- Saving playlists as M3U(8)
   - Certain YT fetching issues fixed
   - Stop button added
+  - Feature forgotten from previous release notes: ability to toggle the app visibility between taskbar, notification area, or both
+	- Notification area has a context menu for playback
+  - Known issues:
+    - Playlist becomes slow (but not unusable) with large playlists - around ~15000 items for me, YMMV
 - 1.3.0: playlist and search improvements
   - Ability to import YT playlists from your account (!!)
     - Best-effort using yt-dlp and browser cookie. This might not work for you and/or break at any given time. I'm intentionally trying to avoid having to use API tokens as I want this to be as turnkey as possible.
