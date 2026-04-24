@@ -10,6 +10,7 @@
 
 ### What's new, pussycat?
 
+- 1.4.1: fixed a bug with compound playlist origins not saving properly on internal snapshot
 - 1.4.0: various quality of life updates
   - Playlist:
 	- Shuffle performance improved - no longer saves unnecessary collections
