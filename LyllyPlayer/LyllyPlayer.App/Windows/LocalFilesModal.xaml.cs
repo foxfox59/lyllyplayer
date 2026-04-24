@@ -15,21 +15,22 @@ public partial class LocalFilesModal : Window
     private readonly Action<bool> _setRemoveDuplicatesDefault;
     private readonly Func<bool> _getReadMetadataOnLoad;
     private readonly Func<bool> _getIncludeSubfoldersOnFolderLoad;
-    private readonly Func<string, bool, bool, bool, CancellationToken, Task> _addFolderAsync;
-    private readonly Func<IReadOnlyList<string>, bool, bool, CancellationToken, Task> _addFilesAsync;
+    // private readonly Func<string, bool, bool, bool, CancellationToken, Task> _addFolderAsync;
+    private readonly Func<string, bool, bool, bool, CancellationToken, IProgress<(int done, int total)>?, Task> _addFolderAsync;
+    private readonly Func<IReadOnlyList<string>, bool, bool, CancellationToken, IProgress<(int done, int total)>?, Task> _addFilesAsync;
 
     private CancellationTokenSource? _cts;
     private volatile bool _skipMetadataRequested;
 
     public LocalFilesModal(
-        Func<bool> getAppendDefault,
-        Action<bool> setAppendDefault,
-        Func<bool> getRemoveDuplicatesDefault,
-        Action<bool> setRemoveDuplicatesDefault,
-        Func<bool> getReadMetadataOnLoad,
-        Func<bool> getIncludeSubfoldersOnFolderLoad,
-        Func<string, bool, bool, bool, CancellationToken, Task> addFolderAsync,
-        Func<IReadOnlyList<string>, bool, bool, CancellationToken, Task> addFilesAsync)
+    Func<bool> getAppendDefault,
+    Action<bool> setAppendDefault,
+    Func<bool> getRemoveDuplicatesDefault,
+    Action<bool> setRemoveDuplicatesDefault,
+    Func<bool> getReadMetadataOnLoad,
+    Func<bool> getIncludeSubfoldersOnFolderLoad,
+    Func<string, bool, bool, bool, CancellationToken, IProgress<(int, int)>?, Task> addFolderAsync,  // <-- added parameter
+    Func<IReadOnlyList<string>, bool, bool, CancellationToken, IProgress<(int, int)>?, Task> addFilesAsync)
     {
         _getAppendDefault = getAppendDefault;
         _setAppendDefault = setAppendDefault;
@@ -166,12 +167,18 @@ public partial class LocalFilesModal : Window
             var readMeta = false;
             try { readMeta = _getReadMetadataOnLoad(); } catch { readMeta = false; }
 
+            // Progress reporter updates the status text block
+            var progress = new Progress<(int done, int total)>(p =>
+            {
+                SetStatus($"Loading metadata… ({p.done} / {p.total} files)");
+            });
+
             await RunAsync(
-                async ct =>
-                {
-                    await _addFolderAsync(folder, append, dedupe, false, ct).ConfigureAwait(true);
-                },
-                showSkipMetadata: readMeta).ConfigureAwait(true);
+            async ct =>
+            {
+                await _addFolderAsync(folder, append, dedupe, false, ct, progress).ConfigureAwait(true);
+            },
+            showSkipMetadata: readMeta).ConfigureAwait(true);
 
             // If the user requested skip-metadata mid-load, retry once without metadata.
             if (_skipMetadataRequested && readMeta)
@@ -180,7 +187,7 @@ public partial class LocalFilesModal : Window
                 await RunAsync(
                     async ct =>
                     {
-                        await _addFolderAsync(folder, append, dedupe, true, ct).ConfigureAwait(true);
+                        await _addFolderAsync(folder, append, dedupe, true, ct, progress).ConfigureAwait(true);
                     },
                     showSkipMetadata: false).ConfigureAwait(true);
             }
@@ -213,9 +220,11 @@ public partial class LocalFilesModal : Window
 
             var append = GetAppend();
             var dedupe = GetRemoveDuplicates();
+            var progress = new Progress<(int done, int total)>(p =>
+               SetStatus($"Loading metadata… ({p.done} / {p.total} files)"));
 
             await RunAsync(
-                ct => _addFilesAsync(files, append, dedupe, ct),
+                ct => _addFilesAsync(files, append, dedupe, ct, progress),
                 showSkipMetadata: false);
         }
         catch
@@ -224,4 +233,3 @@ public partial class LocalFilesModal : Window
         }
     }
 }
-

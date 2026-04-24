@@ -477,14 +477,14 @@ public partial class PlaylistWindow : Window
     /// <summary>Clears the view-only list filter (same as Clear). Used when a new playlist replaces the queue.</summary>
     public void ClearPlaylistViewFilter()
     {
-        // try
-        // {
-        //     _playlistFilterDebounceTimer.Stop();
-        //     _playlistFilterQuery = "";
-        //     if (PlaylistFilterTextBox is not null)
-        //         PlaylistFilterTextBox.Text = "";
-        //     _queueViewSource?.View.Refresh();
-        // }
+        try
+        {
+            _playlistFilterDebounceTimer.Stop();
+            _playlistFilterQuery = "";
+            if (PlaylistFilterTextBox is not null)
+                PlaylistFilterTextBox.Text = "";
+            //_queueViewSource?.View.Refresh();
+        } catch {}
         try { _playlistViewSource?.View.Refresh(); }
         catch
         {

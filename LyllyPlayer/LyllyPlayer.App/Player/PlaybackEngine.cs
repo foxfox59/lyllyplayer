@@ -1634,11 +1634,16 @@ public sealed class PlaybackEngine : IDisposable
                 _pendingCurrentDiskWarmEntry = null;
             }
 
-            if (!raiseNowPlayingChanged)
-                return;
+            // if (!raiseNowPlayingChanged)
+            //     return;
 
             var next = GetNextPlayableEntryAfterCurrent();
             if (next is null)
+                return;
+
+            // Avoid redundant restart if prefetch is already in progress for the same next track.
+            if (_prefetchNextStreamUrlVideoId is not null &&
+                string.Equals(_prefetchNextStreamUrlVideoId, next.VideoId, StringComparison.Ordinal))
                 return;
 
             CancelNextTrackWarmBestEffort();
@@ -1707,6 +1712,11 @@ public sealed class PlaybackEngine : IDisposable
                 CancelNextTrackWarmBestEffort();
                 return;
             }
+
+             // Avoid redundant restart if prefetch is already in progress for the same next track.
+            if (_prefetchNextStreamUrlVideoId is not null &&
+                string.Equals(_prefetchNextStreamUrlVideoId, next.VideoId, StringComparison.Ordinal))
+                return;
 
             CancelNextTrackWarmBestEffort();
             _nextTrackWarmCts = new CancellationTokenSource();

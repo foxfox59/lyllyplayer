@@ -1405,7 +1405,8 @@ public partial class MainWindow : Window
                 if (!string.Equals(_playlistItems[i].VideoId, videoId, StringComparison.OrdinalIgnoreCase))
                     continue;
                 var orig = _playlistItems[i];
-                var updatedEntry2 = orig.Entry! with { Title = title!, Channel = artist, DurationSeconds = durationSeconds };
+                var updatedEntry2 = orig.Entry! with { Title = string.IsNullOrWhiteSpace(title) ? 
+                    orig.Entry.Title : title!, Channel = artist, DurationSeconds = durationSeconds };
                 _playlistItems[i] = new QueueItem(updatedEntry2, orig.IndexPrefix)
                 {
                     BaseIndex = orig.BaseIndex,
@@ -1424,7 +1425,8 @@ public partial class MainWindow : Window
                 if (!string.Equals(_queueItems[i].VideoId, videoId, StringComparison.OrdinalIgnoreCase))
                     continue;
                 var orig = _queueItems[i];
-                var updatedEntry2 = orig.Entry! with { Title = title!, Channel = artist, DurationSeconds = durationSeconds };
+                var updatedEntry2 = orig.Entry! with { Title = string.IsNullOrWhiteSpace(title) ? 
+                    orig.Entry.Title : title!, Channel = artist, DurationSeconds = durationSeconds };
                 _queueItems[i] = new QueueItem(updatedEntry2, orig.IndexPrefix)
                 {
                     IsQueued = true,
@@ -3459,8 +3461,9 @@ public partial class MainWindow : Window
             },
             getReadMetadataOnLoad: () => _readMetadataOnLoad,
             getIncludeSubfoldersOnFolderLoad: () => _includeSubfoldersOnFolderLoad,
-            addFolderAsync: async (folder, append, dedupe, forceNoMetadata, ct) => await AddFolderAsync(folder, append, dedupe, forceNoMetadata, ct).ConfigureAwait(true),
-            addFilesAsync: async (files, append, dedupe, ct) => await AddFilesAsync(files, append, dedupe, ct).ConfigureAwait(true)
+            addFolderAsync: async (folder, append, dedupe, forceNoMetadata, ct, progress) =>
+                await AddFolderAsync(folder, append, dedupe, forceNoMetadata, ct, progress).ConfigureAwait(true),
+            addFilesAsync: async (files, append, dedupe, ct, progress) => await AddFilesAsync(files, append, dedupe, ct, progress).ConfigureAwait(true)
         )
         {
             Owner = owner,
@@ -3508,7 +3511,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task AddFolderAsync(string folder, bool append, bool removeDuplicates, bool forceNoMetadata, CancellationToken cancellationToken)
+    private async Task AddFolderAsync(
+    string folder,
+    bool append,
+    bool removeDuplicates,
+    bool forceNoMetadata,
+    CancellationToken cancellationToken,
+    IProgress<(int done, int total)>? progress = null)  // <-- new parameter
     {
         var f = (folder ?? "").Trim();
         if (string.IsNullOrWhiteSpace(f))
@@ -3525,7 +3534,7 @@ public partial class MainWindow : Window
             _ffmpegPath,
             readMetadataOnLoad: readMeta,
             cancellationToken,
-            metadataProgress: null).ConfigureAwait(true);
+            metadataProgress: progress).ConfigureAwait(true);
 
         var title = "";
         try { title = Path.GetFileName(f.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)); } catch { title = ""; }
@@ -3544,7 +3553,7 @@ public partial class MainWindow : Window
         AppendEntriesPreserveCurrent(entries, originLabel: title, originSource: f, removeDuplicates, cancellationToken);
     }
 
-    private async Task AddFilesAsync(IReadOnlyList<string> files, bool append, bool removeDuplicates, CancellationToken cancellationToken)
+    private async Task AddFilesAsync(IReadOnlyList<string> files, bool append, bool removeDuplicates, CancellationToken cancellationToken, IProgress<(int done, int total)>? progress = null)
     {
         var list = files?.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim()).Where(p => p.Length > 0).ToList()
                    ?? new List<string>();
@@ -3554,7 +3563,7 @@ public partial class MainWindow : Window
         cancellationToken.ThrowIfCancellationRequested();
 
         var readMeta = _readMetadataOnLoad;
-        var entries = await LoadLocalFilesEntriesAsync(list, readMeta, cancellationToken).ConfigureAwait(true);
+        var entries = await LoadLocalFilesEntriesAsync(list, readMeta, cancellationToken, progress).ConfigureAwait(true);
 
         var title = list.Count == 1 ? "File" : "Files";
         var sourceKey = list.Count == 1 ? list[0] : "Local files";
@@ -3571,9 +3580,11 @@ public partial class MainWindow : Window
         AppendEntriesPreserveCurrent(entries, originLabel: title, originSource: sourceKey, removeDuplicates, cancellationToken);
     }
 
-    private async Task<List<PlaylistEntry>> LoadLocalFilesEntriesAsync(IReadOnlyList<string> files, bool readMetadata, CancellationToken ct)
+    private async Task<List<PlaylistEntry>> LoadLocalFilesEntriesAsync(IReadOnlyList<string> files, bool readMetadata, CancellationToken ct, IProgress<(int done, int total)>? progress = null)
     {
         ct.ThrowIfCancellationRequested();
+
+        var done = 0;
 
         if (!readMetadata)
         {
@@ -3589,6 +3600,7 @@ public partial class MainWindow : Window
                     Channel: null,
                     DurationSeconds: null,
                     WebpageUrl: file));
+                progress?.Report((Interlocked.Increment(ref done), files.Count));
             }
             return acc;
         }
@@ -3611,6 +3623,7 @@ public partial class MainWindow : Window
                     artist = string.IsNullOrWhiteSpace(info.Artist) ? null : info.Artist.Trim();
                     duration = info.DurationSeconds is > 0 ? info.DurationSeconds : null;
                 }
+                progress?.Report((Interlocked.Increment(ref done), files.Count));
             }
             catch { /* ignore */ }
             finally { try { sem.Release(); } catch { /* ignore */ } }
@@ -5825,6 +5838,18 @@ public partial class MainWindow : Window
         _pendingResumeVideoId = null;
         _suppressAutoScrollVideoId = null;
         _ = _engine.PrevAsync();
+    }
+
+    private void StopButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _engine.Stop();
+            _pendingResumeSeconds = 0;
+            _pendingResumeVideoId = null;
+            ResetTimelineUiToStart();
+        }
+        catch { /* ignore */ }
     }
 
     private void PlayPauseButton_OnClick(object sender, RoutedEventArgs e)
@@ -9012,14 +9037,6 @@ public partial class MainWindow : Window
         prevItem.Click += (_, _) => { try { PrevButton_OnClick(this, new RoutedEventArgs()); } catch { /* ignore */ } };
         cm.Items.Add(prevItem);
 
-        var playPauseItem = new System.Windows.Controls.MenuItem { Header = "Play/Pause" };
-        playPauseItem.Click += (_, _) => { try { PlayPauseButton_OnClick(this, new RoutedEventArgs()); } catch { /* ignore */ } };
-        cm.Items.Add(playPauseItem);
-
-        var nextItem = new System.Windows.Controls.MenuItem { Header = "Next" };
-        nextItem.Click += (_, _) => { try { NextButton_OnClick(this, new RoutedEventArgs()); } catch { /* ignore */ } };
-        cm.Items.Add(nextItem);
-
         var stopItem = new System.Windows.Controls.MenuItem { Header = "Stop" };
         stopItem.Click += (_, _) =>
         {
@@ -9032,7 +9049,15 @@ public partial class MainWindow : Window
             }
             catch { /* ignore */ }
         };
-        cm.Items.Add(stopItem);
+        cm.Items.Add(stopItem);   
+
+        var playPauseItem = new System.Windows.Controls.MenuItem { Header = "Play/Pause" };
+        playPauseItem.Click += (_, _) => { try { PlayPauseButton_OnClick(this, new RoutedEventArgs()); } catch { /* ignore */ } };
+        cm.Items.Add(playPauseItem);
+
+        var nextItem = new System.Windows.Controls.MenuItem { Header = "Next" };
+        nextItem.Click += (_, _) => { try { NextButton_OnClick(this, new RoutedEventArgs()); } catch { /* ignore */ } };
+        cm.Items.Add(nextItem);
 
         cm.Items.Add(new System.Windows.Controls.Separator());
 

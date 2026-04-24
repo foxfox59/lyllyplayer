@@ -12,9 +12,12 @@
 
 - 1.4.0: various quality of life updates
   - Playlist:
+	- Shuffle performance improved - no longer saves unnecessary collections
     - Song queue
     - Ability to mix local and streaming sources
-  - Saving playlists as M3U(8)
+	- Saving playlists as M3U(8)
+  - Certain YT fetching issues fixed
+  - Stop button added
 - 1.3.0: playlist and search improvements
   - Ability to import YT playlists from your account (!!)
     - Best-effort using yt-dlp and browser cookie. This might not work for you and/or break at any given time. I'm intentionally trying to avoid having to use API tokens as I want this to be as turnkey as possible.
@@ -46,8 +49,8 @@ Simple visualizer: off, VU bars, or a frequency spectrum
 
 I am a software developer, so I have some qualifications to supervise and suggest solutions, but unless otherwise specified:  
 
-**all of the actual code is AI slop.**  
-All I touch manually is the documentation. This is partially an experiment in how far can I push things before the codebase gets too complicated for the AI to track. Also a test of patience - many things would have been faster fixed by hand but I deliberately chose not to.  
+**99.9% of the actual code is AI slop.**  
+All I touch manually is the documentation (recently I had to start doing some fixes manually). This is partially an experiment in how far can I push things before the codebase gets too complicated for the AI to track. Also a test of patience - many things would have been faster fixed by hand but I deliberately chose not to.  
 
 **Exit now or accept that.**
 

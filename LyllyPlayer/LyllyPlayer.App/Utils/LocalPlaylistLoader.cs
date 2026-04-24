@@ -60,7 +60,7 @@ public static class LocalPlaylistLoader
         if (!readMetadataOnLoad)
             return await Task.Run(() => LoadFolderCoreSync(folder, includeSubfolders, ct), ct).ConfigureAwait(false);
 
-        var paths = EnumerateAudioFiles(folder, includeSubfolders, ct);
+        var paths = await Task.Run(() => EnumerateAudioFiles(folder, includeSubfolders, ct), ct).ConfigureAwait(false);
         if (paths.Count == 0)
             return new List<PlaylistEntry>();
 
