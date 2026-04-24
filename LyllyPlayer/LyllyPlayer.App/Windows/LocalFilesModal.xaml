@@ -201,6 +201,9 @@
                         </DockPanel>
                     </Border>
                 </Grid>
+                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="12,0,12,12">
+                    <Button Content="Close" MinWidth="110" Height="30" Click="CloseButton_OnClick"/>
+                </StackPanel>
             </Grid>
         </Grid>
     </Grid>

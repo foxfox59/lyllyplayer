@@ -113,6 +113,11 @@ public partial class LocalFilesModal : Window
         try { Close(); } catch { /* ignore */ }
     }
 
+    private void CloseButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try { Close(); } catch { /* ignore */ }
+    }
+
     private void CancelButton_OnClick(object sender, RoutedEventArgs e)
     {
         try { _cts?.Cancel(); } catch { /* ignore */ }
