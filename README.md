@@ -47,9 +47,9 @@ A multi-function desktop audio player with minimal external requirements: **ffmp
 Supports login cookies from browser if you have **node.js**, but not required for playback in most cases.  
 Supports either pasting a direct Youtube playlist ID/URL or searching from Youtube.  
 
-Imports .m3u playlists. Generates playlists from supported local audio file folders (.mp3, .wav, .flac, .m4a, .aac, .ogg, .opus, .wma, .aiff, .aif, .aifc). Can save and load playlists for later use.
+Imports .m3u playlists. Generates playlists from supported local audio file folders (.mp3, .wav, .flac, .m4a, .aac, .ogg, .opus, .wma, .aiff, .aif, .aifc). Can save and load playlists for later use both in internal format and .M3U
 Tested also with simple icecast/shoutcast streams either via .m3u playlist or direct URL.  
-Support for limited custom skins (basically a picture on top of the UI, either stretched, tiled or best fit) with a default, automatic, custom or Windows themed color tint. Can be switched between light/dark modes (although the feature is crude)  
+Support for basic custom theming with a default, automatic, custom or Windows themed color tint. Can be switched between light/dark modes (although the feature is crude)  
 Simple visualizer: off, VU bars, or a frequency spectrum  
 
 **and so much more!** (not really that much, those were the main features :D)  
