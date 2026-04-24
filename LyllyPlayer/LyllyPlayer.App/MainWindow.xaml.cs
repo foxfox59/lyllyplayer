@@ -5610,7 +5610,7 @@ public partial class MainWindow : Window
             // Snapshot can lag (e.g. YouTube session never marked dirty). If its SourceType disagrees with
             // AppSettings.LastPlaylistSourceType, trust settings and load from URL/path instead.
             var settingsType = _lastPlaylistSourceType;
-            LastPlaylistSnapshot? snap = null;
+            SavedPlaylist? snap = null;
             var snapshotUnreadable = false;
             try { snap = LastPlaylistSnapshotStore.TryLoad(out snapshotUnreadable); } catch { /* ignore */ }
 
@@ -5629,7 +5629,7 @@ public partial class MainWindow : Window
                 catch { /* ignore */ }
             }
 
-            if (snap?.Entries is { Count: > 0 } &&
+            if (snap is not null &&
                 ParsePlaylistSourceType(snap.SourceType) == settingsType)
             {
                 try { await TryRestoreLastPlaylistSnapshotAsync(snap); } catch { /* ignore */ }
@@ -5698,13 +5698,10 @@ public partial class MainWindow : Window
         {
             if (_originalEntries is null || _originalEntries.Count == 0)
                 return;
-            var snap = new LastPlaylistSnapshot(
-                SourceType: _lastPlaylistSourceType.ToString(),
-                SourceText: _playlistSourceText ?? "",
-                Title: _playlistTitle,
-                Entries: _originalEntries.ToList()
-            );
-            LastPlaylistSnapshotStore.Save(snap);
+
+             var snap = CaptureLastPlaylistSnapshotForWrite();
+             if (snap is not null)
+                LastPlaylistSnapshotStore.Save(snap);
         }
         catch
         {
@@ -5722,18 +5719,19 @@ public partial class MainWindow : Window
         catch { /* ignore */ }
     }
 
-    private LastPlaylistSnapshot? CaptureLastPlaylistSnapshotForWrite()
+    private SavedPlaylist? CaptureLastPlaylistSnapshotForWrite()
     {
         try
         {
             if (_originalEntries is null || _originalEntries.Count == 0)
                 return null;
-            return new LastPlaylistSnapshot(
-                SourceType: _lastPlaylistSourceType.ToString(),
-                SourceText: _playlistSourceText ?? "",
-                Title: _playlistTitle,
-                Entries: _originalEntries.ToList()
-            );
+
+            return SavedPlaylistFile.FromEntries(
+                name: _playlistTitle ?? "Autosave",
+                sourceType: _lastPlaylistSourceType.ToString(),
+                source: _playlistSourceText ?? "",
+                entries: _originalEntries.ToList(),
+                originInfoByVideoId: _playlistOriginByVideoId.ToDictionary(k => k.Key, v => new SavedPlaylistOrigin(v.Value.Label, v.Value.Source), StringComparer.OrdinalIgnoreCase));
         }
         catch
         {
@@ -5748,7 +5746,7 @@ public partial class MainWindow : Window
         if (_snapshotPersistInFlight)
             return;
 
-        LastPlaylistSnapshot? snap;
+        SavedPlaylist? snap;
         try { snap = CaptureLastPlaylistSnapshotForWrite(); }
         catch { snap = null; }
 
@@ -5780,7 +5778,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task<bool> TryRestoreLastPlaylistSnapshotAsync(LastPlaylistSnapshot snap)
+    private async Task<bool> TryRestoreLastPlaylistSnapshotAsync(SavedPlaylist snap)
     {
         try
         {
@@ -5788,18 +5786,28 @@ public partial class MainWindow : Window
                 return false;
 
             _lastPlaylistSourceType = ParsePlaylistSourceType(snap.SourceType);
-            _playlistSourceText = snap.SourceText ?? "";
+            _playlistSourceText = snap.Source ?? "";
             if (_lastPlaylistSourceType == PlaylistSourceType.YouTube &&
-                PlaylistSourcePathHeuristics.IsStorableLastLoadedYoutubeUrl(_playlistSourceText))
-                _lastYoutubeUrl = _playlistSourceText;
+            PlaylistSourcePathHeuristics.IsStorableLastLoadedYoutubeUrl(_playlistSourceText))
+            _lastYoutubeUrl = _playlistSourceText;
             _playlistWindow?.SetSourceText(_playlistSourceText);
 
             await LoadPlaylistFromEntriesAsync(
-                entries: snap.Entries,
-                title: snap.Title,
-                sourceKey: string.IsNullOrWhiteSpace(_playlistSourceText) ? "snapshot" : _playlistSourceText,
-                isStartupAutoLoad: true
+            entries: SavedPlaylistFile.ToEntries(snap),
+            title: snap.Name,
+            sourceKey: string.IsNullOrWhiteSpace(_playlistSourceText) ? "snapshot" : _playlistSourceText,
+            isStartupAutoLoad: true,
+            deferNowPlayingChanged: true
             );
+
+            // Apply per-item origins — same path as "Load playlist" in EnsurePlaylistWindowOpen
+            ApplySavedPlaylistOriginsIfAny(snap, SavedPlaylistFile.ToEntries(snap));
+            
+            // Full UI sync now that origins are correct
+            SyncNowPlayingFromEngine();
+            UpdatePlaylistTitleDisplayForNowPlaying();
+            // SetStatusMessage("INFO", _originalEntries.Count == 0 ? "Playlist is empty." : $"Loaded {_originalEntries.Count} items.");
+
             return true;
         }
         catch

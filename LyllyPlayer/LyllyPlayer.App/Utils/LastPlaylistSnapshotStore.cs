@@ -4,13 +4,6 @@ using LyllyPlayer.Models;
 
 namespace LyllyPlayer.Utils;
 
-public sealed record LastPlaylistSnapshot(
-    string SourceType,
-    string SourceText,
-    string? Title,
-    IReadOnlyList<PlaylistEntry> Entries
-);
-
 public static class LastPlaylistSnapshotStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -31,7 +24,7 @@ public static class LastPlaylistSnapshotStore
         return Path.Combine(dir, "last-playlist.json");
     }
 
-    public static void Save(LastPlaylistSnapshot snap)
+    public static void Save(SavedPlaylist snap)
     {
         var path = GetSnapshotPath();
         var json = JsonSerializer.Serialize(snap, JsonOptions);
@@ -41,7 +34,7 @@ public static class LastPlaylistSnapshotStore
     /// <param name="fileWasUnreadable">
     /// True when <c>last-playlist.json</c> exists but could not be parsed (oversized, invalid JSON, etc.).
     /// </param>
-    public static LastPlaylistSnapshot? TryLoad(out bool fileWasUnreadable)
+    public static SavedPlaylist? TryLoad(out bool fileWasUnreadable)
     {
         fileWasUnreadable = false;
         try
@@ -51,10 +44,10 @@ public static class LastPlaylistSnapshotStore
                 return null;
 
             var json = SafeJson.ReadUtf8TextForJson(path, SafeJson.MaxGeneralAppJsonFileBytes);
-            LastPlaylistSnapshot? snap;
+            SavedPlaylist? snap;
             try
             {
-                snap = JsonSerializer.Deserialize<LastPlaylistSnapshot>(json, ReadOptions);
+                snap = JsonSerializer.Deserialize<SavedPlaylist>(json, ReadOptions);
             }
             catch (JsonException)
             {
