@@ -6729,11 +6729,30 @@ public partial class MainWindow : Window
 
     private static PlaylistEntry CloneEntry(PlaylistEntry e) => e with { };
 
-    private PlaylistEntry? ResolveNextTrack()
+     private PlaylistEntry? ResolveNextTrack()
     {
         // 1. Queue Priority: If queue has items, return first one that isn't currently playing
         if (_queuedNext.Count > 0)
         {
+            // Collect bad IDs before removing, so we can sync the UI
+            var badIds = _queuedNext
+                .Where(q => q.Id != _playingQueuedInstanceId &&
+                            (_unavailableVideoIds.Contains(q.Entry.VideoId) ||
+                             _ageRestrictedVideoIds.Contains(q.Entry.VideoId) ||
+                             _premiumVideoIds.Contains(q.Entry.VideoId)))
+                .Select(q => q.Entry.VideoId)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            // Purge known-bad items from the internal queue
+            _queuedNext.RemoveAll(q => badIds.Contains(q.Entry.VideoId));
+
+            // Sync the visual queue list box — remove the same items from _queueItems
+            foreach (var qi in _queueItems.Where(qi => badIds.Contains(qi.VideoId)).ToList())
+            {
+                _queueItems.Remove(qi);
+            }
+
+            // Return first remaining playable item (skip the one currently playing)
             foreach (var q in _queuedNext)
             {
                 if (q.Id != _playingQueuedInstanceId)
@@ -6741,43 +6760,6 @@ public partial class MainWindow : Window
                     return q.Entry;
                 }
             }
-        }
-
-        // 2. Base Playlist Logic
-        if (_originalEntries.Count == 0) return null;
-
-        if (_shuffleEnabled)
-        {
-            // Shuffle Mode: Pick random, skip unavailable/recent
-            var attempts = 0;
-            var maxAttempts = _originalEntries.Count * 2; // Safety limit
-            var currentVideoId = _engine.GetCurrent()?.VideoId;
-
-            while (attempts < maxAttempts)
-            {
-                var idx = _rng.Next(_originalEntries.Count);
-                var candidate = _originalEntries[idx];
-                attempts++;
-
-                // Skip unavailable/age/premium
-                if (_unavailableVideoIds.Contains(candidate.VideoId) ||
-                    _ageRestrictedVideoIds.Contains(candidate.VideoId) ||
-                    _premiumVideoIds.Contains(candidate.VideoId))
-                    continue;
-
-                // Skip recently played or currently playing
-                if (string.Equals(candidate.VideoId, currentVideoId, StringComparison.OrdinalIgnoreCase) ||
-                    _recentlyPlayedVideoIds.Contains(candidate.VideoId))
-                    continue;
-
-                return candidate;
-            }
-
-            // Fallback if all attempts exhausted
-            return _originalEntries.FirstOrDefault(e =>
-                !_unavailableVideoIds.Contains(e.VideoId) &&
-                !_ageRestrictedVideoIds.Contains(e.VideoId) &&
-                !_premiumVideoIds.Contains(e.VideoId));
         }
         else
         {
@@ -6793,6 +6775,8 @@ public partial class MainWindow : Window
 
             return _originalEntries[nextIndex];
         }
+
+        return null; // something went wrong
     }
 
     private QueueItem CreateQueueItemForQueuedInstance(QueuedInstance qe, int ordinal)
@@ -7404,6 +7388,7 @@ public partial class MainWindow : Window
         }
 
         _nowPlayingEntry = entry;
+        _playingQueuedInstanceId = null;
         UpdateNowPlayingText(extraDetail: message);
 
         if (_engine.PlayOrder.Count == 0)
