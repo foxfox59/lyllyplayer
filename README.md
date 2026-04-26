@@ -5,9 +5,7 @@
 
 **[See it in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**  
 **[Using the Theme Designer (YouTube link)](https://www.youtube.com/watch?v=Z1lniBzXm9Q)**
-
----
-
+  
 [CHANGELOG.md](CHANGELOG.md)
 
 ---
