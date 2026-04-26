@@ -2027,7 +2027,7 @@ public sealed class PlaybackEngine : IDisposable
     public void Stop()
     {
         StopInternal(signalPlaybackStopped: true);
-        NowPlayingChanged?.Invoke(this, GetCurrent());
+        NowPlayingChanged?.Invoke(this, null);  // Changed from GetCurrent() to null
     }
 
     /// <summary>Clears decoder/CTS after a failed <see cref="PlayEntryAsync"/> without resetting queue position state.</summary>

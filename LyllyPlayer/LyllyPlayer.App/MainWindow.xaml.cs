@@ -378,6 +378,8 @@ public partial class MainWindow : Window
     private string? _suppressAutoScrollVideoId;
     private DateTime _suppressAutoScrollUntilUtc;
     private bool _shuffleEnabled;
+    private readonly Random _shuffleRandom = new();
+    
     private bool _startupResumeAttempted;
     private bool _hasLoadedPlaylist;
     private bool _playlistIsCompound;
@@ -814,10 +816,19 @@ public partial class MainWindow : Window
                 try { SeekSlider.ReleaseMouseCapture(); } catch { /* ignore */ }
 
                 _nowPlayingEntry = entry;
+
+                // Shuffle: remember which track is currently playing so ResolveNextTrack skips it
+                if (entry is not null)
+                {
+                    _recentlyPlayedVideoIds.Add(entry.VideoId);
+                    if (_recentlyPlayedVideoIds.Count > 5)
+                        _recentlyPlayedVideoIds.RemoveAt(0);
+                }
+
                 try
                 {
-                    if (_manualQueuedPlayInstanceId is Guid qid &&
-                        (entry is null || !_queuedNext.Any(q => q.Id == qid && q.Entry.VideoId.Equals(entry.VideoId))))
+                    if ( _manualQueuedPlayInstanceId is Guid qid &&
+                         (entry is null || !_queuedNext.Any(q => q.Id == qid && q.Entry.VideoId.Equals(entry.VideoId))))
                     {
                         _manualQueuedPlayInstanceId = null;
                     }
@@ -6729,7 +6740,7 @@ public partial class MainWindow : Window
 
     private static PlaylistEntry CloneEntry(PlaylistEntry e) => e with { };
 
-     private PlaylistEntry? ResolveNextTrack()
+    private PlaylistEntry? ResolveNextTrack()
     {
         // 1. Queue Priority: If queue has items, return first one that isn't currently playing
         if (_queuedNext.Count > 0)
@@ -6761,9 +6772,49 @@ public partial class MainWindow : Window
                 }
             }
         }
-        else
+         else
         {
-            // Sequential Mode: Increment index, handle Repeat:Playlist loop
+            // --- Shuffle Mode ---
+            if (_shuffleEnabled)
+            {
+                var currentId = _engine.GetCurrent()?.VideoId;
+
+                // Build candidate list: exclude current track, recently played, and unavailable tracks
+                var candidates = _originalEntries
+                    .Where(e => !string.Equals(e.VideoId, currentId, StringComparison.OrdinalIgnoreCase)
+                             && !_recentlyPlayedVideoIds.Contains(e.VideoId)
+                             && !_unavailableVideoIds.Contains(e.VideoId)
+                             && !_ageRestrictedVideoIds.Contains(e.VideoId)
+                             && !_premiumVideoIds.Contains(e.VideoId))
+                    .ToList();
+
+                if (candidates.Count == 0)
+                {
+                    // All tracks excluded — reset recently played and try again
+                    _recentlyPlayedVideoIds.Clear();
+                    candidates = _originalEntries
+                        .Where(e => !string.Equals(e.VideoId, currentId, StringComparison.OrdinalIgnoreCase)
+                                 && !_unavailableVideoIds.Contains(e.VideoId)
+                                 && !_ageRestrictedVideoIds.Contains(e.VideoId)
+                                 && !_premiumVideoIds.Contains(e.VideoId))
+                        .ToList();
+                }
+
+                if (candidates.Count == 0) return null; // No playable tracks
+
+                // Random selection
+                var rndIndex = _shuffleRandom.Next(candidates.Count);
+                var selected = candidates[rndIndex];
+
+                // Track as recently played for next time
+                _recentlyPlayedVideoIds.Add(selected.VideoId);
+                if (_recentlyPlayedVideoIds.Count > 5)
+                    _recentlyPlayedVideoIds.RemoveAt(0);
+
+                return selected;
+            }
+
+            // --- Sequential Mode (unchanged) ---
             int nextIndex = _engine.CurrentIndex + 1;
 
             if (_repeatMode == RepeatMode.Playlist && nextIndex >= _originalEntries.Count)
@@ -6936,15 +6987,20 @@ public partial class MainWindow : Window
         return true;
     }
 
-     private void UpdateNowPlayingFlag(PlaylistEntry? now)
+    private void UpdateNowPlayingFlag(PlaylistEntry? now)
     {
+        // Highlight in the queue (if the track is queued)
         foreach (var qi in _queueItems)
         {
             qi.IsNowPlaying = now is not null && qi.Entry is not null && qi.Entry.VideoId.Equals(now.VideoId);
         }
+
+        // Highlight in the playlist only if the track is NOT currently in the queue
+        var isQueued = now is not null && _queuedNext.Any(q => string.Equals(q.Entry.VideoId, now.VideoId, StringComparison.OrdinalIgnoreCase));
+
         foreach (var qi in _playlistItems)
         {
-            qi.IsNowPlaying = now is not null && string.Equals(qi.VideoId, now.VideoId, StringComparison.OrdinalIgnoreCase);
+            qi.IsNowPlaying = !isQueued && now is not null && string.Equals(qi.VideoId, now.VideoId, StringComparison.OrdinalIgnoreCase);
         }
     }
 
