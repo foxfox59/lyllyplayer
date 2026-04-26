@@ -3,44 +3,11 @@
 © MuiluFox 2026  
 **LyllyPlayer should always be completely free to download and use. If you are getting asked to pay for it (other than [donations](https://www.paypal.me/MuiluFox) here), someone is ripping you off.**  
 
-**[See it in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**  
-**[Using the Theme Designer (YouTube link)](https://www.youtube.com/watch?v=Z1lniBzXm9Q)**
-
----
-
-### What's new, pussycat?
-
-- 1.4.2: fixed a bug where an unavailable item in queue would cause the queue to get stuck
-- 1.4.1: fixed a bug with compound playlist origins not saving properly on internal snapshot
-- 1.4.0: various quality of life updates
-  - Playlist:
-	- Shuffle performance improved - no longer saves unnecessary collections
-    - Song queue
-    - Ability to mix local and streaming sources
-    - Ability to append to current playlist instead of replacing it (with best effort duplicate removal option)
-	- Saving playlists as M3U(8)
-  - Certain YT fetching issues fixed
-  - Stop button added
-  - Feature forgotten from previous release notes: ability to toggle the app visibility between taskbar, notification area, or both
-	- Notification area has a context menu for playback
-  - Known issues:
-    - Playlist becomes slow (but not unusable) with large playlists - around ~15000 items for me, YMMV
-- 1.3.1: fixes a small bug with the playlist window getting stuck on the wrong display on multi-monitor setups
-- 1.3.0: playlist and search improvements
-  - Ability to import YT playlists from your account (!!)
-    - Best-effort using yt-dlp and browser cookie. This might not work for you and/or break at any given time. I'm intentionally trying to avoid having to use API tokens as I want this to be as turnkey as possible.
-  - YouTube functionality moved under new window (**Youtube...**) in Playlist, with tabs for:
-    - Search videos
-    - Search playlists (best-effort item counts)
-    - Import playlist (replace/append + optional remove duplicates)
-    - My playlists (best-effort; uses yt-dlp + browser cookies when enabled)
-  - Playlist sorting (real sort affecting playback order)
-  - Appended/compound playlists track per-item origin (name + source) and persist it in saved playlist JSON
-  - Refresh is disabled for compound playlists (can’t reliably refresh multiple sources)
-  - When playlist would appear off screen when toggled, try to show it in a visible position instead
-- 1.2.1: fixes a rare issue that only happened when using DisplayFusion (apps were fighting for window focus). 
-- 1.2.0: introduces the **ultra-compact mode**, a simple **theme designer** and slight transparency fixes for the foreground + title text
-- 1.1.0: initial public release with no major bugs (fingers crossed)
+**[1.1.0 in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**  
+**[Using the Theme Designer in 1.2.0 (YouTube link)](https://www.youtube.com/watch?v=Z1lniBzXm9Q)**  
+**[Compound playlists - song queue - M3U export in 1.4.1 (YouTube link)](https://www.youtube.com/watch?v=K855yiYLzeQ)**
+  
+[CHANGELOG.md](CHANGELOG.md)
 
 ---
 
