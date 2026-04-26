@@ -11,6 +11,12 @@
 
 ---
 
+## Known issues
+
+  - DisplayFusion has a slight conflict/race situation with how LyllyPlayer handles "always on top" - for now, use the Compatibility settings in DF. I'm going to fix this at some point, just not right now.
+
+---  
+
 A multi-function desktop audio player with minimal external requirements: **ffmpeg** for any audio output, and **yt-dlp** for Youtube functionality.
 Supports login cookies from browser if you have **node.js**, but not required for playback in most cases.  
 Supports either pasting a direct Youtube playlist ID/URL or searching from Youtube.  
