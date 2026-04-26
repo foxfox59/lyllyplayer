@@ -8,7 +8,7 @@
 
 ---
 
-[Change log](CHANGELOG.md)
+[CHANGELOG.md](CHANGELOG.md)
 
 ---
 
