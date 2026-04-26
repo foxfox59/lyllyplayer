@@ -1,6 +1,7 @@
 ### What's new, pussycat?
 
 - 1.4.4: added playlist cleanup (removes missing local files and YT items marked unavailable or unplayable)
+  - An old bug with DisplayFusion has been reintroduced - for now, add LyllyPlayer to the DF compatibility settings with taskbar-related options and app hooks disabled
 - 1.4.3: fixed shuffle not working
 - 1.4.2: fixed a bug where an unavailable item in queue would cause the queue to get stuck
 - 1.4.1: fixed a bug with compound playlist origins not saving properly on internal snapshot
