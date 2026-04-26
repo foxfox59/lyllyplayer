@@ -9,13 +9,13 @@
         WindowStyle="None"
         ResizeMode="CanResize"
         AllowsTransparency="True"
-        Width="560"
+        Width="760"
         Height="720"
-        MinWidth="420"
         MinHeight="320"
         ShowInTaskbar="False"
         WindowStartupLocation="Manual"
         >
+        <!-- Window MinWidth set by MainWindow code-behind to 560.0 * UiScale -->
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="0"
                             ResizeBorderThickness="8,0,8,8"
@@ -131,26 +131,20 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0" Margin="12,12,12,0">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
+         <Grid Grid.Row="0" Margin="12,12,12,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <Button x:Name="RefreshButton"
-                    Grid.Row="0"
-                    Grid.Column="0"
                     Content="&#x21BB;"
                     MinWidth="44"
                     Height="30"
                     Margin="0,0,8,0"
                     Click="RefreshButton_OnClick"/>
 
-            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
                 <Button x:Name="SavePlaylistButton"
                         Content="Save playlist..."
                         MinWidth="110"
@@ -161,14 +155,8 @@
                         Content="Load playlist..."
                         MinWidth="110"
                         Height="30"
+                        Margin="0,0,6,0"
                         Click="LoadPlaylistButton_OnClick"/>
-            </StackPanel>
-
-            <StackPanel Grid.Row="1"
-                        Grid.Column="0"
-                        Grid.ColumnSpan="2"
-                        Orientation="Horizontal"
-                        Margin="0,8,0,0">
                 <Button x:Name="SearchYoutubeButton"
                         Content="Youtube..."
                         MinWidth="108"
@@ -208,6 +196,12 @@
                     Height="28"
                     Margin="0,0,8,0"
                     Click="ApplySortButton_OnClick"/>
+            <Button x:Name="CleanInvalidItemsButton"
+                    Content="Clean invalid items"
+                    MinWidth="148"
+                    Height="28"
+                    Margin="0,0,0,0"
+                    Click="CleanInvalidItemsButton_OnClick"/>                    
         </StackPanel>
 
         <Grid Grid.Row="2" Margin="12,0,12,8">

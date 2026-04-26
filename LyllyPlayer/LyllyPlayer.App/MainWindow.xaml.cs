@@ -3270,7 +3270,7 @@ public partial class MainWindow : Window
             ApplyPlaylistWindowSettings(latestSettings, _playlistWindow);
             NormalizePlaylistWindowOuterForUiScale(latestSettings, _playlistWindow);
             var plS = UiScale;
-            _playlistWindow.MinWidth = 420.0 * plS;
+            _playlistWindow.MinWidth = 560.0 * plS;
             _playlistWindow.MinHeight = 320.0 * plS;
             _playlistWindowOuterAtUiScalePercent = _uiScalePercent;
             AppLog.Info($"Playlist bounds (open) pre-show: L={_playlistWindow.Left} T={_playlistWindow.Top} W={_playlistWindow.Width} H={_playlistWindow.Height} State={_playlistWindow.WindowState}");

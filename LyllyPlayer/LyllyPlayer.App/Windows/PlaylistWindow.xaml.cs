@@ -1138,6 +1138,97 @@ public partial class PlaylistWindow : Window
         }
     }
 
+    private async void CleanInvalidItemsButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (_busyCount > 0)
+            return;
+
+        using var cts = new CancellationTokenSource();
+        Interlocked.Increment(ref _busyCount);
+        SetLoadEnabled(false);
+        SetBusy("Cleaning invalid items...", cts);
+        int removedCount = 0;
+        try
+        {
+            var removed = await Task.Run(
+                () => CleanInvalidItemsCore(_playlistItemsSource),
+                cts.Token).ConfigureAwait(true);
+
+            removedCount = removed.Count;
+
+            if (removedCount > 0)
+            {
+                foreach (var item in removed)
+                {
+                    _playlistItemsSource?.Remove(item);
+                }
+                _playlistViewSource?.View.Refresh();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // User cancelled — playlist stays intact
+        }
+        catch
+        {
+            // Ignore errors — don't corrupt the playlist
+        }
+        finally
+        {
+            ClearBusy();
+            Interlocked.Decrement(ref _busyCount);
+            SetLoadEnabled(true);
+
+            // --- Visual feedback ---
+            if (removedCount > 0)
+            {
+                System.Windows.MessageBox.Show(
+                    this,
+                    $"Removed {removedCount} invalid item{(removedCount == 1 ? "" : "s")} from the playlist.",
+                    "LyllyPlayer",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+        }
+    }
+
+    private static List<QueueItem> CleanInvalidItemsCore(IReadOnlyList<QueueItem>? playlist)
+    {
+        var toRemove = new List<QueueItem>();
+        if (playlist == null)
+            return toRemove;
+
+        foreach (var item in playlist)
+        {
+            if (item?.Entry == null)
+                continue;
+
+            var videoId = item.VideoId;
+            var webpageUrl = item.WebpageUrl;
+
+            // --- Local file check ---
+            bool isLocal = videoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase)
+                        || Path.IsPathRooted(webpageUrl);
+
+            if (isLocal)
+            {
+                if (!File.Exists(webpageUrl))
+                {
+                    toRemove.Add(item);
+                }
+                continue;
+            }
+
+            // --- Online sources (YouTube, streams, etc.) ---
+            if (item.IsUnavailable || item.IsPremium || item.IsAgeRestricted)
+            {
+                toRemove.Add(item);
+            }
+        }
+
+        return toRemove;
+    }
+
     // Source is reflected in window title; loading happens via dialog.
 
     private static bool TryGetLocalPath(string? webpageUrlOrPath, out string path)
