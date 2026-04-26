@@ -1,5 +1,6 @@
 ### What's new, pussycat?
 
+- 1.4.3: fixed shuffle not working
 - 1.4.2: fixed a bug where an unavailable item in queue would cause the queue to get stuck
 - 1.4.1: fixed a bug with compound playlist origins not saving properly on internal snapshot
 - 1.4.0: various quality of life updates
