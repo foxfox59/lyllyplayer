@@ -142,7 +142,7 @@
                            Content="Lyrics not available"
                            HorizontalContentAlignment="Center"
                            VerticalContentAlignment="Center"
-                           FontSize="16"
+                           FontSize="14"
                            FontWeight="SemiBold"
                            Foreground="{DynamicResource App.Theme.Foreground}"
                            Background="Transparent"

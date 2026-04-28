@@ -9747,9 +9747,12 @@ public partial class MainWindow : Window
                         AppLog.Info($"TryResolveLyricsAsync: fetched lyrics for {entry.VideoId}, length={lrc.Length}, lines={LrcParser.Parse(lrc, CancellationToken.None).Count}, artist={ytArtist ?? "(none)"}, title={ytTitle ?? "(none)"}");
                         _lyricsManager.Parse(lrc, artist: ytArtist, title: ytTitle);
                         LyricsCache.Set(cacheKey, lrc);
-                        UpdateNowPlayingText();
-                        UpdatePlaylistTitleDisplayForNowPlaying();
-                        _lyricsWindow?.Refresh();
+                        Dispatcher.Invoke(() =>
+                        {
+                            try { UpdateNowPlayingText(); } catch { /* ignore */ }
+                            try { UpdatePlaylistTitleDisplayForNowPlaying(); } catch { /* ignore */ }
+                            try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
+                        });
                     }
                     else
                     {
@@ -9759,7 +9762,7 @@ public partial class MainWindow : Window
                         var title = entry.Title ?? "";
                         try
                         {
-                            var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.DurationSeconds, CancellationToken.None);
+                            var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.Channel, entry.DurationSeconds, CancellationToken.None);
                             // Discard stale result if track changed while fetching
                             if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
                             {
@@ -9783,9 +9786,12 @@ public partial class MainWindow : Window
                                 }
                                 _lyricsManager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
                                 LyricsCache.Set(cacheKey, lrcLrclib);
-                                UpdateNowPlayingText();
-                                UpdatePlaylistTitleDisplayForNowPlaying();
-                                _lyricsWindow?.Refresh();
+                                Dispatcher.Invoke(() =>
+                                {
+                                    try { UpdateNowPlayingText(); } catch { /* ignore */ }
+                                    try { UpdatePlaylistTitleDisplayForNowPlaying(); } catch { /* ignore */ }
+                                    try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
+                                });
                                 return;
                             }
                             else

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 using LyllyPlayer.Utils;
 
 namespace LyllyPlayer.Windows;
@@ -81,6 +82,26 @@ public partial class LyricsWindow : Window
 
             LyricsTitleLabel.Content = title;
             LyricsListBox.ItemsSource = lines;
+
+            // Defer scroll-to-first-line until after layout settles.
+            // Without this, WPF's ScrollViewer can auto-scroll to bottom when ItemsSource changes,
+            // and RefreshCurrentLine() (called by the timer a few ms later) won't scroll correctly.
+            _lastScrolledIndex = -1;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    if (LyricsListBox.Items.Count > 0)
+                    {
+                        LyricsListBox.SelectedIndex = 0;
+                        var selectedItem = LyricsListBox.SelectedItem;
+                        if (selectedItem is not null)
+                            LyricsListBox.ScrollIntoView(selectedItem);
+                        _lastScrolledIndex = 0;
+                    }
+                }
+                catch { /* ignore */ }
+            }), DispatcherPriority.Loaded);
         }
         catch { /* ignore */ }
     }
