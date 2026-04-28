@@ -106,26 +106,26 @@ public static class LyricsResolver
     }
 
     /// <summary>
-    /// Fetches synced LRC lyrics from the LRCLIB API by track name and artist.
-    /// LRCLIB is a free, open-source lyrics provider.
+    /// Fetches synced LRC lyrics from LRCLIB by track title only, scoring results by duration proximity.
+    /// YouTube channel names are unreliable as artist names, so we search by title and pick the
+    /// result whose duration most closely matches the target duration (if provided).
     /// Returns a tuple of (LrcText, LrclibDurationSeconds), where duration may be null if unavailable.
     /// </summary>
+    /// <param name="trackName">Song title to search for.</param>
+    /// <param name="targetDurationSeconds">Expected duration of the YouTube video (used for scoring matches).</param>
+    /// <param name="ct">Cancellation token.</param>
     public static async Task<(string? LrcText, double? LrclibDurationSeconds)> FetchLyricsFromLrclibAsync(
         string trackName,
-        string? artistName,
+        double? targetDurationSeconds,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(trackName))
             return (null, null);
 
         var queryString = System.Web.HttpUtility.UrlEncode(trackName.Trim());
-        var artistQuery = string.IsNullOrWhiteSpace(artistName)
-            ? ""
-            : "&artistName=" + System.Web.HttpUtility.UrlEncode(artistName.Trim());
+        var url = $"https://lrclib.net/api/search?q={queryString}";
 
-        var url = $"https://lrclib.net/api/search?q={queryString}{artistQuery}";
-
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
 
         try
         {
@@ -133,44 +133,92 @@ public static class LyricsResolver
             if (string.IsNullOrWhiteSpace(json))
                 return (null, null);
 
-            // LRCLIB search returns a JSON array of lyric objects.
-            // We want the first one that has syncedLyrics.
-            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
             var items = JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
+            if (items.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return (null, null);
 
-            if (items.ValueKind == System.Text.Json.JsonValueKind.Array)
+            // Collect all valid synced-lyric candidates with their scores.
+            var candidates = new List<(double score, string lrc, double? duration)>();
+
+            foreach (var item in items.EnumerateArray())
             {
-                foreach (var item in items.EnumerateArray())
+                // Only consider entries with synced lyrics.
+                if (!item.TryGetProperty("syncedLyrics", out var synced) ||
+                    synced.ValueKind != System.Text.Json.JsonValueKind.String ||
+                    string.IsNullOrWhiteSpace(synced.GetString()))
+                    continue;
+
+                var lrc = synced.GetString()!.Trim();
+                if (!IsLikelySyncedLrc(lrc))
+                    continue;
+
+                // Capture LRCLIB track duration.
+                double? lrclibDuration = null;
+                if (item.TryGetProperty("duration", out var dur) &&
+                    dur.ValueKind == System.Text.Json.JsonValueKind.Number)
                 {
-                    if (item.TryGetProperty("syncedLyrics", out var synced) &&
-                        synced.ValueKind == System.Text.Json.JsonValueKind.String &&
-                        !string.IsNullOrWhiteSpace(synced.GetString()))
+                    lrclibDuration = dur.GetDouble();
+                }
+
+                // Calculate a match score (higher = better).
+                double score = 0;
+
+                // Track name match: bonus for the LRCLIB track name containing the search query.
+                if (item.TryGetProperty("name", out var nameProp) &&
+                    nameProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var lrclibName = nameProp.GetString()?.Trim();
+                    if (!string.IsNullOrWhiteSpace(lrclibName))
                     {
-                        var lrc = synced.GetString()!.Trim();
-                        if (!IsLikelySyncedLrc(lrc))
-                            continue;
-
-                        // Capture LRCLIB track duration for sync offset calculation
-                        double? lrclibDuration = null;
-                        if (item.TryGetProperty("duration", out var dur) &&
-                            dur.ValueKind == System.Text.Json.JsonValueKind.Number)
-                        {
-                            lrclibDuration = dur.GetDouble();
-                        }
-
-                        return (lrc, lrclibDuration);
-                    }
-
-                    // Fallback: try plainLyrics and convert (no sync, but at least text)
-                    if (item.TryGetProperty("plainLyrics", out var plain) &&
-                        plain.ValueKind == System.Text.Json.JsonValueKind.String &&
-                        !string.IsNullOrWhiteSpace(plain.GetString()))
-                    {
-                        // LRCLIB plain lyrics have a simple format; skip these
-                        // since we only want synced (timed) lyrics.
+                        var lowerQuery = trackName.Trim().ToLowerInvariant();
+                        var lowerName = lrclibName.ToLowerInvariant();
+                        if (lowerName == lowerQuery)
+                            score += 100;
+                        else if (lowerName.Contains(lowerQuery) || lowerQuery.Contains(lowerName))
+                            score += 50;
                     }
                 }
+
+                // Artist match bonus if LRCLIB has an artist field.
+                if (item.TryGetProperty("artist", out var artistProp) &&
+                    artistProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    // Don't score on artist — we didn't search by artist, so any match is neutral.
+                    score += 5;
+                }
+
+                // Duration proximity is the primary tiebreaker.
+                if (targetDurationSeconds.HasValue && lrclibDuration.HasValue)
+                {
+                    var ytDur = targetDurationSeconds.Value;
+                    var lrclibDur = lrclibDuration.Value;
+                    if (ytDur > 0)
+                    {
+                        var diffRatio = Math.Abs(ytDur - lrclibDur) / ytDur;
+                        if (diffRatio < 0.02)
+                            score += 200; // Within 2% — excellent match
+                        else if (diffRatio < 0.05)
+                            score += 100; // Within 5% — very good
+                        else if (diffRatio < 0.10)
+                            score += 50;  // Within 10% — good
+                        else if (diffRatio < 0.15)
+                            score += 20;  // Within 15% — acceptable
+                        // Larger diffs get no bonus (duration mismatch likely wrong song)
+                    }
+                }
+
+                if (score > 0)
+                    candidates.Add((score, lrc, lrclibDuration));
             }
+
+            if (candidates.Count == 0)
+                return (null, null);
+
+            // Pick the highest-scored candidate.
+            candidates.Sort((a, b) => b.score.CompareTo(a.score));
+            var best = candidates[0];
+
+            return (best.lrc, best.duration);
         }
         catch
         {

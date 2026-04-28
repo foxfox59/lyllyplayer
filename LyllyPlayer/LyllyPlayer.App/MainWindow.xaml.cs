@@ -9286,6 +9286,12 @@ public partial class MainWindow : Window
                 try
                 {
                     var lrc = await LyricsResolver.FetchLyricsForYouTubeAsync(resolvedYtDlp.EffectiveFileName, entry.VideoId, CancellationToken.None);
+                    // Discard stale result if track changed while fetching
+                    if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        AppLog.Info($"TryResolveLyricsAsync: yt-dlp fetch completed but track changed, discarding for {entry.VideoId}");
+                        return;
+                    }
                     if (!string.IsNullOrWhiteSpace(lrc))
                     {
                         AppLog.Info($"TryResolveLyricsAsync: fetched lyrics for {entry.VideoId}, length={lrc.Length}, lines={LrcParser.Parse(lrc, CancellationToken.None).Count}");
@@ -9298,10 +9304,15 @@ public partial class MainWindow : Window
                         AppLog.Info($"TryResolveLyricsAsync: yt-dlp returned no lyrics for {entry.VideoId}, trying LRCLIB fallback");
                         // Fallback: try LRCLIB using track title and channel (artist)
                         var title = entry.Title ?? "";
-                        var artist = entry.Channel ?? "";
                         try
                         {
-                            var (lrcLrclib, lrclibDuration) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, CancellationToken.None);
+                            var (lrcLrclib, lrclibDuration) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.DurationSeconds, CancellationToken.None);
+                            // Discard stale result if track changed while fetching
+                            if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
+                            {
+                                AppLog.Info($"TryResolveLyricsAsync: LRCLIB fetch completed but track changed, discarding for {entry.VideoId}");
+                                return;
+                            }
                             if (!string.IsNullOrWhiteSpace(lrcLrclib))
                             {
                                 // Calculate sync offset: YouTube duration minus LRCLIB studio duration
@@ -9324,12 +9335,12 @@ public partial class MainWindow : Window
                             }
                             else
                             {
-                                AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} / {artist}");
+                                AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
                             }
                         }
                         catch (Exception ex)
                         {
-                            AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} / {artist}");
+                            AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
                         }
                     }
                 }
