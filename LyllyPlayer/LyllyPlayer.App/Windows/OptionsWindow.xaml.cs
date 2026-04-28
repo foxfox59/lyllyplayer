@@ -87,6 +87,8 @@ public partial class OptionsWindow : Window
     private readonly Action<bool> _setAlwaysOnTopPlaylistWindow;
     private readonly Func<bool> _getAlwaysOnTopOptionsWindow;
     private readonly Action<bool> _setAlwaysOnTopOptionsWindow;
+    private readonly Func<bool> _getAlwaysOnTopLyricsWindow;
+    private readonly Action<bool> _setAlwaysOnTopLyricsWindow;
     private readonly Func<bool> _getCompactModeHidesAuxWindows;
     private readonly Action<bool> _setCompactModeHidesAuxWindows;
     private readonly Func<string> _getCompactModeLayout;
@@ -163,6 +165,7 @@ public partial class OptionsWindow : Window
         public bool ReadMetadataOnLoad;
         public bool AlwaysOnTopPlaylistWindow;
         public bool AlwaysOnTopOptionsWindow;
+        public bool AlwaysOnTopLyricsWindow;
         public bool CompactModeHidesAuxWindows;
         public string CompactModeLayout = "Normal";
         public bool KeepIncompletePlaylistOnCancel;
@@ -253,6 +256,8 @@ public partial class OptionsWindow : Window
         Action<bool> setAlwaysOnTopPlaylistWindow,
         Func<bool> getAlwaysOnTopOptionsWindow,
         Action<bool> setAlwaysOnTopOptionsWindow,
+        Func<bool> getAlwaysOnTopLyricsWindow,
+        Action<bool> setAlwaysOnTopLyricsWindow,
         Func<bool> getCompactModeHidesAuxWindows,
         Action<bool> setCompactModeHidesAuxWindows,
         Func<string> getCompactModeLayout,
@@ -347,6 +352,8 @@ public partial class OptionsWindow : Window
         _setAlwaysOnTopPlaylistWindow = setAlwaysOnTopPlaylistWindow;
         _getAlwaysOnTopOptionsWindow = getAlwaysOnTopOptionsWindow;
         _setAlwaysOnTopOptionsWindow = setAlwaysOnTopOptionsWindow;
+        _getAlwaysOnTopLyricsWindow = getAlwaysOnTopLyricsWindow;
+        _setAlwaysOnTopLyricsWindow = setAlwaysOnTopLyricsWindow;
         _getCompactModeHidesAuxWindows = getCompactModeHidesAuxWindows;
         _setCompactModeHidesAuxWindows = setCompactModeHidesAuxWindows;
         _getCompactModeLayout = getCompactModeLayout;
@@ -472,6 +479,7 @@ public partial class OptionsWindow : Window
         try { _draft.ReadMetadataOnLoad = _getReadMetadataOnLoad(); } catch { _draft.ReadMetadataOnLoad = false; }
         try { _draft.AlwaysOnTopPlaylistWindow = _getAlwaysOnTopPlaylistWindow(); } catch { _draft.AlwaysOnTopPlaylistWindow = false; }
         try { _draft.AlwaysOnTopOptionsWindow = _getAlwaysOnTopOptionsWindow(); } catch { _draft.AlwaysOnTopOptionsWindow = false; }
+        try { _draft.AlwaysOnTopLyricsWindow = _getAlwaysOnTopLyricsWindow(); } catch { _draft.AlwaysOnTopLyricsWindow = false; }
         try { _draft.CompactModeHidesAuxWindows = _getCompactModeHidesAuxWindows(); } catch { _draft.CompactModeHidesAuxWindows = true; }
         try { _draft.CompactModeLayout = SettingsStore.NormalizeCompactModeLayout(_getCompactModeLayout()); } catch { _draft.CompactModeLayout = "Normal"; }
         try { _draft.KeepIncompletePlaylistOnCancel = _getKeepIncompletePlaylistOnCancel(); } catch { _draft.KeepIncompletePlaylistOnCancel = false; }
@@ -616,6 +624,7 @@ public partial class OptionsWindow : Window
         try { ReadMetadataOnLoadCheckBox.IsChecked = _draft.ReadMetadataOnLoad; } catch { /* ignore */ }
         try { AlwaysOnTopPlaylistWindowCheckBox.IsChecked = _draft.AlwaysOnTopPlaylistWindow; } catch { /* ignore */ }
         try { AlwaysOnTopOptionsWindowCheckBox.IsChecked = _draft.AlwaysOnTopOptionsWindow; } catch { /* ignore */ }
+        try { AlwaysOnTopLyricsWindowCheckBox.IsChecked = _draft.AlwaysOnTopLyricsWindow; } catch { /* ignore */ }
         try { CompactHidesAuxWindowsCheckBox.IsChecked = _draft.CompactModeHidesAuxWindows; } catch { /* ignore */ }
         try
         {
@@ -1654,6 +1663,22 @@ public partial class OptionsWindow : Window
             return;
         _draft.AlwaysOnTopOptionsWindow = false;
         try { _setAlwaysOnTopOptionsWindow(false); } catch { /* ignore */ }
+    }
+
+    private void AlwaysOnTopLyricsWindowCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.AlwaysOnTopLyricsWindow = true;
+        try { _setAlwaysOnTopLyricsWindow(true); } catch { /* ignore */ }
+    }
+
+    private void AlwaysOnTopLyricsWindowCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.AlwaysOnTopLyricsWindow = false;
+        try { _setAlwaysOnTopLyricsWindow(false); } catch { /* ignore */ }
     }
 
     private void CompactHidesAuxWindowsCheckBox_OnChecked(object sender, RoutedEventArgs e)

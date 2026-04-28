@@ -735,6 +735,12 @@
                                           Foreground="{DynamicResource App.Theme.Foreground}"
                                           Checked="AlwaysOnTopOptionsWindowCheckBox_OnChecked"
                                           Unchecked="AlwaysOnTopOptionsWindowCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="AlwaysOnTopLyricsWindowCheckBox"
+                                          Content="Also keep Lyrics window on top (when TOP is enabled)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="AlwaysOnTopLyricsWindowCheckBox_OnChecked"
+                                          Unchecked="AlwaysOnTopLyricsWindowCheckBox_OnUnchecked"/>
                                 <CheckBox x:Name="CompactHidesAuxWindowsCheckBox"
                                           Content="Compact mode hides Playlist and Options"
                                           Margin="0,0,0,8"

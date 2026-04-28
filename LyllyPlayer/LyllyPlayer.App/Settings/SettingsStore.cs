@@ -334,6 +334,7 @@ public static class SettingsStore
             AlwaysOnTop = loaded.AlwaysOnTop ?? GetBool(nameof(AppSettings.AlwaysOnTop)),
             AlwaysOnTopPlaylistWindow = loaded.AlwaysOnTopPlaylistWindow ?? GetBool(nameof(AppSettings.AlwaysOnTopPlaylistWindow)),
             AlwaysOnTopOptionsWindow = loaded.AlwaysOnTopOptionsWindow ?? GetBool(nameof(AppSettings.AlwaysOnTopOptionsWindow)),
+            AlwaysOnTopLyricsWindow = loaded.AlwaysOnTopLyricsWindow ?? GetBool(nameof(AppSettings.AlwaysOnTopLyricsWindow)),
 
             PlaylistWindowLeft = GetDouble(nameof(AppSettings.PlaylistWindowLeft)) ?? loaded.PlaylistWindowLeft,
             PlaylistWindowTop = GetDouble(nameof(AppSettings.PlaylistWindowTop)) ?? loaded.PlaylistWindowTop,
@@ -437,6 +438,7 @@ public static class SettingsStore
         TakeBool(nameof(AppSettings.AlwaysOnTop), ref s, (c, v) => c with { AlwaysOnTop = v });
         TakeBool(nameof(AppSettings.AlwaysOnTopPlaylistWindow), ref s, (c, v) => c with { AlwaysOnTopPlaylistWindow = v });
         TakeBool(nameof(AppSettings.AlwaysOnTopOptionsWindow), ref s, (c, v) => c with { AlwaysOnTopOptionsWindow = v });
+        TakeBool(nameof(AppSettings.AlwaysOnTopLyricsWindow), ref s, (c, v) => c with { AlwaysOnTopLyricsWindow = v });
         TakeBool(nameof(AppSettings.CompactModeHidesAuxWindows), ref s, (c, v) => c with { CompactModeHidesAuxWindows = v });
         TakeString(nameof(AppSettings.CompactModeLayout), ref s, (c, v) => c with { CompactModeLayout = v });
 
@@ -512,6 +514,7 @@ public static class SettingsStore
         AlwaysOnTop: null,
         AlwaysOnTopPlaylistWindow: null,
         AlwaysOnTopOptionsWindow: null,
+        AlwaysOnTopLyricsWindow: null,
         WindowLeft: null,
         WindowTop: null,
         WindowWidth: null,
@@ -627,6 +630,7 @@ public static class SettingsStore
             AlwaysOnTop: false,
             AlwaysOnTopPlaylistWindow: false,
             AlwaysOnTopOptionsWindow: false,
+            AlwaysOnTopLyricsWindow: false,
             WindowLeft: null,
             WindowTop: null,
             WindowWidth: null,
@@ -764,6 +768,7 @@ public static class SettingsStore
             KeepIncompletePlaylistOnCancel = s.KeepIncompletePlaylistOnCancel ?? DefaultKeepIncompletePlaylistOnCancel,
             LastSavedByAppVersion = string.IsNullOrWhiteSpace(s.LastSavedByAppVersion) ? null : s.LastSavedByAppVersion.Trim(),
             LyricsEnabled = s.LyricsEnabled ?? false,
+            AlwaysOnTopLyricsWindow = s.AlwaysOnTopLyricsWindow ?? false,
             PlaylistWindowBoundsUiScalePercent = s.PlaylistWindowBoundsUiScalePercent is >= 50 and <= 200
                 ? s.PlaylistWindowBoundsUiScalePercent
                 : null,

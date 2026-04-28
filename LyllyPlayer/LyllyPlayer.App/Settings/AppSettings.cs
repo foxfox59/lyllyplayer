@@ -23,6 +23,7 @@ public sealed record AppSettings(
     bool? AlwaysOnTop,
     bool? AlwaysOnTopPlaylistWindow,
     bool? AlwaysOnTopOptionsWindow,
+    bool? AlwaysOnTopLyricsWindow,
     double? WindowLeft,
     double? WindowTop,
     double? WindowWidth,

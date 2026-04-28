@@ -657,6 +657,7 @@ public partial class MainWindow : Window
     private bool _alwaysOnTop;
     private bool _alwaysOnTopPlaylistWindow;
     private bool _alwaysOnTopOptionsWindow;
+    private bool _alwaysOnTopLyricsWindow;
     private bool _suppressAlwaysOnTopToggleEvents;
     private bool _raisingAuxWindows;
     private bool _playlistMinimizedByMain;
@@ -780,6 +781,7 @@ public partial class MainWindow : Window
         _alwaysOnTop = _startupSettings.AlwaysOnTop ?? false;
         _alwaysOnTopPlaylistWindow = _startupSettings.AlwaysOnTopPlaylistWindow ?? false;
         _alwaysOnTopOptionsWindow = _startupSettings.AlwaysOnTopOptionsWindow ?? false;
+        _alwaysOnTopLyricsWindow = _startupSettings.AlwaysOnTopLyricsWindow ?? false;
         _keepIncompletePlaylistOnCancel = _startupSettings.KeepIncompletePlaylistOnCancel ?? false;
         _audioQuality = _startupSettings.AudioQuality ?? "Auto";
         _audioOutputDevice = string.IsNullOrWhiteSpace(_startupSettings.AudioOutputDevice) ? null : _startupSettings.AudioOutputDevice;
@@ -2219,6 +2221,13 @@ public partial class MainWindow : Window
     private void SetAlwaysOnTopOptionsWindow(bool enabled)
     {
         _alwaysOnTopOptionsWindow = enabled;
+        ApplyAlwaysOnTopFromSettings();
+        RequestPersistSnapshot();
+    }
+
+    private void SetAlwaysOnTopLyricsWindow(bool enabled)
+    {
+        _alwaysOnTopLyricsWindow = enabled;
         ApplyAlwaysOnTopFromSettings();
         RequestPersistSnapshot();
     }
@@ -4352,6 +4361,8 @@ public partial class MainWindow : Window
                 setAlwaysOnTopPlaylistWindow: (v) => SetAlwaysOnTopPlaylistWindow(v),
                 getAlwaysOnTopOptionsWindow: () => _alwaysOnTopOptionsWindow,
                 setAlwaysOnTopOptionsWindow: (v) => SetAlwaysOnTopOptionsWindow(v),
+                getAlwaysOnTopLyricsWindow: () => _alwaysOnTopLyricsWindow,
+                setAlwaysOnTopLyricsWindow: (v) => SetAlwaysOnTopLyricsWindow(v),
                 getCompactModeHidesAuxWindows: () => _compactModeHidesAuxWindows,
                 setCompactModeHidesAuxWindows: (v) => SetCompactModeHidesAuxWindows(v),
                 getCompactModeLayout: () => _compactModeLayout,
@@ -7468,7 +7479,8 @@ public partial class MainWindow : Window
         AppLog.Info($"UpdateNowPlayingText: status={status}, entry={_nowPlayingEntry?.VideoId ?? "(null)"}, lyricsEnabled={_lyricsEnabled}, hasLyrics={_lyricsManager.HasLyrics}, lineCount={_lyricsManager.LineCount}, isPlaying={_engine.IsPlaying}, position={_engine.CurrentPositionSeconds:F2}s");
         if (NowPlayingStatusRun is not null)
         {
-            if (_lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying)
+            // Don't show lyric line/status when lyrics window is open — it already displays lyrics.
+            if (_lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
             {
                 NowPlayingStatusRun.Text = $"[>]";
             }
@@ -7485,8 +7497,9 @@ public partial class MainWindow : Window
         }
         else
         {
-            // Check for lyrics override (Normal/Compact modes show current lyric line)
-            if (_lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying)
+            // Check for lyrics override (Normal/Compact modes show current lyric line).
+            // Only show lyric lines in main window when lyrics window is NOT open — it already displays them.
+            if (_lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
             {
                 var lyricLine = _lyricsManager.GetCurrentLine(_engine.CurrentPositionSeconds);
                 if (!string.IsNullOrEmpty(lyricLine))
@@ -8203,6 +8216,7 @@ public partial class MainWindow : Window
             AlwaysOnTop: _alwaysOnTop,
             AlwaysOnTopPlaylistWindow: _alwaysOnTopPlaylistWindow,
             AlwaysOnTopOptionsWindow: _alwaysOnTopOptionsWindow,
+            AlwaysOnTopLyricsWindow: _alwaysOnTopLyricsWindow,
             WindowLeft: FiniteOrNull(bounds.Left) ?? cur.WindowLeft,
             WindowTop: FiniteOrNull(bounds.Top) ?? cur.WindowTop,
             WindowWidth: FiniteOrNull(bounds.Width) ?? cur.WindowWidth,
@@ -9176,6 +9190,7 @@ public partial class MainWindow : Window
         // Aux windows: NEVER topmost unless TOP is enabled AND the corresponding "also keep on top" flag is enabled.
         try { if (_playlistWindow is not null) _playlistWindow.Topmost = _alwaysOnTop && _alwaysOnTopPlaylistWindow; } catch { /* ignore */ }
         try { if (_optionsWindow is not null) _optionsWindow.Topmost = _alwaysOnTop && _alwaysOnTopOptionsWindow; } catch { /* ignore */ }
+        try { if (_lyricsWindow is not null) _lyricsWindow.Topmost = _alwaysOnTop && _alwaysOnTopLyricsWindow; } catch { /* ignore */ }
 
         try
         {
@@ -9419,7 +9434,8 @@ public partial class MainWindow : Window
                 // Main uses WPF Topmost (WS_EX_TOPMOST). Do not call SetWindowPos(HWND_TOPMOST) — it fights the shell
                 // and can break Z-order/taskbar restore for other apps. Only order aux above main when they share TOP.
                 var wantTop = ReferenceEquals(w, _playlistWindow) && _alwaysOnTopPlaylistWindow
-                    || ReferenceEquals(w, _optionsWindow) && _alwaysOnTopOptionsWindow;
+                    || ReferenceEquals(w, _optionsWindow) && _alwaysOnTopOptionsWindow
+                    || ReferenceEquals(w, _lyricsWindow) && _alwaysOnTopLyricsWindow;
                 if (wantTop && mainHwnd != IntPtr.Zero)
                 {
                     _ = SetWindowPos(hwnd, mainHwnd, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -9482,8 +9498,9 @@ public partial class MainWindow : Window
         {
             if (_mainWindowCompact && string.Equals(_compactModeLayout, "Ultra", StringComparison.OrdinalIgnoreCase))
             {
-                // Lyrics override for Ultra-Compact mode
-                if (_lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying)
+                // Lyrics override for Ultra-Compact mode.
+                // Only show lyric lines in main window when lyrics window is NOT open — it already displays them.
+                if (_lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
                 {
                     var lyricLine = _lyricsManager.GetCurrentLine(_engine.CurrentPositionSeconds);
                     if (!string.IsNullOrEmpty(lyricLine))
