@@ -109,18 +109,21 @@ public static class LyricsResolver
     /// Fetches synced LRC lyrics from LRCLIB by track title only, scoring results by duration proximity.
     /// YouTube channel names are unreliable as artist names, so we search by title and pick the
     /// result whose duration most closely matches the target duration (if provided).
-    /// Returns a tuple of (LrcText, LrclibDurationSeconds, Artist, Title), where duration/artist/title may be null.
+    /// If no synced lyrics are found but the song was found, falls back to plain (non-synced) lyrics.
+    /// Returns a tuple of (LrcText, LrclibDurationSeconds, Artist, Title, IsPlainLyrics),
+    /// where duration/artist/title may be null, and IsPlainLyrics indicates whether the returned
+    /// text is plain (non-synced) lyrics.
     /// </summary>
     /// <param name="trackName">Song title to search for.</param>
     /// <param name="targetDurationSeconds">Expected duration of the YouTube video (used for scoring matches).</param>
     /// <param name="ct">Cancellation token.</param>
-    public static async Task<(string? LrcText, double? LrclibDurationSeconds, string? Artist, string? Title)> FetchLyricsFromLrclibAsync(
+    public static async Task<(string? LrcText, double? LrclibDurationSeconds, string? Artist, string? Title, bool IsPlainLyrics)> FetchLyricsFromLrclibAsync(
         string trackName,
         double? targetDurationSeconds,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(trackName))
-            return (null, null, null, null);
+            return (null, null, null, null, false);
 
         var queryString = System.Web.HttpUtility.UrlEncode(trackName.Trim());
         var url = $"https://lrclib.net/api/search?q={queryString}";
@@ -131,11 +134,11 @@ public static class LyricsResolver
         {
             var json = await client.GetStringAsync(url, ct);
             if (string.IsNullOrWhiteSpace(json))
-                return (null, null, null, null);
+                return (null, null, null, null, false);
 
             var items = JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
             if (items.ValueKind != System.Text.Json.JsonValueKind.Array)
-                return (null, null, null, null);
+                return (null, null, null, null, false);
 
             // Collect all valid synced-lyric candidates with their scores.
             var candidates = new List<(double score, string lrc, double? duration, string? artist, string? name)>();
@@ -215,20 +218,59 @@ public static class LyricsResolver
                     candidates.Add((score, lrc, lrclibDuration, lrclibArtist, lrclibName));
             }
 
-            if (candidates.Count == 0)
-                return (null, null, null, null);
+            if (candidates.Count > 0)
+            {
+                // Pick the highest-scored synced candidate.
+                candidates.Sort((a, b) => b.score.CompareTo(a.score));
+                var best = candidates[0];
+                return (best.lrc, best.duration, best.artist, best.name, false);
+            }
 
-            // Pick the highest-scored candidate.
-            candidates.Sort((a, b) => b.score.CompareTo(a.score));
-            var best = candidates[0];
+            // No synced lyrics found — fall back to plain lyrics if the song was found at all.
+            foreach (var item in items.EnumerateArray())
+            {
+                if (!item.TryGetProperty("plainLyrics", out var plain) ||
+                    plain.ValueKind != System.Text.Json.JsonValueKind.String ||
+                    string.IsNullOrWhiteSpace(plain.GetString()))
+                    continue;
 
-            return (best.lrc, best.duration, best.artist, best.name);
+                var plainLyrics = plain.GetString()!.Trim();
+                if (string.IsNullOrWhiteSpace(plainLyrics))
+                    continue;
+
+                // Capture LRCLIB metadata for display.
+                double? lrclibDuration = null;
+                string? lrclibArtist = null;
+                string? lrclibName = null;
+
+                if (item.TryGetProperty("duration", out var dur) &&
+                    dur.ValueKind == System.Text.Json.JsonValueKind.Number)
+                {
+                    lrclibDuration = dur.GetDouble();
+                }
+
+                if (item.TryGetProperty("artistName", out var artistProp) &&
+                    artistProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    lrclibArtist = artistProp.GetString()?.Trim();
+                }
+
+                if (item.TryGetProperty("trackName", out var nameProp) &&
+                    nameProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    lrclibName = nameProp.GetString()?.Trim();
+                }
+
+                return (plainLyrics, lrclibDuration, lrclibArtist, lrclibName, true);
+            }
+
+            return (null, null, null, null, false);
         }
         catch
         {
             // Best-effort — LRCLIB may be down or unreachable
         }
 
-        return (null, null, null, null);
+        return (null, null, null, null, false);
     }
 }

@@ -18,6 +18,9 @@ public sealed class LyricsManager
     /// Calculated as YouTubeDuration - LRCLIBDuration to align studio-synced lyrics with the video.</summary>
     private double _syncOffsetSeconds = 0;
 
+    /// <summary>Whether the loaded lyrics are plain (non-synced) text from LRCLIB.</summary>
+    private bool _isPlainLyrics = false;
+
     /// <summary>
     /// Gets whether lyrics are currently loaded for the active track.
     /// </summary>
@@ -27,6 +30,12 @@ public sealed class LyricsManager
     /// Gets the number of lyric lines currently loaded.
     /// </summary>
     public int LineCount => _lines.Count;
+
+    /// <summary>
+    /// Gets whether the loaded lyrics are plain (non-synced) text.
+    /// Plain lyrics cannot be synced to playback position.
+    /// </summary>
+    public bool IsPlainLyrics => _isPlainLyrics;
 
     /// <summary>
     /// Gets the artist name reported by the lyrics resolver (yt-dlp or LRCLIB).
@@ -77,14 +86,16 @@ public sealed class LyricsManager
     /// <summary>
     /// Parses LRC-formatted lyrics text into timed lines.
     /// </summary>
-    /// <param name="lrcText">Raw LRC text with [mm:ss.xx] timestamp tags.</param>
+    /// <param name="lrcText">Raw LRC text with [mm:ss.xx] timestamp tags, or plain text for non-synced lyrics.</param>
     /// <param name="syncOffsetSeconds">Sync offset to apply when looking up lyrics.</param>
     /// <param name="artist">Artist name reported by the lyrics resolver (optional).</param>
     /// <param name="title">Track title reported by the lyrics resolver (optional).</param>
-    public void Parse(string lrcText, double syncOffsetSeconds = 0, string? artist = null, string? title = null)
+    /// <param name="isPlainLyrics">Whether the lyrics are plain (non-synced) text from LRCLIB.</param>
+    public void Parse(string lrcText, double syncOffsetSeconds = 0, string? artist = null, string? title = null, bool isPlainLyrics = false)
     {
         _lines = LrcParser.Parse(lrcText);
         _syncOffsetSeconds = syncOffsetSeconds;
+        _isPlainLyrics = isPlainLyrics;
         ResolvedArtist = artist;
         ResolvedTitle = title;
         ResetPosition();
@@ -93,11 +104,16 @@ public sealed class LyricsManager
     /// <summary>
     /// Gets the current lyric line text at the given playback position.
     /// Uses binary search for efficiency and caches the last index to avoid redundant searches.
+    /// Returns null for plain (non-synced) lyrics since they cannot be synced.
     /// </summary>
     /// <param name="positionSeconds">Current playback position in seconds.</param>
-    /// <returns>The current lyric line text, or null if no lyrics loaded or position is before the first line.</returns>
+    /// <returns>The current lyric line text, or null if no lyrics loaded, position is before the first line, or lyrics are plain.</returns>
     public string? GetCurrentLine(double positionSeconds)
     {
+        // Plain lyrics cannot be synced to time
+        if (_isPlainLyrics)
+            return null;
+
         // Apply sync offset so LRCLIB studio-synced lyrics align with the video's timing
         var adjustedPosition = positionSeconds - _syncOffsetSeconds;
 
@@ -152,11 +168,16 @@ public sealed class LyricsManager
 
     /// <summary>
     /// Gets both the current and next lyric lines at the given playback position.
+    /// Returns null for plain (non-synced) lyrics since they cannot be synced.
     /// </summary>
     /// <param name="positionSeconds">Current playback position in seconds.</param>
-    /// <returns>A tuple of (currentLine, nextLine), where nextLine may be null if at the end.</returns>
+    /// <returns>A tuple of (currentLine, nextLine), or null if lyrics are plain, not loaded, or position is before the first line.</returns>
     public (string Current, string? Next)? GetCurrentAndNextLine(double positionSeconds)
     {
+        // Plain lyrics cannot be synced to time
+        if (_isPlainLyrics)
+            return null;
+
         // Apply sync offset so LRCLIB studio-synced lyrics align with the video's timing
         var adjustedPosition = positionSeconds - _syncOffsetSeconds;
 
@@ -204,6 +225,47 @@ public sealed class LyricsManager
     }
 
     /// <summary>
+    /// Gets the index of the current lyric line at the given playback position.
+    /// Returns -1 if no lyrics loaded, position is before the first line, or lyrics are plain.
+    /// Uses binary search for efficiency.
+    /// </summary>
+    /// <param name="positionSeconds">Current playback position in seconds.</param>
+    /// <returns>The zero-based index of the current lyric line, or -1 if none.</returns>
+    public int GetCurrentLineIndex(double positionSeconds)
+    {
+        // Plain lyrics cannot be synced to time
+        if (_isPlainLyrics)
+            return -1;
+
+        // Apply sync offset so LRCLIB studio-synced lyrics align with the video's timing
+        var adjustedPosition = positionSeconds - _syncOffsetSeconds;
+
+        if (_lines.Count == 0 || adjustedPosition < 0)
+            return -1;
+
+        // Binary search for the last line where line.Seconds <= adjustedPosition
+        int lo = 0;
+        int hi = _lines.Count - 1;
+        int result = -1;
+
+        while (lo <= hi)
+        {
+            var mid = lo + (hi - lo) / 2;
+            if (_lines[mid].Seconds <= adjustedPosition)
+            {
+                result = mid;
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// Gets the text of each lyric line, in order.
     /// </summary>
     public IReadOnlyList<string> GetLineTexts()
@@ -221,6 +283,7 @@ public sealed class LyricsManager
         _lastPositionSeconds = -1;
         _lastKey = null;
         _lastLrcText = null;
+        _isPlainLyrics = false;
         ResolvedArtist = null;
         ResolvedTitle = null;
     }

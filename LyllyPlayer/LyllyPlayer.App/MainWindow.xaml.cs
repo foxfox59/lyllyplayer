@@ -3437,7 +3437,9 @@ public partial class MainWindow : Window
                 lyricsEnabled: () => _lyricsEnabled,
                 hasLyrics: () => _lyricsManager.HasLyrics,
                 lyricsTitle: () => _lyricsManager.ResolvedTitleDisplay,
-                lyricsLines: () => _lyricsManager.HasLyrics ? _lyricsManager.GetLineTexts() : Array.Empty<string>()
+                lyricsLines: () => _lyricsManager.HasLyrics ? _lyricsManager.GetLineTexts() : Array.Empty<string>(),
+                isPlainLyrics: () => _lyricsManager.IsPlainLyrics,
+                getCurrentLineIndex: () => _lyricsManager.GetCurrentLineIndex(_engine.CurrentPositionSeconds)
             )
             {
                 Owner = null,
@@ -4828,7 +4830,7 @@ public partial class MainWindow : Window
             {
                 LyricsSnapEdge.Right => mainRight + SnapGapPx,
                 LyricsSnapEdge.Left => mainLeft - lw.Width - SnapGapPx,
-                _ => lw.Left
+                _ => mainLeft + _lyricsDockXOffset
             };
             var desiredTop = _lyricsSnapEdge switch
             {
@@ -7509,6 +7511,10 @@ public partial class MainWindow : Window
             }
             else
             {
+                // Lyrics window is open — highlight the current line there instead of the title.
+                if (_lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying)
+                    _lyricsWindow?.RefreshCurrentLine();
+
                 title = $"{_nowPlayingEntry.Title}{(string.IsNullOrWhiteSpace(_nowPlayingEntry.Channel) ? "" : $" \u2014 {_nowPlayingEntry.Channel}")}";
             }
 
@@ -9663,10 +9669,19 @@ public partial class MainWindow : Window
         if (string.IsNullOrEmpty(lyricLine))
             return;
 
-        // Ultra-Compact: update title bar directly
+        // Ultra-Compact: update title bar when lyrics window is NOT open; otherwise only highlight in Lyrics window
         if (_mainWindowCompact && string.Equals(_compactModeLayout, "Ultra", StringComparison.OrdinalIgnoreCase))
         {
-            try { Title = $"{lyricLine}"; } catch { /* ignore */ }
+            if (_lyricsWindow is null)
+            {
+                try { Title = $"{lyricLine}"; } catch { /* ignore */ }
+            }
+            else
+            {
+                try { _lyricsWindow.RefreshCurrentLine(); } catch { /* ignore */ }
+                // Revert title to normal track info when lyrics window is open
+                try { Title = $"{_nowPlayingEntry?.Title}{(string.IsNullOrWhiteSpace(_nowPlayingEntry?.Channel) ? "" : $" \u2014 {_nowPlayingEntry?.Channel}")}"; } catch { /* ignore */ }
+            }
         }
         // Normal/Compact: refresh status line so the current lyric line updates in real-time
         else
@@ -9744,7 +9759,7 @@ public partial class MainWindow : Window
                         var title = entry.Title ?? "";
                         try
                         {
-                            var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.DurationSeconds, CancellationToken.None);
+                            var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.DurationSeconds, CancellationToken.None);
                             // Discard stale result if track changed while fetching
                             if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
                             {
@@ -9766,7 +9781,7 @@ public partial class MainWindow : Window
                                 {
                                     AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
                                 }
-                                _lyricsManager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName);
+                                _lyricsManager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
                                 LyricsCache.Set(cacheKey, lrcLrclib);
                                 UpdateNowPlayingText();
                                 UpdatePlaylistTitleDisplayForNowPlaying();

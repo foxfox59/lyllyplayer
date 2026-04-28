@@ -114,7 +114,7 @@ public static class LrcParser
     /// <summary>
     /// Tries to extract metadata tags (TI: title, AR: artist) from LRC text.
     /// Returns a tuple of (Artist, Title) — whichever is found. Returns null if neither tag exists.
-    /// Tag names are case-insensitive: [ti:Title], [ar:Artist], [TITLE:Title], etc.
+    /// Tag names are case-insensitive.
     /// </summary>
     public static (string? Artist, string? Title)? TryExtractMetadata(string lrcText)
     {

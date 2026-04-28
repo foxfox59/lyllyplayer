@@ -154,8 +154,8 @@
                              Margin="12,0,12,8"
                              Background="{DynamicResource {x:Static SystemColors.ControlLightBrushKey}}"
                              BorderThickness="0"
-                             VirtualizingStackPanel.IsVirtualizing="True"
-                             VirtualizingStackPanel.VirtualizationMode="Recycling"
+                             VirtualizingStackPanel.IsVirtualizing="False"
+                             VirtualizingStackPanel.VirtualizationMode="Standard"
                              ScrollViewer.CanContentScroll="True"
                              ScrollViewer.IsDeferredScrollingEnabled="False"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -198,8 +198,10 @@
                                         <Setter Property="Background" Value="{DynamicResource App.Theme.Hover}"/>
                                     </Trigger>
                                     <Trigger Property="IsSelected" Value="True">
-                                        <Setter Property="Background" Value="{DynamicResource App.Theme.Selection}"/>
-                                        <Setter Property="Foreground" Value="{DynamicResource App.Theme.SelectionText}"/>
+                                        <Setter Property="Background" Value="{DynamicResource App.Theme.Pressed}"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+                                        <Setter Property="BorderThickness" Value="0,1,0,1"/>
+                                        <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Foreground}"/>
                                     </Trigger>
                                 </Style.Triggers>
                             </Style>
