@@ -29,6 +29,23 @@ public sealed class LyricsManager
     public int LineCount => _lines.Count;
 
     /// <summary>
+    /// Gets the artist name reported by the lyrics resolver (yt-dlp or LRCLIB).
+    /// </summary>
+    public string? ResolvedArtist { get; private set; }
+
+    /// <summary>
+    /// Gets the track title reported by the lyrics resolver (yt-dlp or LRCLIB).
+    /// </summary>
+    public string? ResolvedTitle { get; private set; }
+
+    /// <summary>
+    /// Gets a formatted "Artist - Title" string, or just "Title" if artist is unavailable.
+    /// </summary>
+    public string? ResolvedTitleDisplay => ResolvedArtist != null
+        ? $"{ResolvedArtist} - {ResolvedTitle}"
+        : ResolvedTitle;
+
+    /// <summary>
     /// Loads lyrics from cache or fetches fresh LRC text.
     /// Returns true if lyrics were loaded successfully.
     /// </summary>
@@ -61,10 +78,15 @@ public sealed class LyricsManager
     /// Parses LRC-formatted lyrics text into timed lines.
     /// </summary>
     /// <param name="lrcText">Raw LRC text with [mm:ss.xx] timestamp tags.</param>
-    public void Parse(string lrcText, double syncOffsetSeconds = 0)
+    /// <param name="syncOffsetSeconds">Sync offset to apply when looking up lyrics.</param>
+    /// <param name="artist">Artist name reported by the lyrics resolver (optional).</param>
+    /// <param name="title">Track title reported by the lyrics resolver (optional).</param>
+    public void Parse(string lrcText, double syncOffsetSeconds = 0, string? artist = null, string? title = null)
     {
         _lines = LrcParser.Parse(lrcText);
         _syncOffsetSeconds = syncOffsetSeconds;
+        ResolvedArtist = artist;
+        ResolvedTitle = title;
         ResetPosition();
     }
 
@@ -182,6 +204,14 @@ public sealed class LyricsManager
     }
 
     /// <summary>
+    /// Gets the text of each lyric line, in order.
+    /// </summary>
+    public IReadOnlyList<string> GetLineTexts()
+    {
+        return _lines.Select(l => l.Text).ToArray();
+    }
+
+    /// <summary>
     /// Clears all lyrics state. Call when the track changes.
     /// </summary>
     public void Clear()
@@ -191,5 +221,7 @@ public sealed class LyricsManager
         _lastPositionSeconds = -1;
         _lastKey = null;
         _lastLrcText = null;
+        ResolvedArtist = null;
+        ResolvedTitle = null;
     }
 }

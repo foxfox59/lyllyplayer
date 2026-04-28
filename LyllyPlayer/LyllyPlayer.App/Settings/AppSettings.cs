@@ -60,6 +60,24 @@ public sealed record AppSettings(
     bool? OptionsWindowBottomAlignToPlaylist,
     /// <summary>Last selected Options tab header: Tools, System, Audio, Theme, Search, Local, Advanced.</summary>
     string? OptionsWindowSelectedTab,
+    /// <summary>Lyrics window snapped to main window edge.</summary>
+    bool? LyricsWindowSnapped,
+    /// <summary>Lyrics window snap edge: None, Left, Right, Bottom, Top.</summary>
+    string? LyricsWindowSnapEdge,
+    /// <summary>Lyrics window dock Y offset from main window.</summary>
+    double? LyricsWindowDockYOffset,
+    /// <summary>Lyrics window dock X offset from main window.</summary>
+    double? LyricsWindowDockXOffset,
+    /// <summary>Lyrics window persisted left position.</summary>
+    double? LyricsWindowLeft,
+    /// <summary>Lyrics window persisted top position.</summary>
+    double? LyricsWindowTop,
+    /// <summary>Lyrics window persisted width.</summary>
+    double? LyricsWindowWidth,
+    /// <summary>Lyrics window persisted height.</summary>
+    double? LyricsWindowHeight,
+    /// <summary>Lyrics window persisted window state.</summary>
+    string? LyricsWindowState,
     /// <summary>Light | Dark | Auto. Auto chooses based on background image luminance when possible.</summary>
     string? ThemeMode,
     string? BackgroundMode,

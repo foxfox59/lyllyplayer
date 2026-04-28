@@ -109,18 +109,18 @@ public static class LyricsResolver
     /// Fetches synced LRC lyrics from LRCLIB by track title only, scoring results by duration proximity.
     /// YouTube channel names are unreliable as artist names, so we search by title and pick the
     /// result whose duration most closely matches the target duration (if provided).
-    /// Returns a tuple of (LrcText, LrclibDurationSeconds), where duration may be null if unavailable.
+    /// Returns a tuple of (LrcText, LrclibDurationSeconds, Artist, Title), where duration/artist/title may be null.
     /// </summary>
     /// <param name="trackName">Song title to search for.</param>
     /// <param name="targetDurationSeconds">Expected duration of the YouTube video (used for scoring matches).</param>
     /// <param name="ct">Cancellation token.</param>
-    public static async Task<(string? LrcText, double? LrclibDurationSeconds)> FetchLyricsFromLrclibAsync(
+    public static async Task<(string? LrcText, double? LrclibDurationSeconds, string? Artist, string? Title)> FetchLyricsFromLrclibAsync(
         string trackName,
         double? targetDurationSeconds,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(trackName))
-            return (null, null);
+            return (null, null, null, null);
 
         var queryString = System.Web.HttpUtility.UrlEncode(trackName.Trim());
         var url = $"https://lrclib.net/api/search?q={queryString}";
@@ -131,14 +131,14 @@ public static class LyricsResolver
         {
             var json = await client.GetStringAsync(url, ct);
             if (string.IsNullOrWhiteSpace(json))
-                return (null, null);
+                return (null, null, null, null);
 
             var items = JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
             if (items.ValueKind != System.Text.Json.JsonValueKind.Array)
-                return (null, null);
+                return (null, null, null, null);
 
             // Collect all valid synced-lyric candidates with their scores.
-            var candidates = new List<(double score, string lrc, double? duration)>();
+            var candidates = new List<(double score, string lrc, double? duration, string? artist, string? name)>();
 
             foreach (var item in items.EnumerateArray())
             {
@@ -163,11 +163,23 @@ public static class LyricsResolver
                 // Calculate a match score (higher = better).
                 double score = 0;
 
+                // Capture LRCLIB artist and track name from the API response.
+                string? lrclibArtist = null;
+                string? lrclibName = null;
+
+                // Artist field (neutral bonus — we didn't search by artist).
+                if (item.TryGetProperty("artist", out var artistProp) &&
+                    artistProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    lrclibArtist = artistProp.GetString()?.Trim();
+                    score += 5;
+                }
+
                 // Track name match: bonus for the LRCLIB track name containing the search query.
                 if (item.TryGetProperty("name", out var nameProp) &&
                     nameProp.ValueKind == System.Text.Json.JsonValueKind.String)
                 {
-                    var lrclibName = nameProp.GetString()?.Trim();
+                    lrclibName = nameProp.GetString()?.Trim();
                     if (!string.IsNullOrWhiteSpace(lrclibName))
                     {
                         var lowerQuery = trackName.Trim().ToLowerInvariant();
@@ -177,14 +189,6 @@ public static class LyricsResolver
                         else if (lowerName.Contains(lowerQuery) || lowerQuery.Contains(lowerName))
                             score += 50;
                     }
-                }
-
-                // Artist match bonus if LRCLIB has an artist field.
-                if (item.TryGetProperty("artist", out var artistProp) &&
-                    artistProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    // Don't score on artist — we didn't search by artist, so any match is neutral.
-                    score += 5;
                 }
 
                 // Duration proximity is the primary tiebreaker.
@@ -208,23 +212,23 @@ public static class LyricsResolver
                 }
 
                 if (score > 0)
-                    candidates.Add((score, lrc, lrclibDuration));
+                    candidates.Add((score, lrc, lrclibDuration, lrclibArtist, lrclibName));
             }
 
             if (candidates.Count == 0)
-                return (null, null);
+                return (null, null, null, null);
 
             // Pick the highest-scored candidate.
             candidates.Sort((a, b) => b.score.CompareTo(a.score));
             var best = candidates[0];
 
-            return (best.lrc, best.duration);
+            return (best.lrc, best.duration, best.artist, best.name);
         }
         catch
         {
             // Best-effort — LRCLIB may be down or unreachable
         }
 
-        return (null, null);
+        return (null, null, null, null);
     }
 }

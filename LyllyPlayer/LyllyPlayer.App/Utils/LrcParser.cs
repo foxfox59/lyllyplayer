@@ -112,6 +112,42 @@ public static class LrcParser
     }
 
     /// <summary>
+    /// Tries to extract metadata tags (TI: title, AR: artist) from LRC text.
+    /// Returns a tuple of (Artist, Title) — whichever is found. Returns null if neither tag exists.
+    /// Tag names are case-insensitive: [ti:Title], [ar:Artist], [TITLE:Title], etc.
+    /// </summary>
+    public static (string? Artist, string? Title)? TryExtractMetadata(string lrcText)
+    {
+        string? artist = null;
+        string? title = null;
+
+        foreach (var rawLine in lrcText.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.Trim();
+
+            // Match [ar:Artist] or [AR:Artist]
+            var arMatch = Regex.Match(line, @"^\[ar:(.+)\]$", RegexOptions.IgnoreCase);
+            if (arMatch.Success)
+            {
+                artist = arMatch.Groups[1].Value.Trim();
+                continue;
+            }
+
+            // Match [ti:Title] or [TI:Title]
+            var tiMatch = Regex.Match(line, @"^\[ti:(.+)\]$", RegexOptions.IgnoreCase);
+            if (tiMatch.Success)
+            {
+                title = tiMatch.Groups[1].Value.Trim();
+                continue;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(artist) || !string.IsNullOrEmpty(title))
+            return (artist, title);
+        return null;
+    }
+
+    /// <summary>
     /// Tries to parse a single LRC line into a TimedLine.
     /// Returns null if the line doesn't contain a valid timestamp.
     /// Handles: [mm:ss.xx], [mm:ss], and lines with multiple timestamps.
