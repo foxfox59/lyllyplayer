@@ -7201,27 +7201,22 @@ public partial class MainWindow : Window
             if (PlaylistTitleTextBlock is null)
                 return;
 
-            // Default: show the playlist title (single source / base title).
-            if (!_playlistIsCompound)
-            {
-                PlaylistTitleTextBlock.Text = _playlistTitle ?? "(no playlist)";
-                return;
-            }
-
             var cur = _nowPlayingEntry;
-            if (cur is null)
-            {
-                PlaylistTitleTextBlock.Text = _playlistTitle ?? "(no playlist)";
-                return;
-            }
 
-            if (_playlistOriginByVideoId.TryGetValue(cur.VideoId, out var info) && !string.IsNullOrWhiteSpace(info?.Label))
-            {
-                PlaylistTitleTextBlock.Text = info.Label;
-                return;
-            }
+            // Check if lyrics are active (enabled + loaded + playing).
+            bool lyricsActive = _lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying;
 
-            PlaylistTitleTextBlock.Text = _playlistTitle ?? "(no playlist)";
+            // Resolve the origin label: per-video origin > base origin > playlist title.
+            string? origin = cur is not null &&
+                _playlistOriginByVideoId.TryGetValue(cur.VideoId, out var info) &&
+                !string.IsNullOrWhiteSpace(info?.Label)
+                ? info.Label
+                : (_basePlaylistOrigin?.Label ?? _playlistTitle ?? "");
+
+            // Show "<origin> - <title>" on the origin line when lyrics are active; otherwise normal display.
+            PlaylistTitleTextBlock.Text = lyricsActive && cur is not null
+                ? $"{origin} : {cur.Title}"
+                : (origin ?? _playlistTitle ?? "(no playlist)");
         }
         catch { /* ignore */ }
     }
@@ -9277,6 +9272,7 @@ public partial class MainWindow : Window
                     AppLog.Info($"TryResolveLyricsAsync: cache hit for {entry.VideoId}, lines={LrcParser.Parse(cached, CancellationToken.None).Count}");
                     _lyricsManager.Parse(cached);
                     UpdateNowPlayingText();
+                    UpdatePlaylistTitleDisplayForNowPlaying();
                     return;
                 }
 
@@ -9298,6 +9294,7 @@ public partial class MainWindow : Window
                         _lyricsManager.Parse(lrc);
                         LyricsCache.Set(cacheKey, lrc);
                         UpdateNowPlayingText();
+                        UpdatePlaylistTitleDisplayForNowPlaying();
                     }
                     else
                     {
@@ -9331,6 +9328,7 @@ public partial class MainWindow : Window
                                 _lyricsManager.Parse(lrcLrclib, syncOffset);
                                 LyricsCache.Set(cacheKey, lrcLrclib);
                                 UpdateNowPlayingText();
+                                UpdatePlaylistTitleDisplayForNowPlaying();
                                 return;
                             }
                             else
