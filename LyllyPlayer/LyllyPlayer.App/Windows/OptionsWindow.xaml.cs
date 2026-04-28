@@ -93,6 +93,8 @@ public partial class OptionsWindow : Window
     private readonly Action<string> _setCompactModeLayout;
     private readonly Func<bool> _getKeepIncompletePlaylistOnCancel;
     private readonly Action<bool> _setKeepIncompletePlaylistOnCancel;
+    private readonly Func<bool> _getLyricsEnabled;
+    private readonly Action<bool> _setLyricsEnabled;
     private readonly Func<bool> _getExportM3uIncludeYoutube;
     private readonly Action<bool> _setExportM3uIncludeYoutube;
     private readonly Func<bool> _getExportM3uPreferRelativePaths;
@@ -164,6 +166,7 @@ public partial class OptionsWindow : Window
         public bool CompactModeHidesAuxWindows;
         public string CompactModeLayout = "Normal";
         public bool KeepIncompletePlaylistOnCancel;
+        public bool LyricsEnabled;
         public bool ExportM3uIncludeYoutube;
         public bool ExportM3uPreferRelativePaths;
         public bool ExportM3uIncludeLyllyMetadata;
@@ -256,6 +259,8 @@ public partial class OptionsWindow : Window
         Action<string> setCompactModeLayout,
         Func<bool> getKeepIncompletePlaylistOnCancel,
         Action<bool> setKeepIncompletePlaylistOnCancel,
+        Func<bool> getLyricsEnabled,
+        Action<bool> setLyricsEnabled,
         Func<bool> getExportM3uIncludeYoutube,
         Action<bool> setExportM3uIncludeYoutube,
         Func<bool> getExportM3uPreferRelativePaths,
@@ -348,6 +353,8 @@ public partial class OptionsWindow : Window
         _setCompactModeLayout = setCompactModeLayout;
         _getKeepIncompletePlaylistOnCancel = getKeepIncompletePlaylistOnCancel;
         _setKeepIncompletePlaylistOnCancel = setKeepIncompletePlaylistOnCancel;
+        _getLyricsEnabled = getLyricsEnabled;
+        _setLyricsEnabled = setLyricsEnabled;
         _getExportM3uIncludeYoutube = getExportM3uIncludeYoutube;
         _setExportM3uIncludeYoutube = setExportM3uIncludeYoutube;
         _getExportM3uPreferRelativePaths = getExportM3uPreferRelativePaths;
@@ -482,6 +489,7 @@ public partial class OptionsWindow : Window
         try { _draft.AppLogLevel = AppLog.NormalizeLevelString(_getAppLogLevel()); } catch { _draft.AppLogLevel = "ErrorsAndWarnings"; }
         try { _draft.AppLogMaxMb = Math.Clamp(_getAppLogMaxMb(), 1, 200); } catch { _draft.AppLogMaxMb = SettingsStore.DefaultAppLogMaxMb; }
         try { _draft.OptionsSelectedTab = SettingsStore.NormalizeOptionsWindowSelectedTab(_getOptionsSelectedTab()); } catch { _draft.OptionsSelectedTab = "Tools"; }
+        try { _draft.LyricsEnabled = _getLyricsEnabled(); } catch { _draft.LyricsEnabled = false; }
     }
 
     private void RefreshUi()
@@ -617,6 +625,7 @@ public partial class OptionsWindow : Window
         }
         catch { /* ignore */ }
         try { KeepIncompletePlaylistOnCancelCheckBox.IsChecked = _draft.KeepIncompletePlaylistOnCancel; } catch { /* ignore */ }
+        try { LyricsEnabledCheckBox.IsChecked = _draft.LyricsEnabled; } catch { /* ignore */ }
         try { ExportM3uIncludeYoutubeCheckBox.IsChecked = _draft.ExportM3uIncludeYoutube; } catch { /* ignore */ }
         try { ExportM3uPreferRelativePathsCheckBox.IsChecked = _draft.ExportM3uPreferRelativePaths; } catch { /* ignore */ }
         try { ExportM3uIncludeLyllyMetadataCheckBox.IsChecked = _draft.ExportM3uIncludeLyllyMetadata; } catch { /* ignore */ }
@@ -1553,6 +1562,20 @@ public partial class OptionsWindow : Window
         _draft.KeepIncompletePlaylistOnCancel = false;
     }
 
+    private void LyricsEnabledCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.LyricsEnabled = true;
+    }
+
+    private void LyricsEnabledCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.LyricsEnabled = false;
+    }
+
     private void ExportM3uIncludeYoutubeCheckBox_OnChecked(object sender, RoutedEventArgs e)
     {
         if (_suppressBackgroundUiEvents)
@@ -2128,6 +2151,7 @@ public partial class OptionsWindow : Window
         try { _setCompactModeHidesAuxWindows(_draft.CompactModeHidesAuxWindows); } catch { /* ignore */ }
         try { _setCompactModeLayout(SettingsStore.NormalizeCompactModeLayout(_draft.CompactModeLayout)); } catch { /* ignore */ }
         try { _setKeepIncompletePlaylistOnCancel(_draft.KeepIncompletePlaylistOnCancel); } catch { /* ignore */ }
+        try { _setLyricsEnabled(_draft.LyricsEnabled); } catch { /* ignore */ }
         try { _setExportM3uIncludeYoutube(_draft.ExportM3uIncludeYoutube); } catch { /* ignore */ }
         try { _setExportM3uPreferRelativePaths(_draft.ExportM3uPreferRelativePaths); } catch { /* ignore */ }
         try { _setExportM3uIncludeLyllyMetadata(_draft.ExportM3uIncludeLyllyMetadata); } catch { /* ignore */ }
@@ -2232,4 +2256,3 @@ public partial class OptionsWindow : Window
         MouseLeftButtonUp -= ChromeDrag_MouseLeftButtonUp;
     }
 }
-

@@ -115,8 +115,8 @@ public sealed record AppSettings(
     bool? CompactModeHidesAuxWindows,
     /// <summary>When true, Cancel on YouTube search or playlist refresh keeps partial results; when false, restores the pre-operation playlist.</summary>
     bool? KeepIncompletePlaylistOnCancel,
+    /// <summary>When true, synced lyrics are resolved for YouTube tracks and displayed in the status line / window title.</summary>
+    bool? LyricsEnabled,
     /// <summary>App build that last wrote this file; used for upgrade / load-failure messaging.</summary>
     string? LastSavedByAppVersion
 );
-
-

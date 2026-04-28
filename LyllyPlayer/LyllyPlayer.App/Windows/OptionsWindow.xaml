@@ -763,6 +763,13 @@
                                                  Checked="CompactLayoutUltraRadio_OnChecked"/>
                                 </StackPanel>
 
+                                <CheckBox x:Name="LyricsEnabledCheckBox"
+                                          Content="Display lyrics"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="LyricsEnabledCheckBox_OnChecked"
+                                          Unchecked="LyricsEnabledCheckBox_OnUnchecked"/>
+
                                 <TextBlock Text="App icon"
                                            FontWeight="SemiBold"
                                            Margin="0,16,0,6"
@@ -875,4 +882,3 @@
         </Grid>
     </Grid>
 </Window>
-

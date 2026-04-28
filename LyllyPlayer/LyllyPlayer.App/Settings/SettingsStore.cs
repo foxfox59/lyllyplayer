@@ -329,6 +329,7 @@ public static class SettingsStore
             CompactModeHidesAuxWindows = loaded.CompactModeHidesAuxWindows ?? GetBool(nameof(AppSettings.CompactModeHidesAuxWindows)),
             KeepIncompletePlaylistOnCancel = loaded.KeepIncompletePlaylistOnCancel ?? GetBool(nameof(AppSettings.KeepIncompletePlaylistOnCancel)),
             LastSavedByAppVersion = loaded.LastSavedByAppVersion ?? GetString(nameof(AppSettings.LastSavedByAppVersion)),
+            LyricsEnabled = loaded.LyricsEnabled ?? GetBool(nameof(AppSettings.LyricsEnabled)),
 
             AlwaysOnTop = loaded.AlwaysOnTop ?? GetBool(nameof(AppSettings.AlwaysOnTop)),
             AlwaysOnTopPlaylistWindow = loaded.AlwaysOnTopPlaylistWindow ?? GetBool(nameof(AppSettings.AlwaysOnTopPlaylistWindow)),
@@ -582,7 +583,8 @@ public static class SettingsStore
         CompactModeLayout: null,
         CompactModeHidesAuxWindows: null,
         KeepIncompletePlaylistOnCancel: null,
-        LastSavedByAppVersion: null);
+        LastSavedByAppVersion: null,
+        LyricsEnabled: null);
 
     private static AppSettings AllNullSettings() => AllNullSettingsInstance;
 
@@ -687,7 +689,8 @@ public static class SettingsStore
             CompactModeLayout: DefaultCompactModeLayout,
             CompactModeHidesAuxWindows: true,
             KeepIncompletePlaylistOnCancel: DefaultKeepIncompletePlaylistOnCancel,
-            LastSavedByAppVersion: null
+            LastSavedByAppVersion: null,
+            LyricsEnabled: false
         );
 
     private static AppSettings ApplyDefaults(AppSettings s)
@@ -742,6 +745,7 @@ public static class SettingsStore
             CompactModeHidesAuxWindows = s.CompactModeHidesAuxWindows ?? true,
             KeepIncompletePlaylistOnCancel = s.KeepIncompletePlaylistOnCancel ?? DefaultKeepIncompletePlaylistOnCancel,
             LastSavedByAppVersion = string.IsNullOrWhiteSpace(s.LastSavedByAppVersion) ? null : s.LastSavedByAppVersion.Trim(),
+            LyricsEnabled = s.LyricsEnabled ?? false,
             PlaylistWindowBoundsUiScalePercent = s.PlaylistWindowBoundsUiScalePercent is >= 50 and <= 200
                 ? s.PlaylistWindowBoundsUiScalePercent
                 : null,
@@ -886,5 +890,3 @@ public static class SettingsStore
         return "github";
     }
 }
-
-
