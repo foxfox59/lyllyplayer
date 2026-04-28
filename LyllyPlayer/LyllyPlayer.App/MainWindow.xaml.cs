@@ -863,6 +863,12 @@ public partial class MainWindow : Window
                 UpdateNowPlayingText();
                 UpdatePlaylistTitleDisplayForNowPlaying();
                 UpdateNowPlayingFlag(entry);
+                // Clear lyrics BEFORE Refresh() so the window doesn't show stale lyrics
+                // from the previous track. TryResolveLyricsAsync (called async below) will
+                // call Refresh() again once new lyrics are resolved.
+                _lyricsManager.Clear();
+                _lyricsResolvedVideoId = null;
+                _lyricsWindow?.Refresh();
                 if (!ShouldSuppressAutoScroll(entry))
                     SelectAndScrollToNowPlaying(entry);
                 UpdateDurationUi(entry?.DurationSeconds);
@@ -9660,6 +9666,7 @@ public partial class MainWindow : Window
         {
             _lyricsManager.Clear();
             _lyricsResolvedVideoId = null;
+            _lyricsWindow?.Refresh();
             return;
         }
 
@@ -9668,6 +9675,7 @@ public partial class MainWindow : Window
         {
             _lyricsManager.Clear();
             _lyricsResolvedVideoId = entry.VideoId;
+            _lyricsWindow?.Refresh();
 
             if (_lyricsEnabled && !string.IsNullOrWhiteSpace(entry.VideoId))
             {
@@ -9677,10 +9685,13 @@ public partial class MainWindow : Window
                 if (cached != null)
                 {
                     var metadata = LrcParser.TryExtractMetadata(cached);
-                    AppLog.Info($"TryResolveLyricsAsync: cache hit for {entry.VideoId}, lines={LrcParser.Parse(cached, CancellationToken.None).Count}, artist={metadata?.Artist ?? "(none)"}, title={metadata?.Title ?? "(none)"}");
-                    _lyricsManager.Parse(cached, artist: metadata?.Artist, title: metadata?.Title);
+                    var cacheArtist = metadata?.Artist ?? entry.Channel;
+                    var cacheTitle = metadata?.Title ?? entry.Title;
+                    AppLog.Info($"TryResolveLyricsAsync: cache hit for {entry.VideoId}, lines={LrcParser.Parse(cached, CancellationToken.None).Count}, artist={cacheArtist ?? "(none)"}, title={cacheTitle ?? "(none)"}");
+                    _lyricsManager.Parse(cached, artist: cacheArtist, title: cacheTitle);
                     UpdateNowPlayingText();
                     UpdatePlaylistTitleDisplayForNowPlaying();
+                    _lyricsWindow?.Refresh();
                     return;
                 }
 
@@ -9699,15 +9710,19 @@ public partial class MainWindow : Window
                     if (!string.IsNullOrWhiteSpace(lrc))
                     {
                         var metadata = LrcParser.TryExtractMetadata(lrc);
-                        AppLog.Info($"TryResolveLyricsAsync: fetched lyrics for {entry.VideoId}, length={lrc.Length}, lines={LrcParser.Parse(lrc, CancellationToken.None).Count}, artist={metadata?.Artist ?? "(none)"}, title={metadata?.Title ?? "(none)"}");
-                        _lyricsManager.Parse(lrc, artist: metadata?.Artist, title: metadata?.Title);
+                        var ytArtist = metadata?.Artist ?? entry.Channel;
+                        var ytTitle = metadata?.Title ?? entry.Title;
+                        AppLog.Info($"TryResolveLyricsAsync: fetched lyrics for {entry.VideoId}, length={lrc.Length}, lines={LrcParser.Parse(lrc, CancellationToken.None).Count}, artist={ytArtist ?? "(none)"}, title={ytTitle ?? "(none)"}");
+                        _lyricsManager.Parse(lrc, artist: ytArtist, title: ytTitle);
                         LyricsCache.Set(cacheKey, lrc);
                         UpdateNowPlayingText();
                         UpdatePlaylistTitleDisplayForNowPlaying();
+                        _lyricsWindow?.Refresh();
                     }
                     else
                     {
                         AppLog.Info($"TryResolveLyricsAsync: yt-dlp returned no lyrics for {entry.VideoId}, trying LRCLIB fallback");
+                        _lyricsWindow?.Refresh();
                         // Fallback: try LRCLIB using track title and channel (artist)
                         var title = entry.Title ?? "";
                         try
@@ -9738,6 +9753,7 @@ public partial class MainWindow : Window
                                 LyricsCache.Set(cacheKey, lrcLrclib);
                                 UpdateNowPlayingText();
                                 UpdatePlaylistTitleDisplayForNowPlaying();
+                                _lyricsWindow?.Refresh();
                                 return;
                             }
                             else
@@ -9749,16 +9765,21 @@ public partial class MainWindow : Window
                         {
                             AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
                         }
+
+                        _lyricsWindow?.Refresh();
                     }
                 }
                 catch (Exception ex)
                 {
                     AppLog.Exception(ex, $"TryResolveLyricsAsync: fetch failed for {entry.VideoId}");
                 }
+
+                _lyricsWindow?.Refresh();
             }
             else
             {
                 AppLog.Info($"TryResolveLyricsAsync: skipped for {entry.VideoId} — enabled={_lyricsEnabled}, videoId={(string.IsNullOrWhiteSpace(entry.VideoId) ? "(empty)" : entry.VideoId)}");
+                _lyricsWindow?.Refresh();
             }
         }
         else

@@ -134,7 +134,7 @@ public static class LrcParser
             }
 
             // Match [ti:Title] or [TI:Title]
-            var tiMatch = Regex.Match(line, @"^\[ti:(.+)\]$", RegexOptions.IgnoreCase);
+            var tiMatch = Regex.Match(line, @"^\[tr:(.+)\]$", RegexOptions.IgnoreCase);
             if (tiMatch.Success)
             {
                 title = tiMatch.Groups[1].Value.Trim();

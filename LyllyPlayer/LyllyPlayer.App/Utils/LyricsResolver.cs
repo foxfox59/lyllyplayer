@@ -168,7 +168,7 @@ public static class LyricsResolver
                 string? lrclibName = null;
 
                 // Artist field (neutral bonus — we didn't search by artist).
-                if (item.TryGetProperty("artist", out var artistProp) &&
+                if (item.TryGetProperty("artistName", out var artistProp) &&
                     artistProp.ValueKind == System.Text.Json.JsonValueKind.String)
                 {
                     lrclibArtist = artistProp.GetString()?.Trim();
@@ -176,7 +176,7 @@ public static class LyricsResolver
                 }
 
                 // Track name match: bonus for the LRCLIB track name containing the search query.
-                if (item.TryGetProperty("name", out var nameProp) &&
+                if (item.TryGetProperty("trackName", out var nameProp) &&
                     nameProp.ValueKind == System.Text.Json.JsonValueKind.String)
                 {
                     lrclibName = nameProp.GetString()?.Trim();

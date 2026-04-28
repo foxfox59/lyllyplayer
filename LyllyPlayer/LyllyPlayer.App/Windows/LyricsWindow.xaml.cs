@@ -75,6 +75,11 @@ public partial class LyricsWindow : Window
         try { if (e.ClickCount == 2) return; DragMove(); } catch { /* ignore */ }
     }
 
+    private void ChromeCloseButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try { Close(); } catch { /* ignore */ }
+    }
+
     private void CloseButton_OnClick(object sender, RoutedEventArgs e)
     {
         try { Close(); } catch { /* ignore */ }

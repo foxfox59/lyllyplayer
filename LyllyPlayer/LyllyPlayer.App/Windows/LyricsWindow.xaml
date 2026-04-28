@@ -33,7 +33,7 @@
         <Grid Margin="{DynamicResource App.Theme.WindowChromeContentMargin}">
             <Border SnapsToDevicePixels="{DynamicResource App.Theme.WindowChromeSnapsToDevicePixels}"
                     UseLayoutRounding="True"
-                    Background="{DynamicResource App.Brush.WindowBgImage.Lyrics}"
+                    Background="{DynamicResource App.Brush.WindowBgImage.Playlist}"
                     CornerRadius="{DynamicResource App.Theme.WindowCornerRadiusOuter}"/>
             <!-- Layer 3: Custom window border ring -->
             <local:WindowChromeFrameRing Panel.ZIndex="5"
@@ -85,7 +85,11 @@
                     <Grid Height="28"
                           Margin="{DynamicResource App.Theme.WindowChromeTitleBarContentMargin}"
                           Background="Transparent">
-                        <TextBlock Text="LyllyPlayer — Lyrics"
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding Title, RelativeSource={RelativeSource AncestorType=Window}}"
                                    VerticalAlignment="Center"
                                    TextTrimming="CharacterEllipsis">
                             <TextBlock.Style>
@@ -99,6 +103,26 @@
                                 </Style>
                             </TextBlock.Style>
                         </TextBlock>
+                        <Button x:Name="ChromeCloseButton" Grid.Column="1"
+                                Width="34"
+                                Height="24"
+                                Margin="0,2,0,2"
+                                Padding="0"
+                                FontFamily="{StaticResource App.MonoFont}"
+                                FontSize="12"
+                                Content="[X]"
+                                Click="ChromeCloseButton_OnClick">
+                            <Button.Style>
+                                <Style TargetType="{x:Type Button}" BasedOn="{StaticResource App.ChromeTitleBarButton}">
+                                    <Setter Property="Foreground" Value="{DynamicResource App.Theme.TitleBarTextActive}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
+                                            <Setter Property="Foreground" Value="{DynamicResource App.Theme.TitleBarTextInactive}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                     </Grid>
                 </Border>
 
