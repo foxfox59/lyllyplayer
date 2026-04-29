@@ -220,14 +220,21 @@
                     VerticalAlignment="Top"
                     Click="OptionsButton_OnClick"/>
 
-            <Button x:Name="PlaylistToolsButton"
-                    Grid.Column="2"
-                    Content="playlist&#x2026;"
-                    MinWidth="70"
-                    Padding="10,2"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Top"
-                    Click="PlaylistToolsButton_OnClick"/>
+            <StackPanel Grid.Column="2" Orientation="Vertical" HorizontalAlignment="Right" VerticalAlignment="Top">
+                <Button x:Name="PlaylistToolsButton"
+                        Content="playlist&#x2026;"
+                        MinWidth="70"
+                        Padding="10,2"
+                        VerticalAlignment="Top"
+                        Click="PlaylistToolsButton_OnClick"/>
+                <Button x:Name="LyricsButton"
+                        Content="lyrics&#x2026;"
+                        MinWidth="70"
+                        Padding="10,2"
+                        VerticalAlignment="Top"
+                        Visibility="Collapsed"
+                        Click="LyricsButton_OnClick"/>
+            </StackPanel>
         </Grid>
 
         <!-- Middle: Visualizer + now playing + transport (single themed card) -->
@@ -414,7 +421,7 @@
                                     Margin="0,0,6,0"
                                     TextElement.FontSize="11">
                             <Button x:Name="PrevButton" Content="&lt;&lt;" MinWidth="40" Margin="0,0,6,0" Padding="6,4" Click="PrevButton_OnClick"/>
-                            <Button x:Name="StopButton" Content="■" MinWidth="40" Margin="0,0,6,0" Padding="6,4" Click="StopButton_OnClick"/>                            
+                            <Button x:Name="StopButton" Content="■" MinWidth="40" Margin="0,0,6,0" Padding="6,4" Click="StopButton_OnClick"/>
                             <Button x:Name="PlayPauseButton" Content="&gt;" MinWidth="40" Margin="0,0,6,0" Padding="6,4" Click="PlayPauseButton_OnClick"/>
                             <Button x:Name="NextButton" Content="&gt;&gt;" MinWidth="40" Margin="0,0,6,0" Padding="6,4" Click="NextButton_OnClick"/>
 
@@ -498,7 +505,7 @@
 
                             <Button x:Name="RepeatButton"
                                     Content="Repeat: None"
-                                    MinWidth="118"
+                                    MinWidth="96"
                                     Margin="0,0,0,0"
                                     Padding="6,4"
                                     FontSize="11"
@@ -511,9 +518,9 @@
                                     VerticalAlignment="Center"
                                     HorizontalAlignment="Right"
                                     Panel.ZIndex="1">
-                            <TextBlock x:Name="VolumeLabelTextBlock" Text="Vol" VerticalAlignment="Center" Margin="8,0,6,0" FontSize="11" Foreground="{DynamicResource App.Theme.Foreground}"/>
+                            <TextBlock x:Name="VolumeLabelTextBlock" Text="Vol" VerticalAlignment="Center" Margin="8,0,0,0" FontSize="11" Foreground="{DynamicResource App.Theme.Foreground}"/>
                             <Slider x:Name="VolumeSlider"
-                                    Width="96"
+                                    Width="90"
                                     HorizontalAlignment="Left"
                                     HorizontalContentAlignment="Left"
                                     ClipToBounds="True"
@@ -523,10 +530,21 @@
                                     SmallChange="0.02"
                                     LargeChange="0.10"
                                     ValueChanged="VolumeSlider_OnValueChanged"/>
+                            <Button x:Name="LyricsUltraButtonInline"
+                                    Width="34"
+                                    Height="22"
+                                    Margin="0,0,4,0"
+                                    Padding="0"
+                                    Content="L"
+                                    FontFamily="{StaticResource App.MonoFont}"
+                                    FontSize="12"
+                                    VerticalAlignment="Center"
+                                    Visibility="Collapsed"
+                                    Click="LyricsUltraButtonInline_OnClick"/>
                             <Button x:Name="CompactPlaylistButtonInline"
                                     Width="34"
                                     Height="22"
-                                    Margin="8,0,0,0"
+                                    Margin="0,0,0,0"
                                     Padding="0"
                                     Content="PL"
                                     FontFamily="{StaticResource App.MonoFont}"
@@ -545,4 +563,3 @@
         </Grid>
     </Grid>
 </Window>
-

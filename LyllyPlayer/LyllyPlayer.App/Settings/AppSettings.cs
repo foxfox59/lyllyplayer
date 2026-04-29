@@ -23,6 +23,7 @@ public sealed record AppSettings(
     bool? AlwaysOnTop,
     bool? AlwaysOnTopPlaylistWindow,
     bool? AlwaysOnTopOptionsWindow,
+    bool? AlwaysOnTopLyricsWindow,
     double? WindowLeft,
     double? WindowTop,
     double? WindowWidth,
@@ -60,6 +61,24 @@ public sealed record AppSettings(
     bool? OptionsWindowBottomAlignToPlaylist,
     /// <summary>Last selected Options tab header: Tools, System, Audio, Theme, Search, Local, Advanced.</summary>
     string? OptionsWindowSelectedTab,
+    /// <summary>Lyrics window snapped to main window edge.</summary>
+    bool? LyricsWindowSnapped,
+    /// <summary>Lyrics window snap edge: None, Left, Right, Bottom, Top.</summary>
+    string? LyricsWindowSnapEdge,
+    /// <summary>Lyrics window dock Y offset from main window.</summary>
+    double? LyricsWindowDockYOffset,
+    /// <summary>Lyrics window dock X offset from main window.</summary>
+    double? LyricsWindowDockXOffset,
+    /// <summary>Lyrics window persisted left position.</summary>
+    double? LyricsWindowLeft,
+    /// <summary>Lyrics window persisted top position.</summary>
+    double? LyricsWindowTop,
+    /// <summary>Lyrics window persisted width.</summary>
+    double? LyricsWindowWidth,
+    /// <summary>Lyrics window persisted height.</summary>
+    double? LyricsWindowHeight,
+    /// <summary>Lyrics window persisted window state.</summary>
+    string? LyricsWindowState,
     /// <summary>Light | Dark | Auto. Auto chooses based on background image luminance when possible.</summary>
     string? ThemeMode,
     string? BackgroundMode,
@@ -115,8 +134,10 @@ public sealed record AppSettings(
     bool? CompactModeHidesAuxWindows,
     /// <summary>When true, Cancel on YouTube search or playlist refresh keeps partial results; when false, restores the pre-operation playlist.</summary>
     bool? KeepIncompletePlaylistOnCancel,
+    /// <summary>When true, synced lyrics are resolved for YouTube tracks and displayed in the status line / window title.</summary>
+    bool? LyricsEnabled,
+    /// <summary>When true, LRCLIB search is attempted for local files (VideoId starting with "local:") to resolve lyrics.</summary>
+    bool? LyricsLocalFilesEnabled,
     /// <summary>App build that last wrote this file; used for upgrade / load-failure messaging.</summary>
     string? LastSavedByAppVersion
 );
-
-

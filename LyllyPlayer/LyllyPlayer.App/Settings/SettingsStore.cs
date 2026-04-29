@@ -329,10 +329,12 @@ public static class SettingsStore
             CompactModeHidesAuxWindows = loaded.CompactModeHidesAuxWindows ?? GetBool(nameof(AppSettings.CompactModeHidesAuxWindows)),
             KeepIncompletePlaylistOnCancel = loaded.KeepIncompletePlaylistOnCancel ?? GetBool(nameof(AppSettings.KeepIncompletePlaylistOnCancel)),
             LastSavedByAppVersion = loaded.LastSavedByAppVersion ?? GetString(nameof(AppSettings.LastSavedByAppVersion)),
+            LyricsEnabled = loaded.LyricsEnabled ?? GetBool(nameof(AppSettings.LyricsEnabled)),
 
             AlwaysOnTop = loaded.AlwaysOnTop ?? GetBool(nameof(AppSettings.AlwaysOnTop)),
             AlwaysOnTopPlaylistWindow = loaded.AlwaysOnTopPlaylistWindow ?? GetBool(nameof(AppSettings.AlwaysOnTopPlaylistWindow)),
             AlwaysOnTopOptionsWindow = loaded.AlwaysOnTopOptionsWindow ?? GetBool(nameof(AppSettings.AlwaysOnTopOptionsWindow)),
+            AlwaysOnTopLyricsWindow = loaded.AlwaysOnTopLyricsWindow ?? GetBool(nameof(AppSettings.AlwaysOnTopLyricsWindow)),
 
             PlaylistWindowLeft = GetDouble(nameof(AppSettings.PlaylistWindowLeft)) ?? loaded.PlaylistWindowLeft,
             PlaylistWindowTop = GetDouble(nameof(AppSettings.PlaylistWindowTop)) ?? loaded.PlaylistWindowTop,
@@ -436,6 +438,7 @@ public static class SettingsStore
         TakeBool(nameof(AppSettings.AlwaysOnTop), ref s, (c, v) => c with { AlwaysOnTop = v });
         TakeBool(nameof(AppSettings.AlwaysOnTopPlaylistWindow), ref s, (c, v) => c with { AlwaysOnTopPlaylistWindow = v });
         TakeBool(nameof(AppSettings.AlwaysOnTopOptionsWindow), ref s, (c, v) => c with { AlwaysOnTopOptionsWindow = v });
+        TakeBool(nameof(AppSettings.AlwaysOnTopLyricsWindow), ref s, (c, v) => c with { AlwaysOnTopLyricsWindow = v });
         TakeBool(nameof(AppSettings.CompactModeHidesAuxWindows), ref s, (c, v) => c with { CompactModeHidesAuxWindows = v });
         TakeString(nameof(AppSettings.CompactModeLayout), ref s, (c, v) => c with { CompactModeLayout = v });
 
@@ -511,6 +514,7 @@ public static class SettingsStore
         AlwaysOnTop: null,
         AlwaysOnTopPlaylistWindow: null,
         AlwaysOnTopOptionsWindow: null,
+        AlwaysOnTopLyricsWindow: null,
         WindowLeft: null,
         WindowTop: null,
         WindowWidth: null,
@@ -542,6 +546,15 @@ public static class SettingsStore
         OptionsWindowDockXOffset: null,
         OptionsWindowBottomAlignToPlaylist: null,
         OptionsWindowSelectedTab: null,
+        LyricsWindowSnapped: null,
+        LyricsWindowSnapEdge: null,
+        LyricsWindowDockYOffset: null,
+        LyricsWindowDockXOffset: null,
+        LyricsWindowLeft: null,
+        LyricsWindowTop: null,
+        LyricsWindowWidth: null,
+        LyricsWindowHeight: null,
+        LyricsWindowState: null,
         ThemeMode: null,
         BackgroundMode: null,
         CustomBackgroundImagePath: null,
@@ -582,7 +595,9 @@ public static class SettingsStore
         CompactModeLayout: null,
         CompactModeHidesAuxWindows: null,
         KeepIncompletePlaylistOnCancel: null,
-        LastSavedByAppVersion: null);
+        LastSavedByAppVersion: null,
+        LyricsEnabled: null,
+        LyricsLocalFilesEnabled: null);
 
     private static AppSettings AllNullSettings() => AllNullSettingsInstance;
 
@@ -616,6 +631,7 @@ public static class SettingsStore
             AlwaysOnTop: false,
             AlwaysOnTopPlaylistWindow: false,
             AlwaysOnTopOptionsWindow: false,
+            AlwaysOnTopLyricsWindow: false,
             WindowLeft: null,
             WindowTop: null,
             WindowWidth: null,
@@ -647,6 +663,15 @@ public static class SettingsStore
             OptionsWindowDockXOffset: 0,
             OptionsWindowBottomAlignToPlaylist: false,
             OptionsWindowSelectedTab: null,
+            LyricsWindowSnapped: null,
+            LyricsWindowSnapEdge: null,
+            LyricsWindowDockYOffset: null,
+            LyricsWindowDockXOffset: null,
+            LyricsWindowLeft: null,
+            LyricsWindowTop: null,
+            LyricsWindowWidth: null,
+            LyricsWindowHeight: null,
+            LyricsWindowState: null,
             ThemeMode: DefaultThemeMode,
             BackgroundMode: DefaultBackgroundMode,
             CustomBackgroundImagePath: null,
@@ -687,7 +712,9 @@ public static class SettingsStore
             CompactModeLayout: DefaultCompactModeLayout,
             CompactModeHidesAuxWindows: true,
             KeepIncompletePlaylistOnCancel: DefaultKeepIncompletePlaylistOnCancel,
-            LastSavedByAppVersion: null
+            LastSavedByAppVersion: null,
+            LyricsEnabled: false,
+            LyricsLocalFilesEnabled: false
         );
 
     private static AppSettings ApplyDefaults(AppSettings s)
@@ -742,6 +769,9 @@ public static class SettingsStore
             CompactModeHidesAuxWindows = s.CompactModeHidesAuxWindows ?? true,
             KeepIncompletePlaylistOnCancel = s.KeepIncompletePlaylistOnCancel ?? DefaultKeepIncompletePlaylistOnCancel,
             LastSavedByAppVersion = string.IsNullOrWhiteSpace(s.LastSavedByAppVersion) ? null : s.LastSavedByAppVersion.Trim(),
+            LyricsEnabled = s.LyricsEnabled ?? false,
+            LyricsLocalFilesEnabled = s.LyricsLocalFilesEnabled ?? false,
+            AlwaysOnTopLyricsWindow = s.AlwaysOnTopLyricsWindow ?? false,
             PlaylistWindowBoundsUiScalePercent = s.PlaylistWindowBoundsUiScalePercent is >= 50 and <= 200
                 ? s.PlaylistWindowBoundsUiScalePercent
                 : null,
@@ -798,6 +828,7 @@ public static class SettingsStore
         if (string.Equals(t, "Theme", StringComparison.OrdinalIgnoreCase)) return "Theme";
         if (string.Equals(t, "Search", StringComparison.OrdinalIgnoreCase)) return "Search";
         if (string.Equals(t, "Local", StringComparison.OrdinalIgnoreCase)) return "Local";
+        if (string.Equals(t, "Lyrics", StringComparison.OrdinalIgnoreCase)) return "Lyrics";
         if (string.Equals(t, "Advanced", StringComparison.OrdinalIgnoreCase)) return "Advanced";
         return DefaultOptionsWindowSelectedTab;
     }
@@ -886,5 +917,3 @@ public static class SettingsStore
         return "github";
     }
 }
-
-
