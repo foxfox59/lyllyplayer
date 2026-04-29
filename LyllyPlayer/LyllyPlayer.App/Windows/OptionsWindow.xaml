@@ -617,6 +617,29 @@
                         </ScrollViewer>
                     </TabItem>
 
+                    <TabItem Header="Lyrics">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="6">
+                                <TextBlock TextWrapping="Wrap"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"
+                                           Text="Lyrics display"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,10"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Resolve synced lyrics from YouTube videos via yt-dlp or from the LRCLIB API. Lyrics are shown in the Lyrics window and can also be displayed in the title bar."/>
+                                <CheckBox x:Name="LyricsEnabledCheckBox"
+                                          Content="Display lyrics"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="LyricsEnabledCheckBox_OnChecked"
+                                          Unchecked="LyricsEnabledCheckBox_OnUnchecked"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+
                     <TabItem Header="Advanced">
                         <ScrollViewer VerticalScrollBarVisibility="Auto"
                                       Background="Transparent">
@@ -768,13 +791,6 @@
                                                  Content="Ultra compact"
                                                  Checked="CompactLayoutUltraRadio_OnChecked"/>
                                 </StackPanel>
-
-                                <CheckBox x:Name="LyricsEnabledCheckBox"
-                                          Content="Display lyrics"
-                                          Margin="0,0,0,8"
-                                          Foreground="{DynamicResource App.Theme.Foreground}"
-                                          Checked="LyricsEnabledCheckBox_OnChecked"
-                                          Unchecked="LyricsEnabledCheckBox_OnUnchecked"/>
 
                                 <TextBlock Text="App icon"
                                            FontWeight="SemiBold"

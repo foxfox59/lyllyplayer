@@ -10,6 +10,7 @@ namespace LyllyPlayer.Player;
 public sealed class LyricsManager
 {
     private IReadOnlyList<LrcParser.TimedLine> _lines = Array.Empty<LrcParser.TimedLine>();
+    private IReadOnlyList<string>? _plainLines;
     private string? _lastKey;
     private string? _lastLrcText;
     private int _lastIndex = -1;
@@ -24,12 +25,12 @@ public sealed class LyricsManager
     /// <summary>
     /// Gets whether lyrics are currently loaded for the active track.
     /// </summary>
-    public bool HasLyrics => _lines.Count > 0;
+    public bool HasLyrics => _lines.Count > 0 || (_isPlainLyrics && _plainLines != null && _plainLines.Count > 0);
 
     /// <summary>
     /// Gets the number of lyric lines currently loaded.
     /// </summary>
-    public int LineCount => _lines.Count;
+    public int LineCount => _isPlainLyrics && _plainLines != null ? _plainLines.Count : _lines.Count;
 
     /// <summary>
     /// Gets whether the loaded lyrics are plain (non-synced) text.
@@ -93,11 +94,26 @@ public sealed class LyricsManager
     /// <param name="isPlainLyrics">Whether the lyrics are plain (non-synced) text from LRCLIB.</param>
     public void Parse(string lrcText, double syncOffsetSeconds = 0, string? artist = null, string? title = null, bool isPlainLyrics = false)
     {
-        _lines = LrcParser.Parse(lrcText);
         _syncOffsetSeconds = syncOffsetSeconds;
         _isPlainLyrics = isPlainLyrics;
         ResolvedArtist = artist;
         ResolvedTitle = title;
+
+        if (isPlainLyrics)
+        {
+            _plainLines = lrcText
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(l => l.Trim())
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .ToList();
+            _lines = Array.Empty<LrcParser.TimedLine>();
+        }
+        else
+        {
+            _plainLines = null;
+            _lines = LrcParser.Parse(lrcText);
+        }
+
         ResetPosition();
     }
 
@@ -270,6 +286,8 @@ public sealed class LyricsManager
     /// </summary>
     public IReadOnlyList<string> GetLineTexts()
     {
+        if (_isPlainLyrics && _plainLines != null)
+            return _plainLines;
         return _lines.Select(l => l.Text).ToArray();
     }
 
@@ -279,6 +297,7 @@ public sealed class LyricsManager
     public void Clear()
     {
         _lines = Array.Empty<LrcParser.TimedLine>();
+        _plainLines = null;
         _lastIndex = -1;
         _lastPositionSeconds = -1;
         _lastKey = null;
