@@ -1453,7 +1453,7 @@ public partial class MainWindow : Window
                 {
                     Title = string.IsNullOrWhiteSpace(title) ?
                     orig.Entry.Title : title!,
-                    Channel = artist,
+                    Channel = string.IsNullOrWhiteSpace(artist) ? orig.Entry.Channel : artist,
                     DurationSeconds = durationSeconds
                 };
                 _playlistItems[i] = new QueueItem(updatedEntry2, orig.IndexPrefix)
@@ -1478,7 +1478,7 @@ public partial class MainWindow : Window
                 {
                     Title = string.IsNullOrWhiteSpace(title) ?
                     orig.Entry.Title : title!,
-                    Channel = artist,
+                    Channel = string.IsNullOrWhiteSpace(artist) ? orig.Entry.Channel : artist,
                     DurationSeconds = durationSeconds
                 };
                 _queueItems[i] = new QueueItem(updatedEntry2, orig.IndexPrefix)

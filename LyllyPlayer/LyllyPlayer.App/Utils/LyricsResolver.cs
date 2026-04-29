@@ -14,7 +14,7 @@ public static class LyricsResolver
 
     /// <summary>Minimum score a candidate must reach to be considered a valid match.
     /// Prevents wrong songs from being selected when title matches but artist doesn't.</summary>
-    private const int MinimumMatchScore = 20;
+    private const int MinimumMatchScore = 45;
 
     /// <summary>
     /// Fetches lyrics for a YouTube video by its video ID, using the given yt-dlp path.
@@ -134,12 +134,14 @@ public static class LyricsResolver
         if (string.IsNullOrWhiteSpace(trackName))
             return (null, null, null, null, false);
 
-        var searchQuery = CleanSearchQuery(trackName);
+        var searchQuery = CleanSearchQuery(trackName + " " + artist);
         if (string.IsNullOrWhiteSpace(searchQuery))
             return (null, null, null, null, false);
 
         var queryString = System.Web.HttpUtility.UrlEncode(searchQuery.Trim());
         var url = $"https://lrclib.net/api/search?q={queryString}";
+        //AppLog.Info($"LRCLIB FetchLyricsFromLrclibAsync: trackName={trackName}, artist={artist}");
+        //AppLog.Info($"LRCLIB query url: {url}");
 
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
 
@@ -194,7 +196,8 @@ public static class LyricsResolver
                 double score = 0;
 
                 // 1. Artist cross-reference (PRIMARY discriminator)
-                score += ComputeArtistMatchScore(lrclibArtist, artist, trackName);
+                var artistScore = ComputeArtistMatchScore(lrclibArtist, artist, trackName);
+                score += artistScore;
 
                 // 2. Duration proximity (SECONDARY discriminator)
                 if (targetDurationSeconds.HasValue && lrclibDuration.HasValue)
@@ -216,19 +219,48 @@ public static class LyricsResolver
                 }
 
                 // 3. Track name matching (TERTIARY)
+                var trackScore = 0;
                 if (!string.IsNullOrWhiteSpace(lrclibName))
                 {
                     var lowerQuery = searchQuery.Trim().ToLowerInvariant();
                     var lowerName = lrclibName.ToLowerInvariant();
+
+                    // When artist match is strong, strip the LRCLIB artist name from the query
+                    // to avoid polluting the track name comparison.
+                    // E.g., "Hiljainen Viikate" with LRCLIB artist "Viikate" → "Hiljainen"
+                    if (artistScore >= 100 && !string.IsNullOrWhiteSpace(lrclibArtist))
+                    {
+                        var lowerArtist = lrclibArtist.ToLowerInvariant();
+                        lowerQuery = lowerQuery.Replace(lowerArtist, "");
+                        // Clean up leftover separators and whitespace
+                        lowerQuery = System.Text.RegularExpressions.Regex.Replace(lowerQuery, @"\s*[-|/;:,]+\s*", " ");
+                        lowerQuery = System.Text.RegularExpressions.Regex.Replace(lowerQuery, @"\s+", " ").Trim();
+                    }
+
                     if (lowerName == lowerQuery)
-                        score += 60;
-                    else if (lowerName.Contains(lowerQuery) || lowerQuery.Contains(lowerName))
-                        score += 30;
+                        trackScore = 60;
+                    else if (lowerName.StartsWith(lowerQuery))
+                        trackScore = 45; // Track name starts with query — strong match
+                    else if (lowerName.Contains(lowerQuery) && lowerQuery.Length >= 3)
+                        trackScore = 30; // Query is somewhere in the track name — moderate match
+                    else if (lowerQuery.Contains(lowerName) && lowerName.Length >= 5)
+                    {
+                        // Query is longer than LRCLIB track name — weak match.
+                        // Only award points if the LRCLIB track name is a significant portion of the query.
+                        var coverage = (double)lowerName.Length / lowerQuery.Length;
+                        trackScore = (int)(15 * coverage); // 0–15 points based on coverage
+                    }
                     else
                     {
                         // Partial word match — check if key words overlap
-                        score += ComputeWordOverlapScore(lowerQuery, lowerName);
+                        var wordScore = ComputeWordOverlapScore(lowerQuery, lowerName);
+                        // Cap word overlap at 15 points to prevent false positives from shared common words
+                        trackScore = (int)Math.Min(wordScore, 15);
                     }
+
+                    score += trackScore;
+
+                    AppLog.Info($"LRCLIB scoring: track={lrclibName} artistScore={artistScore} trackScore={trackScore} total={score} strippedQuery=\"{lowerQuery}\"");
                 }
 
                 if (score >= MinimumMatchScore)
@@ -324,6 +356,7 @@ public static class LyricsResolver
             @"\s*\(lyric\s+video\)\s*",
             @"\s*\(visualizer\)\s*",
             @"\s*\(audio\)\s*",
+            // @"\s*\(topic\)\s*",
             @"\s*\(lyrics?\)\s*",
             @"\s*\(subtitled?\)\s*",
             @"\s*\(feat\.\s+.*?\)\s*",
@@ -335,6 +368,16 @@ public static class LyricsResolver
 
         // 3. Remove standalone "Topic" suffix (common for Vevo/label uploads)
         result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+Topic\s*$", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        // 3.3. Strip YouTube separator "-" — it's not part of the actual title/artist
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+-\s+", " ", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        // 3.4. Strip standalone " x " separator — YouTube uses "x" for collabs but LRCLIB uses "feat." or "&"
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+x\s+", " ", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        // 3.5. Split camelCase concatenated words (e.g., "ArtistName" → "Artist Name")
+        // This helps LRCLIB match against properly spaced artist/track names in its database.
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"([a-z])([A-Z])", "$1 $2");
 
         // 4. Normalize whitespace
         result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+", " ").Trim();
@@ -398,7 +441,12 @@ public static class LyricsResolver
         {
             var lowerTitle = ytRawTitle.ToLowerInvariant();
             if (lowerTitle.Contains(lowerArtist))
-                return 60;
+            {
+                // LRCLIB artist appears in the YouTube title, but we can't tell if it's actually the artist
+                // or part of the song title (e.g., "Artist Song - Artist Name" where "Artist Song" is the song name).
+                // Give a moderate score to avoid false positives.
+                return 25;
+            }
 
             // Check if significant artist words appear in the title
             var titleWords = lowerTitle
