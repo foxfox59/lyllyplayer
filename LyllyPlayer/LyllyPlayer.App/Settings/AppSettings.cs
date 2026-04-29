@@ -136,6 +136,8 @@ public sealed record AppSettings(
     bool? KeepIncompletePlaylistOnCancel,
     /// <summary>When true, synced lyrics are resolved for YouTube tracks and displayed in the status line / window title.</summary>
     bool? LyricsEnabled,
+    /// <summary>When true, LRCLIB search is attempted for local files (VideoId starting with "local:") to resolve lyrics.</summary>
+    bool? LyricsLocalFilesEnabled,
     /// <summary>App build that last wrote this file; used for upgrade / load-failure messaging.</summary>
     string? LastSavedByAppVersion
 );

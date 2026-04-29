@@ -590,6 +590,7 @@ public partial class MainWindow : Window
     private string _customAppTitle = "";
     private string _appIconVisibility = "TaskbarOnly";
     private bool _lyricsEnabled;
+    private bool _lyricsLocalFilesEnabled;
     private LyricsManager _lyricsManager = new();
     private DispatcherTimer? _lyricsTimer;
     private string? _lyricsResolvedVideoId;
@@ -775,6 +776,7 @@ public partial class MainWindow : Window
         _customAppTitle = _startupSettings.CustomAppTitle ?? "";
         _appIconVisibility = SettingsStore.NormalizeAppIconVisibility(_startupSettings.AppIconVisibility);
         _lyricsEnabled = _startupSettings.LyricsEnabled ?? false;
+        _lyricsLocalFilesEnabled = _startupSettings.LyricsLocalFilesEnabled ?? false;
         _searchDefaultCount = _startupSettings.SearchDefaultCount is >= 1 and <= 200 ? _startupSettings.SearchDefaultCount.Value : 50;
         _searchMinLengthSeconds = _startupSettings.SearchMinLengthSeconds is >= 0 and <= 3600 ? _startupSettings.SearchMinLengthSeconds.Value : 0;
         _readMetadataOnLoad = _startupSettings.ReadMetadataOnLoad ?? false;
@@ -4186,6 +4188,17 @@ public partial class MainWindow : Window
                         _lyricsTimer?.Stop();
                     RequestPersistSnapshot();
                 },
+                getLyricsLocalFilesEnabled: () => _lyricsLocalFilesEnabled,
+                setLyricsLocalFilesEnabled: (v) =>
+                {
+                    _lyricsLocalFilesEnabled = v;
+                    // if (v)
+                    //     _startLyricsTimer();
+                    // else
+                    //     _lyricsTimer?.Stop();
+                    RequestPersistSnapshot();
+                },
+
                 getFfmpegPath: () => _savedFfmpegPath ?? "",
                 setFfmpegPath: (p) =>
                 {
@@ -8282,6 +8295,7 @@ public partial class MainWindow : Window
             CustomAppTitle: string.IsNullOrWhiteSpace(_customAppTitle) ? null : _customAppTitle.Trim(),
             AppIconVisibility: _appIconVisibility,
             LyricsEnabled: _lyricsEnabled,
+            LyricsLocalFilesEnabled: _lyricsLocalFilesEnabled,
             SearchDefaultCount: _searchDefaultCount,
             SearchMinLengthSeconds: _searchMinLengthSeconds,
             ReadMetadataOnLoad: _readMetadataOnLoad,
@@ -9711,108 +9725,188 @@ public partial class MainWindow : Window
 
             if (_lyricsEnabled && !string.IsNullOrWhiteSpace(entry.VideoId))
             {
-                // Check cache first
-                var cacheKey = $"yt_{entry.VideoId}";
-                var cached = LyricsCache.Get(cacheKey);
-                if (cached != null)
-                {
-                    var metadata = LrcParser.TryExtractMetadata(cached);
-                    var cacheArtist = metadata?.Artist ?? entry.Channel;
-                    var cacheTitle = metadata?.Title ?? entry.Title;
-                    AppLog.Info($"TryResolveLyricsAsync: cache hit for {entry.VideoId}, lines={LrcParser.Parse(cached, CancellationToken.None).Count}, artist={cacheArtist ?? "(none)"}, title={cacheTitle ?? "(none)"}");
-                    _lyricsManager.Parse(cached, artist: cacheArtist, title: cacheTitle);
-                    UpdateNowPlayingText();
-                    UpdatePlaylistTitleDisplayForNowPlaying();
-                    _lyricsWindow?.Refresh();
-                    return;
-                }
+                var isLocalFile = entry.VideoId.StartsWith("local:");
 
-                AppLog.Info($"TryResolveLyricsAsync: fetching lyrics for {entry.VideoId} via yt-dlp at '{ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp").EffectiveFileName}'");
-                // Fetch from YouTube via yt-dlp
-                var resolvedYtDlp = ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp");
-                try
+                // Local files: only resolve if enabled in settings
+                if (isLocalFile && !_lyricsLocalFilesEnabled)
                 {
-                    var lrc = await LyricsResolver.FetchLyricsForYouTubeAsync(resolvedYtDlp.EffectiveFileName, entry.VideoId, CancellationToken.None);
-                    // Discard stale result if track changed while fetching
-                    if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
+                    AppLog.Info($"TryResolveLyricsAsync: skipped for {entry.VideoId} — local files lyrics disabled");
+                    _lyricsWindow?.Refresh();
+                }
+                // Local files: resolve via LRCLIB directly (skip yt-dlp and cache)
+                else if (isLocalFile && _lyricsLocalFilesEnabled)
+                {
+                    AppLog.Info($"TryResolveLyricsAsync: fetching lyrics for local file {entry.VideoId} via LRCLIB");
+                    var localFilePath = entry.VideoId.Substring("local:".Length);
+                    // Extract local file path and try to get metadata (title/artist) from file tags
+                    string? searchTitle = null;
+                    string? searchArtist = null;
+                    try
                     {
-                        AppLog.Info($"TryResolveLyricsAsync: yt-dlp fetch completed but track changed, discarding for {entry.VideoId}");
-                        return;
-                    }
-                    if (!string.IsNullOrWhiteSpace(lrc))
-                    {
-                        var metadata = LrcParser.TryExtractMetadata(lrc);
-                        var ytArtist = metadata?.Artist ?? entry.Channel;
-                        var ytTitle = metadata?.Title ?? entry.Title;
-                        AppLog.Info($"TryResolveLyricsAsync: fetched lyrics for {entry.VideoId}, length={lrc.Length}, lines={LrcParser.Parse(lrc, CancellationToken.None).Count}, artist={ytArtist ?? "(none)"}, title={ytTitle ?? "(none)"}");
-                        _lyricsManager.Parse(lrc, artist: ytArtist, title: ytTitle);
-                        LyricsCache.Set(cacheKey, lrc);
-                        Dispatcher.Invoke(() =>
+                        var meta = await LocalMetadataService.TryGetInfoAsync(_ffmpegPath, localFilePath, CancellationToken.None);
+                        if (meta is not null && (!string.IsNullOrWhiteSpace(meta.Title) || !string.IsNullOrWhiteSpace(meta.Artist)))
                         {
-                            try { UpdateNowPlayingText(); } catch { /* ignore */ }
-                            try { UpdatePlaylistTitleDisplayForNowPlaying(); } catch { /* ignore */ }
-                            try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
-                        });
+                            searchTitle = !string.IsNullOrWhiteSpace(meta.Title) ? meta.Title : null;
+                            searchArtist = !string.IsNullOrWhiteSpace(meta.Artist) ? meta.Artist : null;
+                            AppLog.Info($"TryResolveLyricsAsync: read metadata for {entry.VideoId}: title={searchTitle ?? "(none)"}, artist={searchArtist ?? "(none)"}");
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        AppLog.Info($"TryResolveLyricsAsync: yt-dlp returned no lyrics for {entry.VideoId}, trying LRCLIB fallback");
-                        _lyricsWindow?.Refresh();
-                        // Fallback: try LRCLIB using track title and channel (artist)
-                        var title = entry.Title ?? "";
-                        try
+                        AppLog.Exception(ex, $"TryResolveLyricsAsync: failed to read metadata for {entry.VideoId}");
+                    }
+
+                    // Fall back to entry.Title/Channel (which may be filename if enrichment hasn't completed yet)
+                    var title = searchTitle ?? entry.Title ?? Path.GetFileNameWithoutExtension(localFilePath);
+                    var artist = searchArtist ?? entry.Channel;
+                    try
+                    {
+                        var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, entry.DurationSeconds, CancellationToken.None);
+                        // Discard stale result if track changed while fetching
+                        if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
                         {
-                            var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.Channel, entry.DurationSeconds, CancellationToken.None);
-                            // Discard stale result if track changed while fetching
-                            if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
+                            AppLog.Info($"TryResolveLyricsAsync: LRCLIB fetch completed but track changed, discarding for {entry.VideoId}");
+                            return;
+                        }
+                        if (!string.IsNullOrWhiteSpace(lrcLrclib))
+                        {
+                            // Calculate sync offset: local file duration minus LRCLIB studio duration
+                            double syncOffset = 0;
+                            if (entry.DurationSeconds.HasValue && lrclibDuration.HasValue)
                             {
-                                AppLog.Info($"TryResolveLyricsAsync: LRCLIB fetch completed but track changed, discarding for {entry.VideoId}");
-                                return;
-                            }
-                            if (!string.IsNullOrWhiteSpace(lrcLrclib))
-                            {
-                                // Calculate sync offset: YouTube duration minus LRCLIB studio duration
-                                // Positive offset means YouTube has a longer intro (lyrics start later)
-                                // Negative offset means YouTube has a shorter intro (lyrics start earlier)
-                                double syncOffset = 0;
-                                if (entry.DurationSeconds.HasValue && lrclibDuration.HasValue)
-                                {
-                                    syncOffset = entry.DurationSeconds.Value - lrclibDuration.Value;
-                                    AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, ytDur={entry.DurationSeconds}s, lrclibDur={lrclibDuration}s, offset={syncOffset:+0.##;-0.##;0}s, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
-                                }
-                                else
-                                {
-                                    AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
-                                }
-                                _lyricsManager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
-                                LyricsCache.Set(cacheKey, lrcLrclib);
-                                Dispatcher.Invoke(() =>
-                                {
-                                    try { UpdateNowPlayingText(); } catch { /* ignore */ }
-                                    try { UpdatePlaylistTitleDisplayForNowPlaying(); } catch { /* ignore */ }
-                                    try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
-                                });
-                                return;
+                                syncOffset = entry.DurationSeconds.Value - lrclibDuration.Value;
+                                AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, localDur={entry.DurationSeconds}s, lrclibDur={lrclibDuration}s, offset={syncOffset:+0.##;-0.##;0}s, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
                             }
                             else
                             {
-                                AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
+                                AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
                             }
+                            _lyricsManager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
+                            Dispatcher.Invoke(() =>
+                            {
+                                try { UpdateNowPlayingText(); } catch { /* ignore */ }
+                                try { UpdatePlaylistTitleDisplayForNowPlaying(); } catch { /* ignore */ }
+                                try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
+                            });
+                            return;
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
+                            AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (localDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
                         }
-
-                        _lyricsWindow?.Refresh();
                     }
+                    catch (Exception ex)
+                    {
+                        AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (localDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
+                    }
+                    _lyricsWindow?.Refresh();
                 }
-                catch (Exception ex)
+                // YouTube videos: use yt-dlp with LRCLIB fallback
+                else
                 {
-                    AppLog.Exception(ex, $"TryResolveLyricsAsync: fetch failed for {entry.VideoId}");
-                }
+                    // Check cache first
+                    var cacheKey = $"yt_{entry.VideoId}";
+                    var cached = LyricsCache.Get(cacheKey);
+                    if (cached != null)
+                    {
+                        var metadata = LrcParser.TryExtractMetadata(cached);
+                        var cacheArtist = metadata?.Artist ?? entry.Channel;
+                        var cacheTitle = metadata?.Title ?? entry.Title;
+                        AppLog.Info($"TryResolveLyricsAsync: cache hit for {entry.VideoId}, lines={LrcParser.Parse(cached, CancellationToken.None).Count}, artist={cacheArtist ?? "(none)"}, title={cacheTitle ?? "(none)"}");
+                        _lyricsManager.Parse(cached, artist: cacheArtist, title: cacheTitle);
+                        UpdateNowPlayingText();
+                        UpdatePlaylistTitleDisplayForNowPlaying();
+                        _lyricsWindow?.Refresh();
+                        return;
+                    }
 
-                _lyricsWindow?.Refresh();
+                    AppLog.Info($"TryResolveLyricsAsync: fetching lyrics for {entry.VideoId} via yt-dlp at '{ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp").EffectiveFileName}'");
+                    // Fetch from YouTube via yt-dlp
+                    var resolvedYtDlp = ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp");
+                    try
+                    {
+                        var lrc = await LyricsResolver.FetchLyricsForYouTubeAsync(resolvedYtDlp.EffectiveFileName, entry.VideoId, CancellationToken.None);
+                        // Discard stale result if track changed while fetching
+                        if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            AppLog.Info($"TryResolveLyricsAsync: yt-dlp fetch completed but track changed, discarding for {entry.VideoId}");
+                            return;
+                        }
+                        if (!string.IsNullOrWhiteSpace(lrc))
+                        {
+                            var metadata = LrcParser.TryExtractMetadata(lrc);
+                            var ytArtist = metadata?.Artist ?? entry.Channel;
+                            var ytTitle = metadata?.Title ?? entry.Title;
+                            AppLog.Info($"TryResolveLyricsAsync: fetched lyrics for {entry.VideoId}, length={lrc.Length}, lines={LrcParser.Parse(lrc, CancellationToken.None).Count}, artist={ytArtist ?? "(none)"}, title={ytTitle ?? "(none)"}");
+                            _lyricsManager.Parse(lrc, artist: ytArtist, title: ytTitle);
+                            LyricsCache.Set(cacheKey, lrc);
+                            Dispatcher.Invoke(() =>
+                            {
+                                try { UpdateNowPlayingText(); } catch { /* ignore */ }
+                                try { UpdatePlaylistTitleDisplayForNowPlaying(); } catch { /* ignore */ }
+                                try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
+                            });
+                        }
+                        else
+                        {
+                            AppLog.Info($"TryResolveLyricsAsync: yt-dlp returned no lyrics for {entry.VideoId}, trying LRCLIB fallback");
+                            _lyricsWindow?.Refresh();
+                            // Fallback: try LRCLIB using track title and channel (artist)
+                            var title = entry.Title ?? "";
+                            try
+                            {
+                                var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.Channel, entry.DurationSeconds, CancellationToken.None);
+                                // Discard stale result if track changed while fetching
+                                if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    AppLog.Info($"TryResolveLyricsAsync: LRCLIB fetch completed but track changed, discarding for {entry.VideoId}");
+                                    return;
+                                }
+                                if (!string.IsNullOrWhiteSpace(lrcLrclib))
+                                {
+                                    // Calculate sync offset: YouTube duration minus LRCLIB studio duration
+                                    // Positive offset means YouTube has a longer intro (lyrics start later)
+                                    // Negative offset means YouTube has a shorter intro (lyrics start earlier)
+                                    double syncOffset = 0;
+                                    if (entry.DurationSeconds.HasValue && lrclibDuration.HasValue)
+                                    {
+                                        syncOffset = entry.DurationSeconds.Value - lrclibDuration.Value;
+                                        AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, ytDur={entry.DurationSeconds}s, lrclibDur={lrclibDuration}s, offset={syncOffset:+0.##;-0.##;0}s, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
+                                    }
+                                    else
+                                    {
+                                        AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
+                                    }
+                                    _lyricsManager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
+                                    LyricsCache.Set(cacheKey, lrcLrclib);
+                                    Dispatcher.Invoke(() =>
+                                    {
+                                        try { UpdateNowPlayingText(); } catch { /* ignore */ }
+                                        try { UpdatePlaylistTitleDisplayForNowPlaying(); } catch { /* ignore */ }
+                                        try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
+                                    });
+                                    return;
+                                }
+                                else
+                                {
+                                    AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
+                            }
+
+                            _lyricsWindow?.Refresh();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLog.Exception(ex, $"TryResolveLyricsAsync: fetch failed for {entry.VideoId}");
+                    }
+
+                    _lyricsWindow?.Refresh();
+                }
             }
             else
             {

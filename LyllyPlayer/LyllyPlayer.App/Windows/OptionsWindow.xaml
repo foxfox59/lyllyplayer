@@ -636,6 +636,12 @@
                                           Foreground="{DynamicResource App.Theme.Foreground}"
                                           Checked="LyricsEnabledCheckBox_OnChecked"
                                           Unchecked="LyricsEnabledCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="LyricsLocalFilesEnabledCheckBox"
+                                          Content="Try to get lyrics for local files"
+                                          Margin="0,0,0,0"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="LyricsLocalFilesEnabledCheckBox_OnChecked"
+                                          Unchecked="LyricsLocalFilesEnabledCheckBox_OnUnchecked"/>
                             </StackPanel>
                         </ScrollViewer>
                     </TabItem>

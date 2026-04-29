@@ -97,6 +97,8 @@ public partial class OptionsWindow : Window
     private readonly Action<bool> _setKeepIncompletePlaylistOnCancel;
     private readonly Func<bool> _getLyricsEnabled;
     private readonly Action<bool> _setLyricsEnabled;
+    private readonly Func<bool> _getLyricsLocalFilesEnabled;
+    private readonly Action<bool> _setLyricsLocalFilesEnabled;
     private readonly Func<bool> _getExportM3uIncludeYoutube;
     private readonly Action<bool> _setExportM3uIncludeYoutube;
     private readonly Func<bool> _getExportM3uPreferRelativePaths;
@@ -170,6 +172,7 @@ public partial class OptionsWindow : Window
         public string CompactModeLayout = "Normal";
         public bool KeepIncompletePlaylistOnCancel;
         public bool LyricsEnabled;
+        public bool LyricsLocalFilesEnabled;
         public bool ExportM3uIncludeYoutube;
         public bool ExportM3uPreferRelativePaths;
         public bool ExportM3uIncludeLyllyMetadata;
@@ -266,9 +269,11 @@ public partial class OptionsWindow : Window
         Action<bool> setKeepIncompletePlaylistOnCancel,
         Func<bool> getLyricsEnabled,
         Action<bool> setLyricsEnabled,
+        Func<bool> getLyricsLocalFilesEnabled,
+        Action<bool> setLyricsLocalFilesEnabled,
         Func<bool> getExportM3uIncludeYoutube,
-        Action<bool> setExportM3uIncludeYoutube,
-        Func<bool> getExportM3uPreferRelativePaths,
+    Action<bool> setExportM3uIncludeYoutube,
+    Func<bool> getExportM3uPreferRelativePaths,
         Action<bool> setExportM3uPreferRelativePaths,
         Func<bool> getExportM3uIncludeLyllyMetadata,
         Action<bool> setExportM3uIncludeLyllyMetadata,
@@ -362,6 +367,8 @@ public partial class OptionsWindow : Window
         _setKeepIncompletePlaylistOnCancel = setKeepIncompletePlaylistOnCancel;
         _getLyricsEnabled = getLyricsEnabled;
         _setLyricsEnabled = setLyricsEnabled;
+        _getLyricsLocalFilesEnabled = getLyricsLocalFilesEnabled;
+        _setLyricsLocalFilesEnabled = setLyricsLocalFilesEnabled;
         _getExportM3uIncludeYoutube = getExportM3uIncludeYoutube;
         _setExportM3uIncludeYoutube = setExportM3uIncludeYoutube;
         _getExportM3uPreferRelativePaths = getExportM3uPreferRelativePaths;
@@ -387,42 +394,42 @@ public partial class OptionsWindow : Window
 
         InitializeComponent();
         Loaded += (_, _) =>
-        {
-            try
             {
-                // Some global styles/templates can accidentally stamp IsEnabled/HitTestVisible.
-                // Force this control to be interactive.
-                PlaylistAutoRefreshComboBox.ClearValue(UIElement.IsEnabledProperty);
-                PlaylistAutoRefreshComboBox.ClearValue(UIElement.IsHitTestVisibleProperty);
-                PlaylistAutoRefreshComboBox.IsEnabled = true;
-                PlaylistAutoRefreshComboBox.IsHitTestVisible = true;
-                PlaylistAutoRefreshComboBox.Focusable = true;
-
-                GlobalMediaKeysCheckBox.ClearValue(UIElement.IsEnabledProperty);
-                GlobalMediaKeysCheckBox.ClearValue(UIElement.IsHitTestVisibleProperty);
-                GlobalMediaKeysCheckBox.IsEnabled = true;
-                GlobalMediaKeysCheckBox.IsHitTestVisible = true;
-                GlobalMediaKeysCheckBox.Focusable = true;
-
-                var parent = PlaylistAutoRefreshComboBox.Parent as DependencyObject;
-                var parentIsEnabled = true;
                 try
                 {
-                    if (parent is UIElement uie)
-                        parentIsEnabled = uie.IsEnabled;
+                    // Some global styles/templates can accidentally stamp IsEnabled/HitTestVisible.
+                    // Force this control to be interactive.
+                    PlaylistAutoRefreshComboBox.ClearValue(UIElement.IsEnabledProperty);
+                    PlaylistAutoRefreshComboBox.ClearValue(UIElement.IsHitTestVisibleProperty);
+                    PlaylistAutoRefreshComboBox.IsEnabled = true;
+                    PlaylistAutoRefreshComboBox.IsHitTestVisible = true;
+                    PlaylistAutoRefreshComboBox.Focusable = true;
+
+                    GlobalMediaKeysCheckBox.ClearValue(UIElement.IsEnabledProperty);
+                    GlobalMediaKeysCheckBox.ClearValue(UIElement.IsHitTestVisibleProperty);
+                    GlobalMediaKeysCheckBox.IsEnabled = true;
+                    GlobalMediaKeysCheckBox.IsHitTestVisible = true;
+                    GlobalMediaKeysCheckBox.Focusable = true;
+
+                    var parent = PlaylistAutoRefreshComboBox.Parent as DependencyObject;
+                    var parentIsEnabled = true;
+                    try
+                    {
+                        if (parent is UIElement uie)
+                            parentIsEnabled = uie.IsEnabled;
+                    }
+                    catch { /* ignore */ }
+
+                    AppLog.Info(
+                        $"Options AutoRefresh Combo runtime: IsEnabled={PlaylistAutoRefreshComboBox.IsEnabled} " +
+                        $"IsHitTestVisible={PlaylistAutoRefreshComboBox.IsHitTestVisible} " +
+                        $"Focusable={PlaylistAutoRefreshComboBox.Focusable} " +
+                        $"Opacity={PlaylistAutoRefreshComboBox.Opacity} " +
+                        $"ParentIsEnabled={parentIsEnabled}",
+                        AppLogInfoTier.Diagnostic);
                 }
                 catch { /* ignore */ }
-
-                AppLog.Info(
-                    $"Options AutoRefresh Combo runtime: IsEnabled={PlaylistAutoRefreshComboBox.IsEnabled} " +
-                    $"IsHitTestVisible={PlaylistAutoRefreshComboBox.IsHitTestVisible} " +
-                    $"Focusable={PlaylistAutoRefreshComboBox.Focusable} " +
-                    $"Opacity={PlaylistAutoRefreshComboBox.Opacity} " +
-                    $"ParentIsEnabled={parentIsEnabled}",
-                    AppLogInfoTier.Diagnostic);
-            }
-            catch { /* ignore */ }
-        };
+            };
         LoadDraftFromCurrent();
         RefreshUi();
     }
@@ -498,6 +505,7 @@ public partial class OptionsWindow : Window
         try { _draft.AppLogMaxMb = Math.Clamp(_getAppLogMaxMb(), 1, 200); } catch { _draft.AppLogMaxMb = SettingsStore.DefaultAppLogMaxMb; }
         try { _draft.OptionsSelectedTab = SettingsStore.NormalizeOptionsWindowSelectedTab(_getOptionsSelectedTab()); } catch { _draft.OptionsSelectedTab = "Tools"; }
         try { _draft.LyricsEnabled = _getLyricsEnabled(); } catch { _draft.LyricsEnabled = false; }
+        try { _draft.LyricsLocalFilesEnabled = _getLyricsLocalFilesEnabled(); } catch { _draft.LyricsLocalFilesEnabled = false; }
     }
 
     private void RefreshUi()
@@ -635,6 +643,7 @@ public partial class OptionsWindow : Window
         catch { /* ignore */ }
         try { KeepIncompletePlaylistOnCancelCheckBox.IsChecked = _draft.KeepIncompletePlaylistOnCancel; } catch { /* ignore */ }
         try { LyricsEnabledCheckBox.IsChecked = _draft.LyricsEnabled; } catch { /* ignore */ }
+        try { LyricsLocalFilesEnabledCheckBox.IsChecked = _draft.LyricsLocalFilesEnabled; } catch { /* ignore */ }
         try { ExportM3uIncludeYoutubeCheckBox.IsChecked = _draft.ExportM3uIncludeYoutube; } catch { /* ignore */ }
         try { ExportM3uPreferRelativePathsCheckBox.IsChecked = _draft.ExportM3uPreferRelativePaths; } catch { /* ignore */ }
         try { ExportM3uIncludeLyllyMetadataCheckBox.IsChecked = _draft.ExportM3uIncludeLyllyMetadata; } catch { /* ignore */ }
@@ -1585,6 +1594,20 @@ public partial class OptionsWindow : Window
         _draft.LyricsEnabled = false;
     }
 
+    private void LyricsLocalFilesEnabledCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.LyricsLocalFilesEnabled = true;
+    }
+
+    private void LyricsLocalFilesEnabledCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.LyricsLocalFilesEnabled = false;
+    }
+
     private void ExportM3uIncludeYoutubeCheckBox_OnChecked(object sender, RoutedEventArgs e)
     {
         if (_suppressBackgroundUiEvents)
@@ -2177,6 +2200,7 @@ public partial class OptionsWindow : Window
         try { _setCompactModeLayout(SettingsStore.NormalizeCompactModeLayout(_draft.CompactModeLayout)); } catch { /* ignore */ }
         try { _setKeepIncompletePlaylistOnCancel(_draft.KeepIncompletePlaylistOnCancel); } catch { /* ignore */ }
         try { _setLyricsEnabled(_draft.LyricsEnabled); } catch { /* ignore */ }
+        try { _setLyricsLocalFilesEnabled(_draft.LyricsLocalFilesEnabled); } catch { /* ignore */ }
         try { _setExportM3uIncludeYoutube(_draft.ExportM3uIncludeYoutube); } catch { /* ignore */ }
         try { _setExportM3uPreferRelativePaths(_draft.ExportM3uPreferRelativePaths); } catch { /* ignore */ }
         try { _setExportM3uIncludeLyllyMetadata(_draft.ExportM3uIncludeLyllyMetadata); } catch { /* ignore */ }
@@ -2187,8 +2211,14 @@ public partial class OptionsWindow : Window
         try { _setAppLogMaxMb(Math.Clamp(_draft.AppLogMaxMb, 1, 200)); } catch { /* ignore */ }
         try { _setOptionsSelectedTab(SettingsStore.NormalizeOptionsWindowSelectedTab(_draft.OptionsSelectedTab)); } catch { /* ignore */ }
 
+        // Save the current tab so RefreshUi() doesn't jump away from it.
+        var savedTab = _draft.OptionsSelectedTab;
+
         LoadDraftFromCurrent();
         RefreshUi();
+
+        // Restore the draft's tab so the UI stays on the user's tab.
+        _draft.OptionsSelectedTab = savedTab;
 
         // One disk write after all callbacks (avoids many synchronous Load+Save cycles on the UI thread during Apply).
         try { _persistSettingsNow?.Invoke(); } catch { /* ignore */ }

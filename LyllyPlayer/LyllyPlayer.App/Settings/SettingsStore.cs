@@ -596,7 +596,8 @@ public static class SettingsStore
         CompactModeHidesAuxWindows: null,
         KeepIncompletePlaylistOnCancel: null,
         LastSavedByAppVersion: null,
-        LyricsEnabled: null);
+        LyricsEnabled: null,
+        LyricsLocalFilesEnabled: null);
 
     private static AppSettings AllNullSettings() => AllNullSettingsInstance;
 
@@ -712,7 +713,8 @@ public static class SettingsStore
             CompactModeHidesAuxWindows: true,
             KeepIncompletePlaylistOnCancel: DefaultKeepIncompletePlaylistOnCancel,
             LastSavedByAppVersion: null,
-            LyricsEnabled: false
+            LyricsEnabled: false,
+            LyricsLocalFilesEnabled: false
         );
 
     private static AppSettings ApplyDefaults(AppSettings s)
@@ -768,6 +770,7 @@ public static class SettingsStore
             KeepIncompletePlaylistOnCancel = s.KeepIncompletePlaylistOnCancel ?? DefaultKeepIncompletePlaylistOnCancel,
             LastSavedByAppVersion = string.IsNullOrWhiteSpace(s.LastSavedByAppVersion) ? null : s.LastSavedByAppVersion.Trim(),
             LyricsEnabled = s.LyricsEnabled ?? false,
+            LyricsLocalFilesEnabled = s.LyricsLocalFilesEnabled ?? false,
             AlwaysOnTopLyricsWindow = s.AlwaysOnTopLyricsWindow ?? false,
             PlaylistWindowBoundsUiScalePercent = s.PlaylistWindowBoundsUiScalePercent is >= 50 and <= 200
                 ? s.PlaylistWindowBoundsUiScalePercent
@@ -825,6 +828,7 @@ public static class SettingsStore
         if (string.Equals(t, "Theme", StringComparison.OrdinalIgnoreCase)) return "Theme";
         if (string.Equals(t, "Search", StringComparison.OrdinalIgnoreCase)) return "Search";
         if (string.Equals(t, "Local", StringComparison.OrdinalIgnoreCase)) return "Local";
+        if (string.Equals(t, "Lyrics", StringComparison.OrdinalIgnoreCase)) return "Lyrics";
         if (string.Equals(t, "Advanced", StringComparison.OrdinalIgnoreCase)) return "Advanced";
         return DefaultOptionsWindowSelectedTab;
     }
