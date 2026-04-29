@@ -909,6 +909,7 @@ public partial class MainWindow : Window
                 PlayPauseButton.Content = isPlaying ? "||" : ">";
                 _nowPlayingStatus = isPlaying ? "BUFFERING" : (_engine.CanResume ? "PAUSED" : "STOPPED");
                 UpdateNowPlayingText();
+                UpdatePlaylistTitleDisplayForNowPlaying();
             });
         _engine.PlaybackFailed += (_, payload) =>
             Dispatcher.Invoke(() => HandlePlaybackFailed(payload.entry, payload.message));
@@ -922,6 +923,7 @@ public partial class MainWindow : Window
                     return;
                 _nowPlayingStatus = payload.status;
                 UpdateNowPlayingText(extraDetail: payload.detail);
+                UpdatePlaylistTitleDisplayForNowPlaying();
             });
         _engine.Error += (_, msg) => Dispatcher.Invoke(() =>
         {
@@ -929,6 +931,7 @@ public partial class MainWindow : Window
             {
                 _nowPlayingStatus = "ERROR";
                 UpdateNowPlayingText(extraDetail: msg);
+                UpdatePlaylistTitleDisplayForNowPlaying();
             }
         });
         _engine.TrackEnded += (_, payload) => Dispatcher.Invoke(async () =>
@@ -1299,6 +1302,7 @@ public partial class MainWindow : Window
                 ApplyMetadataToEntries(entry.VideoId, title, artist, dur);
                 UpdateDurationUi(_engine.CurrentDurationSeconds);
                 UpdateNowPlayingText();
+
             });
         }
         catch
@@ -5718,6 +5722,7 @@ public partial class MainWindow : Window
                 ? "PLAYING"
                 : (_engine.CanResume ? "PAUSED" : "STOPPED");
             UpdateNowPlayingText();
+            UpdatePlaylistTitleDisplayForNowPlaying();
             _ = TryResolveLyricsAsync();
         }
         catch
@@ -7651,7 +7656,7 @@ public partial class MainWindow : Window
             var cur = _nowPlayingEntry;
 
             // Check if lyrics are active (enabled + loaded + playing).
-            bool lyricsActive = _lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying;
+            bool lyricsActive = _lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null;
 
             // Resolve the origin label: per-video origin > base origin > playlist title.
             string? origin = cur is not null &&
@@ -7661,8 +7666,8 @@ public partial class MainWindow : Window
                 : (_basePlaylistOrigin?.Label ?? _playlistTitle ?? "");
 
             // Show "<origin> - <title>" on the origin line when lyrics are active; otherwise normal display.
-            PlaylistTitleTextBlock.Text = lyricsActive && cur is not null
-                ? $"{origin} : {cur.Title}"
+            PlaylistTitleTextBlock.Text = (lyricsActive && cur is not null)
+                ? $"{origin} : {cur.Channel} - {cur.Title}"
                 : (origin ?? _playlistTitle ?? "(no playlist)");
         }
         catch { /* ignore */ }
@@ -9725,7 +9730,12 @@ public partial class MainWindow : Window
         // Normal/Compact: refresh status line so the current lyric line updates in real-time
         else
         {
-            try { UpdateNowPlayingText(); } catch { /* ignore */ }
+            try
+            {
+                UpdateNowPlayingText();
+                UpdatePlaylistTitleDisplayForNowPlaying();
+            } 
+            catch { /* ignore */ }
         }
     }
 
@@ -9782,7 +9792,14 @@ public partial class MainWindow : Window
                     }
 
                     AppLog.Info($"TryResolveLyricsAsync: fetching lyrics for local file {entry.VideoId} via LRCLIB");
-                    var localFilePath = entry.VideoId.Substring("local:".Length);
+                    // WebpageUrl holds the actual file path for local entries (VideoId is local:{filename}:{hash}, not a path)
+                    var localFilePath = entry.WebpageUrl;
+                    if (string.IsNullOrWhiteSpace(localFilePath))
+                    {
+                        AppLog.Warn($"TryResolveLyricsAsync: local file has no WebpageUrl, skipping for {entry.VideoId}");
+                        _lyricsWindow?.Refresh();
+                        return;
+                    }
                     // Extract local file path and try to get metadata (title/artist) from file tags
                     string? searchTitle = null;
                     string? searchArtist = null;
@@ -10003,7 +10020,10 @@ public partial class MainWindow : Window
             if (entry.VideoId.StartsWith("local:"))
             {
                 // Local file: fetch from LRCLIB
-                var localFilePath = entry.VideoId.Substring("local:".Length);
+                // WebpageUrl holds the actual file path (VideoId is local:{filename}:{hash}, not a path)
+                var localFilePath = entry.WebpageUrl;
+                if (string.IsNullOrWhiteSpace(localFilePath))
+                    return;
                 var (syncTitle, syncArtist) = LocalMetadataService.ReadTagsSync(localFilePath);
                 var title = syncTitle ?? entry.Title ?? Path.GetFileNameWithoutExtension(localFilePath);
                 var artist = syncArtist ?? entry.Channel;
@@ -11878,6 +11898,7 @@ public partial class MainWindow : Window
                     _nowPlayingEntry = cur;
                     _nowPlayingStatus = "PAUSED";
                     UpdateNowPlayingText();
+                    UpdatePlaylistTitleDisplayForNowPlaying();
                     UpdateDurationUi(cur.DurationSeconds);
 
                     if (cur.DurationSeconds is int dur && dur > 0)
