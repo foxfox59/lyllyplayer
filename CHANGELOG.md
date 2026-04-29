@@ -1,5 +1,9 @@
 ### What's new, pussycat?
 
+- 1.5.0: added lyrics
+  - yt-dlp + LRCLIB lookup
+  - optional for local files
+  - Slight cache improvements. Probably a good idea to empty your old caches (%TEMP%/LyllyPlayer and *-cache.json in %APPDATA%/LyllyPlayer)
 - 1.4.4: added playlist cleanup (removes missing local files and YT items marked unavailable or unplayable)
   - An old bug with DisplayFusion has been reintroduced - for now, add LyllyPlayer to the DF compatibility settings with taskbar-related options and app hooks disabled
 - 1.4.3: fixed shuffle not working
