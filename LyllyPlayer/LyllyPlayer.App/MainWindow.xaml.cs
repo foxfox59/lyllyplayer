@@ -362,6 +362,10 @@ public partial class MainWindow : Window
     private readonly AppSettings _startupSettings;
     private List<PlaylistEntry> _originalEntries = new();
     private readonly List<string> _recentlyPlayedVideoIds = new(5);
+    /// <summary>Stack of previously played track VideoIds for "Previous" button navigation.</summary>
+    private readonly Stack<string> _previousTrackHistory = new();
+    /// <summary>Maximum number of entries in _previousTrackHistory to avoid unbounded growth.</summary>
+    private const int MaxPreviousTrackHistory = 100;
     ObservableCollection<QueueItem> _queueItems = new();
     ObservableCollection<QueueItem> _playlistItems = new ObservableCollection<QueueItem>();
     private readonly HashSet<string> _unavailableVideoIds = new(StringComparer.OrdinalIgnoreCase);
@@ -847,6 +851,25 @@ public partial class MainWindow : Window
                 {
                     var isSameTrack = _nowPlayingEntry is not null &&
                         string.Equals(entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase);
+
+                    // Record previous track in history before updating _nowPlayingEntry.
+                    // This enables "Previous" to navigate back to the actual previously playing track.
+                    if (_nowPlayingEntry is not null && !isSameTrack)
+                    {
+                        var prevId = _nowPlayingEntry.VideoId;
+                        if (!string.IsNullOrWhiteSpace(prevId))
+                        {
+                            var topOfHistory = _previousTrackHistory.Count > 0 ? _previousTrackHistory.Peek() : null;
+                            if (_previousTrackHistory.Count == 0 || topOfHistory != prevId)
+                            {
+                                _previousTrackHistory.Push(prevId);
+                                while (_previousTrackHistory.Count > MaxPreviousTrackHistory)
+                                {
+                                    _previousTrackHistory.Pop();
+                                }
+                            }
+                        }
+                    }
 
                     _nowPlayingEntry = entry;
 
@@ -5868,6 +5891,7 @@ public partial class MainWindow : Window
                     _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : cacheStartIndex, raiseNowPlayingChanged: true);
                     SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : cacheDisplayIndex);
                     _hasLoadedPlaylist = true;
+                    _previousTrackHistory.Clear();
                     UpdateRefreshEnabled();
 
                     SetStatusMessage("INFO", $"Loaded {cached.Entries.Count} items (cached).");
@@ -5930,6 +5954,7 @@ public partial class MainWindow : Window
             var displayIndex = GetOriginalIndexByVideoId(desiredId) ?? 0;
             SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
             _hasLoadedPlaylist = true;
+            _previousTrackHistory.Clear();
             UpdateRefreshEnabled();
             FocusPlaylistOnNowPlaying();
             MarkLastPlaylistSnapshotDirty();
@@ -6042,6 +6067,7 @@ public partial class MainWindow : Window
                 selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex,
                 cancellationToken: cancellationToken);
             _hasLoadedPlaylist = true;
+            _previousTrackHistory.Clear();
             UpdateRefreshEnabled();
             if (!deferNowPlayingChanged)
                 FocusPlaylistOnNowPlaying();
@@ -6337,6 +6363,26 @@ public partial class MainWindow : Window
         _pendingResumeSeconds = 0;
         _pendingResumeVideoId = null;
         _suppressAutoScrollVideoId = null;
+
+        // Try to navigate to the previous track from history first.
+        if (_previousTrackHistory.Count > 0)
+        {
+            var prevVideoId = _previousTrackHistory.Pop();
+            // Find the previous track in the current playlist.
+            var prevEntry = _originalEntries.FirstOrDefault(e =>
+                string.Equals(e.VideoId, prevVideoId, StringComparison.OrdinalIgnoreCase));
+            if (prevEntry is not null)
+            {
+                // Set queue to the current playlist, starting at the previous track.
+                var startIndex = _originalEntries.FindIndex(e =>
+                    string.Equals(e.VideoId, prevVideoId, StringComparison.OrdinalIgnoreCase));
+                _engine.SetQueue(_originalEntries, startIndex: startIndex >= 0 ? startIndex : 0, raiseNowPlayingChanged: true);
+                return;
+            }
+            // If the previous track is no longer in the playlist, fall through to the default behavior.
+        }
+
+        // Fall back to engine default: go to index 0 or CurrentIndex - 1.
         _ = _engine.PrevAsync();
     }
 
@@ -6967,6 +7013,7 @@ public partial class MainWindow : Window
             _engine.SetBasePlayOrder(_originalEntries, startIndex: 0);
             _hasLoadedPlaylist = true;
             _recentlyPlayedVideoIds.Clear();
+            _previousTrackHistory.Clear();
             UpdateRefreshEnabled();
             FocusPlaylistOnNowPlaying();
             UpdatePlaylistTitleDisplayForNowPlaying();
