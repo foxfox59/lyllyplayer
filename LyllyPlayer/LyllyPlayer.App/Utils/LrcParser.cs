@@ -40,6 +40,12 @@ public static class LrcParser
         if (lines.Count > 1)
             lines.Sort((a, b) => a.Seconds.CompareTo(b.Seconds));
 
+        // Add an empty vanity line unless the first lyric starts at 0:00
+        if (lines.Count > 1 && lines[0].Seconds > 0)
+        {
+
+            lines.Insert(0, new TimedLine(0, " "));
+        }
         return lines;
     }
 
