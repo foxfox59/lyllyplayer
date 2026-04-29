@@ -17,92 +17,50 @@ public static class LocalMetadataService
             if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
                 return null;
 
-            var ffprobe = TryGetFfprobePath(ffmpegPath);
-            if (string.IsNullOrWhiteSpace(ffprobe))
-                return null;
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = ffprobe,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                Arguments = $"-v error -print_format json -show_entries format=duration:format_tags=title,artist,album_artist -i \"{filePath}\""
-            };
-
-            using var proc = Process.Start(psi);
-            if (proc is null)
-                return null;
-
-            ChildToolProcessJob.TryAssign(proc);
-            // Read output without blocking UI; enforce timeout/cancellation.
-            var readOutBytes = ReadAllBytesAsync(proc.StandardOutput.BaseStream, ct);
-            var readErrBytes = ReadAllBytesAsync(proc.StandardError.BaseStream, ct);
-
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(450));
-
-            try
-            {
-                await proc.WaitForExitAsync(timeoutCts.Token);
-            }
-            catch
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { /* ignore */ }
-                return null;
-            }
-
-            var stdoutBytes = await readOutBytes;
-            var errBytes = await readErrBytes;
-            var errText = DecodeBestEffort(errBytes);
-            AppLog.ToolStderrCompleted("ffprobe", errText, proc.ExitCode);
-
-            var stdout = DecodeBestEffort(stdoutBytes);
-            if (string.IsNullOrWhiteSpace(stdout))
-                return null;
-
-            using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
-            if (!doc.RootElement.TryGetProperty("format", out var format))
-                return null;
-            format.TryGetProperty("tags", out var tags);
-
-            static string? TryGetTag(JsonElement tags, string name)
-            {
-                foreach (var prop in tags.EnumerateObject())
-                {
-                    if (!string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    var s = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : prop.Value.ToString();
-                    s = (s ?? "").Trim();
-                    return string.IsNullOrWhiteSpace(s) ? null : s;
-                }
-                return null;
-            }
+            var lower = filePath.ToLowerInvariant();
+            var isAudioWithTagLib = lower.EndsWith(".mp3")
+                || lower.EndsWith(".flac")
+                || lower.EndsWith(".m4a")
+                || lower.EndsWith(".aac")
+                || lower.EndsWith(".ogg")
+                || lower.EndsWith(".opus");
 
             string? title = null;
             string? artist = null;
-            if (tags.ValueKind != JsonValueKind.Undefined && tags.ValueKind != JsonValueKind.Null)
+
+            // For ID3/Opus/Vorbis comment audio formats, use TagLibSharp as the primary tag reader.
+            if (isAudioWithTagLib)
             {
-                title = TryGetTag(tags, "title");
-                artist = TryGetTag(tags, "artist") ?? TryGetTag(tags, "album_artist");
+                var (t2, a2) = TryReadWithTagLibSharp(filePath);
+                if (!string.IsNullOrWhiteSpace(t2) || !string.IsNullOrWhiteSpace(a2))
+                {
+                    title = t2;
+                    artist = a2;
+                }
             }
 
             int? durationSeconds = null;
-            try
+            var ffprobe = TryGetFfprobePath(ffmpegPath);
+            bool ffprobeOk = false;
+
+            if (!string.IsNullOrWhiteSpace(ffprobe))
             {
-                if (format.TryGetProperty("duration", out var durEl))
+                ffprobeOk = await TryGetDurationAsync(ffprobe, filePath, ct).ContinueWith(t =>
                 {
-                    var ds = durEl.ValueKind == JsonValueKind.String ? durEl.GetString() : durEl.ToString();
-                    if (double.TryParse(ds, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var dsec))
-                    {
-                        var rounded = (int)Math.Round(dsec);
-                        if (rounded > 0)
-                            durationSeconds = rounded;
-                    }
+                    if (t.IsCompletedSuccessfully && t.Result is int dur)
+                        durationSeconds = dur;
+                    return t.IsCompletedSuccessfully;
+                }, ct).ConfigureAwait(false);
+
+                // If we have no tags yet, try ffprobe format+stream-level tags as a supplement.
+                if ((string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(artist))
+                    && !string.IsNullOrWhiteSpace(ffprobe))
+                {
+                    var (ft, fa) = TryGetTagsFromFfprobe(ffprobe, filePath);
+                    if (!string.IsNullOrWhiteSpace(ft)) title = ft;
+                    if (!string.IsNullOrWhiteSpace(fa)) artist = fa;
                 }
             }
-            catch { /* ignore */ }
 
             if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(artist) && durationSeconds is null)
                 return null;
@@ -127,8 +85,170 @@ public static class LocalMetadataService
         }
     }
 
+    private static async Task<int?> TryGetDurationAsync(string ffprobe, string filePath, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = ffprobe,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                Arguments = $"-v error -print_format json -show_entries format=duration -i \"{filePath}\""
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc is null)
+                return null;
+
+            ChildToolProcessJob.TryAssign(proc);
+            var readOutBytes = ReadAllBytesAsync(proc.StandardOutput.BaseStream, ct);
+            var readErrBytes = ReadAllBytesAsync(proc.StandardError.BaseStream, ct);
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(450));
+
+            try
+            {
+                await proc.WaitForExitAsync(timeoutCts.Token);
+            }
+            catch
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { /* ignore */ }
+                return null;
+            }
+
+            var stdout = DecodeBestEffort(await readOutBytes);
+            if (string.IsNullOrWhiteSpace(stdout))
+                return null;
+
+            using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
+            if (!doc.RootElement.TryGetProperty("format", out var format))
+                return null;
+
+            if (format.TryGetProperty("duration", out var durEl))
+            {
+                var ds = durEl.ValueKind == JsonValueKind.String ? durEl.GetString() : durEl.ToString();
+                if (double.TryParse(ds, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var dsec))
+                {
+                    var rounded = (int)Math.Round(dsec);
+                    if (rounded > 0)
+                        return rounded;
+                }
+            }
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static (string? title, string? artist) TryGetTagsFromFfprobe(string ffprobe, string filePath)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = ffprobe,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                Arguments = $"-v error -print_format json -show_entries format_tags=title,artist,album_artist:stream_tags=title,artist,album_artist -i \"{filePath}\""
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc is null)
+                return (null, null);
+
+            ChildToolProcessJob.TryAssign(proc);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None);
+            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(450));
+
+            var stdout = proc.StandardOutput.ReadToEnd();
+            proc.WaitForExit();
+
+            if (string.IsNullOrWhiteSpace(stdout))
+                return (null, null);
+
+            using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
+            if (!doc.RootElement.TryGetProperty("format", out var format))
+                return (null, null);
+
+            format.TryGetProperty("tags", out var tags);
+
+            static string? TryGetTag(JsonElement tags, string name)
+            {
+                foreach (var prop in tags.EnumerateObject())
+                {
+                    if (!string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    var s = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : prop.Value.ToString();
+                    s = (s ?? "").Trim();
+                    return string.IsNullOrWhiteSpace(s) ? null : s;
+                }
+                return null;
+            }
+
+            string? title = null;
+            string? artist = null;
+            if (tags.ValueKind != JsonValueKind.Undefined && tags.ValueKind != JsonValueKind.Null)
+            {
+                title = TryGetTag(tags, "title");
+                artist = TryGetTag(tags, "artist") ?? TryGetTag(tags, "album_artist");
+            }
+
+            // If format-level tags didn't yield results, check stream-level tags.
+            if ((string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(artist))
+                && doc.RootElement.TryGetProperty("streams", out var streams))
+            {
+                foreach (var stream in streams.EnumerateArray())
+                {
+                    if (stream.TryGetProperty("tags", out var streamTags)
+                        && streamTags.ValueKind != JsonValueKind.Undefined
+                        && streamTags.ValueKind != JsonValueKind.Null)
+                    {
+                        if (string.IsNullOrWhiteSpace(title))
+                            title = TryGetTag(streamTags, "title");
+                        if (string.IsNullOrWhiteSpace(artist))
+                            artist = TryGetTag(streamTags, "artist") ?? TryGetTag(streamTags, "album_artist");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(artist))
+                        break;
+                }
+            }
+
+            return (title, artist);
+        }
+        catch
+        {
+            return (null, null);
+        }
+    }
+
     private static bool LooksMojibake(string? s)
         => !string.IsNullOrWhiteSpace(s) && s.Contains('\uFFFD');
+
+    /// <summary>
+    /// Synchronously reads title and artist from a file using TagLibSharp.
+    /// Ideal for local file scenarios where async overhead is unnecessary.
+    /// </summary>
+    public static (string? Title, string? Artist) ReadTagsSync(string filePath)
+    {
+        try
+        {
+            using var f = TagLib.File.Create(filePath);
+            return ReadTagLibTitleArtist(f);
+        }
+        catch
+        {
+            return (null, null);
+        }
+    }
 
     private static (string? title, string? artist) TryReadWithTagLibSharp(string path)
     {
@@ -170,7 +290,7 @@ public static class LocalMetadataService
         using var ms = new MemoryStream();
         try
         {
-            await s.CopyToAsync(ms, 16 * 1024, ct);
+            await s.CopyToAsync(ms, 16 * 128, ct);
         }
         catch
         {
@@ -247,4 +367,3 @@ public static class LocalMetadataService
         }
     }
 }
-
