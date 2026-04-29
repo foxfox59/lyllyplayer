@@ -1,8 +1,10 @@
 ### What's new, pussycat?
 
-- 1.5.0: added lyrics
+- 1.5.0: added lyrics option
+  - Best effort lyrics matching in case exact matches are not found (can go horribly wrong at times)
+  - Lyrics shown either as status text or in a separate window
   - yt-dlp + LRCLIB lookup
-  - optional for local files
+  - extra option to fetch LRCLIB lyrics for local files
   - Slight cache improvements. Probably a good idea to empty your old caches (%TEMP%/LyllyPlayer and *-cache.json in %APPDATA%/LyllyPlayer)
 - 1.4.4: added playlist cleanup (removes missing local files and YT items marked unavailable or unplayable)
   - An old bug with DisplayFusion has been reintroduced - for now, add LyllyPlayer to the DF compatibility settings with taskbar-related options and app hooks disabled
