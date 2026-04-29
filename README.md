@@ -14,6 +14,7 @@
 ## Known issues
 
   - DisplayFusion has a slight conflict/race situation with how LyllyPlayer handles "always on top" - for now, use the Compatibility settings in DF. I'm going to fix this at some point, just not right now.
+  - Lyrics fetching (1.5.0+) is a huge optimistic mess, works most of the time but don't be surprised if you occasionally get the wrong song, it's not perfect (yet)
 
 ---  
 
@@ -35,7 +36,7 @@ All I touch manually is the documentation (recently I had to start doing some fi
 
 **Exit now or accept that.**
 
-## Some screenshots of the app in action
+## Some screenshots of the app in action (outdated)
 
 **[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)**
 
