@@ -7521,7 +7521,7 @@ public partial class MainWindow : Window
     private void UpdateNowPlayingText(string? extraDetail = null)
     {
         var status = string.IsNullOrWhiteSpace(_nowPlayingStatus) ? "STOPPED" : _nowPlayingStatus.Trim().ToUpperInvariant();
-        AppLog.Info($"UpdateNowPlayingText: status={status}, entry={_nowPlayingEntry?.VideoId ?? "(null)"}, lyricsEnabled={_lyricsEnabled}, hasLyrics={_lyricsManager.HasLyrics}, lineCount={_lyricsManager.LineCount}, isPlaying={_engine.IsPlaying}, position={_engine.CurrentPositionSeconds:F2}s");
+        // AppLog.Info($"UpdateNowPlayingText: status={status}, entry={_nowPlayingEntry?.VideoId ?? "(null)"}, lyricsEnabled={_lyricsEnabled}, hasLyrics={_lyricsManager.HasLyrics}, lineCount={_lyricsManager.LineCount}, isPlaying={_engine.IsPlaying}, position={_engine.CurrentPositionSeconds:F2}s");
         if (NowPlayingStatusRun is not null)
         {
             // Don't show lyric line/status when lyrics window is open — it already displays lyrics.
@@ -9734,7 +9734,7 @@ public partial class MainWindow : Window
             {
                 UpdateNowPlayingText();
                 UpdatePlaylistTitleDisplayForNowPlaying();
-            } 
+            }
             catch { /* ignore */ }
         }
     }
@@ -9803,8 +9803,8 @@ public partial class MainWindow : Window
                     // Extract local file path and try to get metadata (title/artist) from file tags
                     string? searchTitle = null;
                     string? searchArtist = null;
-                    // Synchronous TagLibSharp read — no async overhead for local file tags.
-                    var (syncTitle, syncArtist) = LocalMetadataService.ReadTagsSync(localFilePath);
+                    // Synchronous read — tags + duration, no async overhead.
+                    var (syncTitle, syncArtist, syncDuration) = LocalMetadataService.ReadTagsSync(_ffmpegPath, localFilePath);
                     if (!string.IsNullOrWhiteSpace(syncTitle) || !string.IsNullOrWhiteSpace(syncArtist))
                     {
                         searchTitle = syncTitle;
@@ -9812,12 +9812,15 @@ public partial class MainWindow : Window
                         AppLog.Info($"TryResolveLyricsAsync: read metadata for {entry.VideoId}: title={searchTitle ?? "(none)"}, artist={searchArtist ?? "(none)"}");
                     }
 
+                    // Use sync duration if available (entry.DurationSeconds may be null if enrichment hasn't finished)
+                    var duration = syncDuration ?? entry.DurationSeconds;
+
                     // Fall back to entry.Title/Channel (which may be filename if enrichment hasn't completed yet)
                     var title = searchTitle ?? entry.Title ?? Path.GetFileNameWithoutExtension(localFilePath);
                     var artist = searchArtist ?? entry.Channel;
                     try
                     {
-                        var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, entry.DurationSeconds, CancellationToken.None);
+                        var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, duration, CancellationToken.None);
                         // Discard stale result if track changed while fetching — cache first
                         if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
                         {
@@ -9857,12 +9860,12 @@ public partial class MainWindow : Window
                         }
                         else
                         {
-                            AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (localDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
+                            AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (localDur={duration?.ToString("F0") ?? "null"}s)");
                         }
                     }
                     catch (Exception ex)
                     {
-                        AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (localDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
+                        AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (localDur={duration?.ToString("F0") ?? "null"}s)");
                     }
                     _lyricsWindow?.Refresh();
                 }
@@ -10024,11 +10027,12 @@ public partial class MainWindow : Window
                 var localFilePath = entry.WebpageUrl;
                 if (string.IsNullOrWhiteSpace(localFilePath))
                     return;
-                var (syncTitle, syncArtist) = LocalMetadataService.ReadTagsSync(localFilePath);
+                var (syncTitle, syncArtist, syncDuration) = LocalMetadataService.ReadTagsSync(_ffmpegPath, localFilePath);
                 var title = syncTitle ?? entry.Title ?? Path.GetFileNameWithoutExtension(localFilePath);
                 var artist = syncArtist ?? entry.Channel;
+                var duration = syncDuration ?? entry.DurationSeconds;
 
-                var (lrcLrclib, _, _, _, _) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, entry.DurationSeconds, CancellationToken.None);
+                var (lrcLrclib, _, _, _, _) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, duration, CancellationToken.None);
                 if (!string.IsNullOrWhiteSpace(lrcLrclib))
                 {
                     LyricsCache.Set(cacheKey, lrcLrclib);

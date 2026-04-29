@@ -505,7 +505,7 @@
 
                             <Button x:Name="RepeatButton"
                                     Content="Repeat: None"
-                                    MinWidth="118"
+                                    MinWidth="96"
                                     Margin="0,0,0,0"
                                     Padding="6,4"
                                     FontSize="11"
@@ -518,9 +518,9 @@
                                     VerticalAlignment="Center"
                                     HorizontalAlignment="Right"
                                     Panel.ZIndex="1">
-                            <TextBlock x:Name="VolumeLabelTextBlock" Text="Vol" VerticalAlignment="Center" Margin="8,0,6,0" FontSize="11" Foreground="{DynamicResource App.Theme.Foreground}"/>
+                            <TextBlock x:Name="VolumeLabelTextBlock" Text="Vol" VerticalAlignment="Center" Margin="8,0,0,0" FontSize="11" Foreground="{DynamicResource App.Theme.Foreground}"/>
                             <Slider x:Name="VolumeSlider"
-                                    Width="96"
+                                    Width="90"
                                     HorizontalAlignment="Left"
                                     HorizontalContentAlignment="Left"
                                     ClipToBounds="True"

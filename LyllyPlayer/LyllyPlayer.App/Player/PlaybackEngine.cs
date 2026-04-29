@@ -818,7 +818,7 @@ public sealed class PlaybackEngine : IDisposable
                                 try
                                 {
                                     var (vuL, vuR, _) = _analyzer.GetSnapshot();
-                                    AppLog.Info($"Analyzer: vuL={vuL:0.000} vuR={vuR:0.000} buffered={_audio?.BufferedSeconds ?? 0:0.00}s", AppLogInfoTier.Diagnostic);
+                                    // AppLog.Info($"Analyzer: vuL={vuL:0.000} vuR={vuR:0.000} buffered={_audio?.BufferedSeconds ?? 0:0.00}s", AppLogInfoTier.Diagnostic);
                                 }
                                 catch { /* ignore */ }
                             }

@@ -136,13 +136,14 @@ public static class LocalMetadataService
                     var rounded = (int)Math.Round(dsec);
                     if (rounded > 0)
                         return rounded;
+                    if (rounded > 0) return rounded;
                 }
             }
-            return null;
+            return default;
         }
         catch
         {
-            return null;
+            return default;
         }
     }
 
@@ -234,19 +235,79 @@ public static class LocalMetadataService
         => !string.IsNullOrWhiteSpace(s) && s.Contains('\uFFFD');
 
     /// <summary>
-    /// Synchronously reads title and artist from a file using TagLibSharp.
-    /// Ideal for local file scenarios where async overhead is unnecessary.
+    /// Synchronously reads title, artist, and duration from a file.
+    /// TagLibSharp for tags + ffprobe for duration — all on the calling thread.
     /// </summary>
-    public static (string? Title, string? Artist) ReadTagsSync(string filePath)
+    public static (string? Title, string? Artist, int? DurationSeconds) ReadTagsSync(string ffmpegPath, string filePath)
     {
         try
         {
             using var f = TagLib.File.Create(filePath);
-            return ReadTagLibTitleArtist(f);
+            var (title, artist) = ReadTagLibTitleArtist(f);
+
+            // Read duration synchronously via ffprobe (fast, ~100ms)
+            int? durationSeconds = ReadDurationSync(ffmpegPath, filePath);
+
+            return (title, artist, durationSeconds);
         }
         catch
         {
-            return (null, null);
+            return default;
+        }
+    }
+
+    /// <summary>Synchronously reads file duration via ffprobe (returns seconds as int).</summary>
+    private static int? ReadDurationSync(string ffmpegPath, string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath)) return default;
+            var ffprobe = TryGetFfprobePath(ffmpegPath);
+            if (string.IsNullOrWhiteSpace(ffprobe)) return default;
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = ffprobe,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                Arguments = $"-v error -print_format json -show_entries format=duration -i \"{filePath}\""
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc is null) return default;
+
+            // Read both stdout and stderr concurrently using background tasks.
+            // Without this, the stderr pipe buffer can fill up, causing ffprobe to
+            // block indefinitely, which in turn hangs ReadToEnd() on stdout.
+            var readStdoutTask = Task.Run(() => proc.StandardOutput.ReadToEnd());
+            var readStderrTask = Task.Run(() => proc.StandardError.ReadToEnd());
+
+            readStdoutTask.Wait();
+            readStderrTask.Wait();
+            proc.WaitForExit();
+
+            var stdout = readStdoutTask.Result;
+
+            if (string.IsNullOrWhiteSpace(stdout)) return null;
+
+            using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
+            if (doc.RootElement.TryGetProperty("format", out var format)
+                && format.TryGetProperty("duration", out var durEl))
+            {
+                var ds = durEl.ValueKind == JsonValueKind.String ? durEl.GetString() : durEl.ToString();
+                if (double.TryParse(ds, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var dsec))
+                {
+                    var rounded = (int)Math.Round(dsec);
+                    if (rounded > 0) return rounded;
+                }
+            }
+            return default;
+        }
+        catch
+        {
+            return default;
         }
     }
 
