@@ -55,6 +55,7 @@ public partial class PlaylistWindow : Window
     private readonly Func<string, Task> _loadPlaylistFromFileAsync;
     private readonly Func<IReadOnlyList<PlaylistEntry>, string?, string, CancellationToken, Task> _loadEntriesAsync;
     private readonly Func<CancellationToken, Task> _refreshAsync;
+    private readonly Func<CancellationToken, Task<int>> _cleanInvalidItemsAsync;
     private readonly Action? _capturePlaylistForCancelRestore;
     private readonly Action? _commitPlaylistCancelRestore;
     private readonly Action? _rollbackPlaylistCancelRestore;
@@ -120,6 +121,7 @@ public partial class PlaylistWindow : Window
         Func<string, Task> loadPlaylistFromFileAsync,
         Func<IReadOnlyList<PlaylistEntry>, string?, string, CancellationToken, Task> loadEntriesAsync,
         Func<CancellationToken, Task> refreshAsync,
+        Func<CancellationToken, Task<int>> cleanInvalidItemsAsync,
         Action? capturePlaylistForCancelRestore,
         Action? commitPlaylistCancelRestore,
         Action? rollbackPlaylistCancelRestore,
@@ -150,6 +152,7 @@ public partial class PlaylistWindow : Window
         _loadPlaylistFromFileAsync = loadPlaylistFromFileAsync;
         _loadEntriesAsync = loadEntriesAsync;
         _refreshAsync = refreshAsync;
+        _cleanInvalidItemsAsync = cleanInvalidItemsAsync;
         _capturePlaylistForCancelRestore = capturePlaylistForCancelRestore;
         _commitPlaylistCancelRestore = commitPlaylistCancelRestore;
         _rollbackPlaylistCancelRestore = rollbackPlaylistCancelRestore;
@@ -1150,20 +1153,7 @@ public partial class PlaylistWindow : Window
         int removedCount = 0;
         try
         {
-            var removed = await Task.Run(
-                () => CleanInvalidItemsCore(_playlistItemsSource),
-                cts.Token).ConfigureAwait(true);
-
-            removedCount = removed.Count;
-
-            if (removedCount > 0)
-            {
-                foreach (var item in removed)
-                {
-                    _playlistItemsSource?.Remove(item);
-                }
-                _playlistViewSource?.View.Refresh();
-            }
+            removedCount = await _cleanInvalidItemsAsync(cts.Token).ConfigureAwait(true);
         }
         catch (OperationCanceledException)
         {
@@ -1190,43 +1180,6 @@ public partial class PlaylistWindow : Window
                     MessageBoxImage.Information);
             }
         }
-    }
-
-    private static List<QueueItem> CleanInvalidItemsCore(IReadOnlyList<QueueItem>? playlist)
-    {
-        var toRemove = new List<QueueItem>();
-        if (playlist == null)
-            return toRemove;
-
-        foreach (var item in playlist)
-        {
-            if (item?.Entry == null)
-                continue;
-
-            var videoId = item.VideoId;
-            var webpageUrl = item.WebpageUrl;
-
-            // --- Local file check ---
-            bool isLocal = videoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase)
-                        || Path.IsPathRooted(webpageUrl);
-
-            if (isLocal)
-            {
-                if (!File.Exists(webpageUrl))
-                {
-                    toRemove.Add(item);
-                }
-                continue;
-            }
-
-            // --- Online sources (YouTube, streams, etc.) ---
-            if (item.IsUnavailable || item.IsPremium || item.IsAgeRestricted)
-            {
-                toRemove.Add(item);
-            }
-        }
-
-        return toRemove;
     }
 
     // Source is reflected in window title; loading happens via dialog.

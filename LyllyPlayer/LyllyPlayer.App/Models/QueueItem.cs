@@ -14,7 +14,7 @@ public sealed class QueueItem : INotifyPropertyChanged
 
     private QueueItem() { }
 
-    public PlaylistEntry? Entry { get; init; }
+    public PlaylistEntry? Entry { get; private set; }
     public string VideoId => Entry?.VideoId ?? "";
     public string Title => Entry?.Title ?? "";
     public string? Channel => Entry?.Channel;
@@ -136,6 +136,19 @@ public sealed class QueueItem : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
+    public void UpdateEntry(PlaylistEntry entry)
+    {
+        Entry = entry;
+        OnPropertyChanged(nameof(Entry));
+        OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(Channel));
+        OnPropertyChanged(nameof(DurationSeconds));
+        OnPropertyChanged(nameof(WebpageUrl));
+        OnPropertyChanged(nameof(DisplayTitle));
+        OnPropertyChanged(nameof(SourceGlyph));
+        OnPropertyChanged(nameof(RequiresCookies));
+    }
 }
 
 

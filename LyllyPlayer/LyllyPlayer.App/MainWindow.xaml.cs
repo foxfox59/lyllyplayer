@@ -1525,15 +1525,7 @@ public partial class MainWindow : Window
                     Channel = string.IsNullOrWhiteSpace(artist) ? orig.Entry.Channel : artist,
                     DurationSeconds = durationSeconds
                 };
-                _playlistItems[i] = new QueueItem(updatedEntry2, orig.IndexPrefix)
-                {
-                    BaseIndex = orig.BaseIndex,
-                    IsInQueue = orig.IsInQueue,
-                    IsUnavailable = orig.IsUnavailable,
-                    IsAgeRestricted = orig.IsAgeRestricted,
-                    IsPremium = orig.IsPremium,
-                    IsNowPlaying = orig.IsNowPlaying,
-                };
+                orig.UpdateEntry(updatedEntry2);
             }
 
             // Update queue items by VideoId
@@ -1550,16 +1542,7 @@ public partial class MainWindow : Window
                     Channel = string.IsNullOrWhiteSpace(artist) ? orig.Entry.Channel : artist,
                     DurationSeconds = durationSeconds
                 };
-                _queueItems[i] = new QueueItem(updatedEntry2, orig.IndexPrefix)
-                {
-                    IsQueued = true,
-                    QueueOrdinal = orig.QueueOrdinal,
-                    QueueInstanceId = orig.QueueInstanceId,
-                    IsUnavailable = orig.IsUnavailable,
-                    IsAgeRestricted = orig.IsAgeRestricted,
-                    IsPremium = orig.IsPremium,
-                    IsNowPlaying = orig.IsNowPlaying,
-                };
+                orig.UpdateEntry(updatedEntry2);
             }
         }
         catch
@@ -3231,6 +3214,7 @@ public partial class MainWindow : Window
                     catch { /* ignore */ }
                     await RefreshCurrentSourceAsync(preserveCurrentIfPossible: true, ct);
                 },
+                cleanInvalidItemsAsync: async (ct) => await CleanInvalidPlaylistItemsAsync(ct).ConfigureAwait(true),
                 capturePlaylistForCancelRestore: BeginCancelPlaylistSnapshot,
                 commitPlaylistCancelRestore: CommitCancelPlaylistSnapshot,
                 rollbackPlaylistCancelRestore: RollbackCancelPlaylistSnapshot,
@@ -3479,6 +3463,84 @@ public partial class MainWindow : Window
                 );
             }
             catch { /* ignore */ }
+        }
+    }
+
+    private Task<int> CleanInvalidPlaylistItemsAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            // Identify invalid items based on current UI flags + local file existence.
+            var invalidIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var qi in _playlistItems.ToArray())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (qi.Entry is null)
+                    continue;
+
+                var id = qi.Entry.VideoId;
+                var urlOrPath = qi.Entry.WebpageUrl ?? "";
+
+                if (LocalPlaylistLoader.TryGetLocalPath(urlOrPath, out var p))
+                {
+                    if (!File.Exists(p))
+                        invalidIds.Add(id);
+                    continue;
+                }
+
+                if (qi.IsUnavailable || qi.IsPremium || qi.IsAgeRestricted)
+                    invalidIds.Add(id);
+            }
+
+            if (invalidIds.Count == 0)
+                return Task.FromResult(0);
+
+            // Remove queued instances that point at removed playlist entries.
+            try
+            {
+                var ids = _queuedNext.Where(q => invalidIds.Contains(q.Entry.VideoId)).Select(q => q.Id).ToList();
+                foreach (var id in ids)
+                    RemoveQueuedInstance(id);
+            }
+            catch { /* ignore */ }
+
+            var cur = _engine.GetCurrent();
+            var curId = cur?.VideoId;
+            var oldIndex = _engine.CurrentIndex;
+
+            var removed = _originalEntries.RemoveAll(e => invalidIds.Contains(e.VideoId));
+            if (removed <= 0)
+                return Task.FromResult(0);
+
+            // Clean per-item origins for removed items.
+            try
+            {
+                foreach (var id in invalidIds)
+                    _playlistOriginByVideoId.Remove(id);
+            }
+            catch { /* ignore */ }
+
+            // Preserve current track if it still exists; otherwise pick the nearest surviving index.
+            var newIndex = -1;
+            if (!string.IsNullOrWhiteSpace(curId))
+                newIndex = _originalEntries.FindIndex(e => string.Equals(e.VideoId, curId, StringComparison.OrdinalIgnoreCase));
+            if (newIndex < 0)
+                newIndex = _originalEntries.Count == 0 ? -1 : Math.Clamp(oldIndex, 0, _originalEntries.Count - 1);
+
+            _engine.SetQueue(_originalEntries, startIndex: newIndex, raiseNowPlayingChanged: true);
+            SetQueueList(_originalEntries, selectedIndex: -1);
+            UpdatePlaylistTitleDisplayForNowPlaying();
+            UpdateRefreshEnabled();
+            RequestPersistSnapshot();
+
+            return Task.FromResult(removed);
+        }
+        catch
+        {
+            return Task.FromResult(0);
         }
     }
 
