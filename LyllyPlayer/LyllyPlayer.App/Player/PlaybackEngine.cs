@@ -734,10 +734,9 @@ public sealed class PlaybackEngine : IDisposable
                 StatusChanged?.Invoke(this, (entry, "BUFFERING", null));
                 playbackTiming.Step("after_buffering_status_reader_scheduled");
                 _pauseGate.Set();
-                // _positionSw is intentionally NOT started here.  Starting it before the first real PCM
-                // chunk would make the progress bar advance during the pipeline-initialization gap
-                // (FFmpeg probing / yt-dlp prefetch) while the user hears nothing.
-                // _positionSw.Start() fires on the first actual audio sample below in the reader task.
+                // Start the position clock now so UI (seek/lyrics) can track time immediately on restore/resume.
+                // We still emit PLAYING only after the first real PCM chunk below.
+                try { _positionSw.Start(); } catch { /* ignore */ }
                 // Next-track disk cache / stream URL / PCM prefetch starts in RunDeferredWarmupsAfterFirstAudio
                 // only after the first real PCM chunk (PLAYING), so rapid Next during BUFFERING does not pile work.
 
@@ -815,6 +814,7 @@ public sealed class PlaybackEngine : IDisposable
                                 sawAnyAudio = true;
                                 if (ReferenceEquals(_playCts, playbackSessionCts))
                                 {
+                                    // In normal play this may already be started above; Start() is idempotent.
                                     _positionSw.Start();
                                     StatusChanged?.Invoke(this, (entry, "PLAYING", null));
                                     try { _firstAudioForCurrentPlayTcs?.TrySetResult(true); } catch { /* ignore */ }

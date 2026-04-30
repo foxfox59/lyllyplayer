@@ -11,7 +11,9 @@ public static class LyricsCache
     private const string FileName = "lyrics-cache.json";
     private const int DefaultTtlDays = 30;
     private const int MissTtlHours = 24;
-    private const int MaxFileBytes = 512 * 1024; // 512 KB max file size
+    // NOTE: This used to be a "poor man's exploit guard" but it also prevented legitimate caches from loading
+    // at startup (forcing network fetches and making lyrics appear late). Keep best-effort parsing instead.
+    private const int MaxFileBytes = int.MaxValue;
 
     private static readonly JsonSerializerOptions WriteOptions = new()
     {
@@ -199,12 +201,18 @@ public static class LyricsCache
         }
     }
 
-    /// <summary>A single lyrics cache entry with LRC text and fetch timestamp.</summary>
+    /// <summary>
+    /// A single lyrics cache entry with LRC text and fetch timestamp.
+    /// Must be JSON-deserializable so the cache actually loads on startup.
+    /// </summary>
     private sealed class CacheEntry
     {
-        public string LrcText { get; }
-        public DateTime FetchedAtUtc { get; }
-        public bool IsMiss { get; }
+        // Setters are required for System.Text.Json to deserialize.
+        public string LrcText { get; set; } = "";
+        public DateTime FetchedAtUtc { get; set; } = DateTime.UtcNow;
+        public bool IsMiss { get; set; }
+
+        public CacheEntry() { }
 
         public CacheEntry(string lrcText, DateTime? fetchedAtUtc = null, bool isMiss = false)
         {

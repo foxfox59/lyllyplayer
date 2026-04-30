@@ -845,6 +845,7 @@ public partial class MainWindow : Window
         {
             _playlistWindowWasOpenBeforeCompact = _startupSettings.PlaylistWindowOpen ?? false;
             _optionsWindowWasOpenBeforeCompact = _startupSettings.OptionsWindowOpen ?? false;
+            _lyricsWindowWasOpenBeforeCompact = _startupSettings.LyricsWindowOpen ?? false;
         }
 
         _savedYtDlpPath = NormalizeToolSave(_startupSettings.YtDlpPath);
@@ -963,6 +964,9 @@ public partial class MainWindow : Window
         var settingsDir = Path.GetDirectoryName(SettingsStore.GetSettingsPath());
         if (!string.IsNullOrWhiteSpace(settingsDir))
             LyricsCache.Initialize(settingsDir);
+        // Startup: hydrate cached lyrics immediately using the persisted CurrentVideoId.
+        // This prevents the Lyrics window from staying empty while playlist/engine restore work is still running.
+        try { TryHydrateLyricsFromCacheForStartupVideoIdBestEffort(); } catch { /* ignore */ }
         if (_lyricsEnabled)
             _startLyricsTimer();
         // Secondary windows may not exist yet (compact startup). Without this, snap/dock/bounds stay at
@@ -988,6 +992,14 @@ public partial class MainWindow : Window
             var vol = _startupSettings.Volume ?? 0.85;
             _engine.SetVolume(vol);
             VolumeSlider.Value = Math.Clamp(vol, 0, 1);
+        }
+        catch { /* ignore */ }
+
+        // Restore duration early so seek UI can initialize immediately on startup.
+        try
+        {
+            if (_startupSettings.CurrentDurationSeconds is int ds && ds > 0)
+                _engine.OverrideCurrentDurationSeconds(ds);
         }
         catch { /* ignore */ }
         _engine.NowPlayingChanged += (_, entry) =>
@@ -1041,6 +1053,11 @@ public partial class MainWindow : Window
                         _lastDisplayedLyricLineIndex = int.MinValue;
                         _lyricsResolvedVideoId = null;
                         _lyricsWindow?.Refresh();
+
+                        // Immediately hydrate from cache (no network) so the lyrics window is populated
+                        // on startup/track change without waiting for async resolution.
+                        try { TryLoadLyricsFromCacheForEntryBestEffort(entry); } catch { /* ignore */ }
+                        try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
                     }
 
                     _nowPlayingStatus = "FETCHING";
@@ -1068,7 +1085,7 @@ public partial class MainWindow : Window
                 UpdateNowPlayingFlag(entry);
                 if (!ShouldSuppressAutoScroll(entry))
                     SelectAndScrollToNowPlaying(entry);
-                UpdateDurationUi(entry?.DurationSeconds);
+                UpdateDurationUi(entry?.DurationSeconds ?? _engine.CurrentDurationSeconds);
                 try { ApplyMainWindowShellIntegration(); } catch { /* ignore */ }
 
                 // ← MOVE THIS INSIDE Dispatcher.Invoke:
@@ -1187,7 +1204,9 @@ public partial class MainWindow : Window
         UpdateRepeatButtonContent();
         UpdateRefreshEnabled();
 
-        _uiTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        // Background priority can be starved during startup (layout, restore, IO), which makes the
+        // timeline/lyrics appear "stuck" for several seconds even while audio is playing.
+        _uiTimer = new DispatcherTimer(DispatcherPriority.Render, Dispatcher)
         {
             Interval = TimeSpan.FromMilliseconds(33),
             IsEnabled = true,
@@ -1257,14 +1276,26 @@ public partial class MainWindow : Window
                 catch { /* ignore */ }
                 try
                 {
-                    if ((_startupSettings.PlaylistWindowOpen ?? false) && !_mainWindowCompact)
+                    if (_startupSettings.PlaylistWindowOpen ?? false)
+                    {
                         EnsurePlaylistWindowOpen();
+                    }
                 }
                 catch { /* ignore */ }
                 try
                 {
-                    if ((_startupSettings.OptionsWindowOpen ?? false) && !_mainWindowCompact)
+                    if (_startupSettings.OptionsWindowOpen ?? false)
+                    {
                         EnsureOptionsWindowOpen();
+                    }
+                }
+                catch { /* ignore */ }
+                try
+                {
+                    if (_startupSettings.LyricsWindowOpen ?? false)
+                    {
+                        EnsureLyricsWindowOpen();
+                    }
                 }
                 catch { /* ignore */ }
                 try
@@ -3237,6 +3268,9 @@ public partial class MainWindow : Window
         {
             try
             {
+                if (_mainWindowCompact && _compactModeHidesAuxWindows)
+                    _playlistWindowWasOpenBeforeCompact = false;
+
                 // Capture before closing (the Closing event also captures, but don't rely on field state).
                 CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
                 _playlistWindow.Close();
@@ -3747,11 +3781,16 @@ public partial class MainWindow : Window
             if (_lyricsWindow is not null)
             {
                 _compactUserOpenedLyricsWindow = false;
+                if (_mainWindowCompact && _compactModeHidesAuxWindows)
+                    _lyricsWindowWasOpenBeforeCompact = false;
                 try { _lyricsWindow.Close(); } catch { /* ignore */ }
                 return;
             }
             if (_mainWindowCompact && _compactModeHidesAuxWindows)
+            {
                 _compactUserOpenedLyricsWindow = true;
+                _lyricsWindowWasOpenBeforeCompact = true;
+            }
             EnsureLyricsWindowOpen();
         }
         catch { /* ignore */ }
@@ -3770,6 +3809,10 @@ public partial class MainWindow : Window
                 return;
 
             var latestSettings = SettingsStore.Load();
+
+            // Fast path: if we have cached lyrics for the current track, load them before showing the window
+            // so the initial render isn't blank while other startup work is happening.
+            try { TryLoadLyricsFromCacheForCurrentBestEffort(); } catch { /* ignore */ }
 
             _lyricsWindow = new LyricsWindow(
                 lyricsEnabled: () => _lyricsEnabled,
@@ -3827,6 +3870,14 @@ public partial class MainWindow : Window
             // Ultra-compact title bar shows lyric line only when the lyrics window is closed.
             // Force a refresh on open so the title switches immediately (even if the lyric line hasn't changed yet).
             try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
+            // Startup restore can open the lyrics window before lyrics resolution runs; kick a refresh/resolve so
+            // cached lyrics appear immediately when available.
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try { TryLoadLyricsFromCacheForCurrentBestEffort(); } catch { /* ignore */ }
+                try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
+                try { _ = TryResolveLyricsAsync(); } catch { /* ignore */ }
+            }), DispatcherPriority.Background);
 
             ApplyAlwaysOnTopFromSettings();
             // Restore snapped positioning relative to main window if previously snapped.
@@ -4492,6 +4543,9 @@ public partial class MainWindow : Window
         {
             try
             {
+                if (_mainWindowCompact && _compactModeHidesAuxWindows)
+                    _optionsWindowWasOpenBeforeCompact = false;
+
                 CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
                 _optionsWindow.Close();
             }
@@ -4500,6 +4554,8 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_mainWindowCompact && _compactModeHidesAuxWindows)
+            _optionsWindowWasOpenBeforeCompact = true;
         EnsureOptionsWindowOpen();
     }
 
@@ -5836,6 +5892,91 @@ public partial class MainWindow : Window
         catch { /* ignore */ }
     }
 
+    private void TryLoadLyricsFromCacheForCurrentBestEffort()
+    {
+        try
+        {
+            if (!_lyricsEnabled)
+                return;
+
+            var entry = _engine.GetCurrent();
+            if (entry is null || string.IsNullOrWhiteSpace(entry.VideoId))
+                return;
+            TryLoadLyricsFromCacheForEntryBestEffort(entry);
+        }
+        catch { /* ignore */ }
+    }
+
+    private void TryLoadLyricsFromCacheForEntryBestEffort(PlaylistEntry entry)
+    {
+        try
+        {
+            if (!_lyricsEnabled)
+                return;
+            if (entry is null || string.IsNullOrWhiteSpace(entry.VideoId))
+                return;
+
+            // Don't stomp already loaded lyrics for this track.
+            if (_lyricsManager.HasLyrics && string.Equals(_lyricsResolvedVideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var isLocal = entry.VideoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase);
+            if (isLocal && !_lyricsLocalFilesEnabled)
+                return;
+
+            var cacheKey = isLocal ? $"lyr_{entry.VideoId}" : $"yt_{entry.VideoId}";
+            if (LyricsCache.IsMiss(cacheKey))
+                return;
+
+            var cached = LyricsCache.Get(cacheKey);
+            if (string.IsNullOrWhiteSpace(cached))
+                return;
+
+            var metadata = LrcParser.TryExtractMetadata(cached);
+            var cacheArtist = metadata?.Artist ?? entry.Channel;
+            var cacheTitle = metadata?.Title ?? entry.Title;
+            _lyricsManager.Parse(cached, artist: cacheArtist, title: cacheTitle);
+            _lyricsResolvedVideoId = entry.VideoId;
+            try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
+        }
+        catch { /* ignore */ }
+    }
+
+    private void TryHydrateLyricsFromCacheForStartupVideoIdBestEffort()
+    {
+        try
+        {
+            if (!_lyricsEnabled)
+                return;
+
+            var vid = _startupSettings.CurrentVideoId;
+            if (string.IsNullOrWhiteSpace(vid))
+                return;
+
+            // If we already hydrated/resolved this id, nothing to do.
+            if (_lyricsManager.HasLyrics && string.Equals(_lyricsResolvedVideoId, vid, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var isLocal = vid.StartsWith("local:", StringComparison.OrdinalIgnoreCase);
+            if (isLocal && !_lyricsLocalFilesEnabled)
+                return;
+
+            var cacheKey = isLocal ? $"lyr_{vid}" : $"yt_{vid}";
+            if (LyricsCache.IsMiss(cacheKey))
+                return;
+
+            var cached = LyricsCache.Get(cacheKey);
+            if (string.IsNullOrWhiteSpace(cached))
+                return;
+
+            // We might not have metadata yet; parse with whatever we can.
+            var metadata = LrcParser.TryExtractMetadata(cached);
+            _lyricsManager.Parse(cached, artist: metadata?.Artist, title: metadata?.Title);
+            _lyricsResolvedVideoId = vid;
+        }
+        catch { /* ignore */ }
+    }
+
     private void DetachMainWindowShellStyleHook()
     {
         if (!_shellStyleHookAttached || _shellStyleHookSource is null)
@@ -6075,6 +6216,12 @@ public partial class MainWindow : Window
                 RecordRecentlyPlayedVideoId(cur.VideoId);
             }
             catch { /* ignore */ }
+
+            // Cached lyrics hydration (no network) so the Lyrics window isn't blank on startup restore.
+            try { TryLoadLyricsFromCacheForEntryBestEffort(cur); } catch { /* ignore */ }
+            try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
+            try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
+
             _nowPlayingStatus = _engine.IsPlaying
                 ? "PLAYING"
                 : (_engine.CanResume ? "PAUSED" : "STOPPED");
@@ -6082,7 +6229,9 @@ public partial class MainWindow : Window
             {
                 if (cur.DurationSeconds is int d && d > 0)
                     _engine.OverrideCurrentDurationSeconds(d);
-                UpdateDurationUi(cur.DurationSeconds);
+                else if (_startupSettings.CurrentDurationSeconds is int ds && ds > 0)
+                    _engine.OverrideCurrentDurationSeconds(ds);
+                UpdateDurationUi(cur.DurationSeconds ?? _engine.CurrentDurationSeconds);
             }
             catch { /* ignore */ }
             UpdateNowPlayingText();
@@ -6411,11 +6560,39 @@ public partial class MainWindow : Window
             cancellationToken.ThrowIfCancellationRequested();
             SetPlaylistTitle(title);
             _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: !deferNowPlayingChanged);
+            // Startup restore: Apply saved duration after SetQueue (Stop/SetQueue paths can clear engine duration).
+            try
+            {
+                if (isStartupAutoLoad && _startupSettings.CurrentDurationSeconds is int ds && ds > 0)
+                    _engine.OverrideCurrentDurationSeconds(ds);
+            }
+            catch { /* ignore */ }
             var displayIndex = GetOriginalIndexByVideoId(desiredId) ?? 0;
-            await SetQueueListAsync(
-                _originalEntries,
-                selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex,
-                cancellationToken: cancellationToken);
+            if (deferNowPlayingChanged && isStartupAutoLoad)
+            {
+                // Startup restore: building the full playlist UI can take noticeable time for large lists and
+                // blocks the dispatcher, which makes the seek bar / lyrics look "stuck" even while audio plays.
+                // Defer the heavy UI rebuild until after the first render pass.
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        _ = SetQueueListAsync(
+                            _originalEntries,
+                            selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex,
+                            forceFullRebuild: true,
+                            cancellationToken: CancellationToken.None);
+                    }
+                    catch { /* ignore */ }
+                }), DispatcherPriority.ContextIdle);
+            }
+            else
+            {
+                await SetQueueListAsync(
+                    _originalEntries,
+                    selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex,
+                    cancellationToken: cancellationToken);
+            }
             _hasLoadedPlaylist = true;
             _previousTrackHistory.Clear();
             UpdateRefreshEnabled();
@@ -6900,11 +7077,16 @@ public partial class MainWindow : Window
             if (_playlistWindow is not null)
             {
                 _compactUserOpenedPlaylistWindow = false;
+                if (_mainWindowCompact && _compactModeHidesAuxWindows)
+                    _playlistWindowWasOpenBeforeCompact = false;
                 try { _playlistWindow.Close(); } catch { /* ignore */ }
                 return;
             }
             if (_mainWindowCompact && _compactModeHidesAuxWindows)
+            {
                 _compactUserOpenedPlaylistWindow = true;
+                _playlistWindowWasOpenBeforeCompact = true;
+            }
             EnsurePlaylistWindowOpen();
         }
         catch { /* ignore */ }
@@ -8773,6 +8955,7 @@ public partial class MainWindow : Window
             PlayOrderVideoIds: _engine.PlayOrder.Select(e => e.VideoId).ToList(),
             QueuedVideoIds: _queuedNext.Select(e => e.Entry.VideoId).ToList(),
             CurrentPositionSeconds: overridePositionSeconds ?? _engine.CurrentPositionSeconds,
+            CurrentDurationSeconds: _engine.CurrentDurationSeconds ?? _nowPlayingEntry?.DurationSeconds,
             WasPlaying: overrideWasPlaying ?? _engine.IsPlaying,
             CacheMaxMb: _cacheMaxMb,
             Volume: VolumeSlider?.Value,
@@ -8792,7 +8975,7 @@ public partial class MainWindow : Window
             PlaylistWindowWidth: FiniteOrNull(savePBounds.Width) ?? cur.PlaylistWindowWidth,
             PlaylistWindowHeight: FiniteOrNull(savePBounds.Height) ?? cur.PlaylistWindowHeight,
             PlaylistWindowState: savePState.ToString(),
-            PlaylistWindowOpen: _playlistWindow is not null,
+            PlaylistWindowOpen: (_playlistWindow is not null) || (_mainWindowCompact && _playlistWindowWasOpenBeforeCompact),
             PlaylistWindowFilter: _playlistWindow is not null
                 ? NormalizePersistedPlaylistFilter(_playlistWindow.GetPlaylistFilterText())
                 : cur.PlaylistWindowFilter,
@@ -8803,7 +8986,7 @@ public partial class MainWindow : Window
             OptionsWindowWidth: FiniteOrNull(saveOBounds.Width) ?? cur.OptionsWindowWidth,
             OptionsWindowHeight: FiniteOrNull(saveOBounds.Height) ?? cur.OptionsWindowHeight,
             OptionsWindowState: saveOState.ToString(),
-            OptionsWindowOpen: _optionsWindow is not null,
+            OptionsWindowOpen: (_optionsWindow is not null) || (_mainWindowCompact && _optionsWindowWasOpenBeforeCompact),
             PlaylistWindowSnapped: _playlistSnapped,
             PlaylistWindowSnapEdge: _playlistSnapEdge.ToString(),
             PlaylistWindowDockYOffset: FiniteOrNull(_playlistDockYOffset) ?? 0,
@@ -8824,6 +9007,7 @@ public partial class MainWindow : Window
             LyricsWindowWidth: FiniteOrNull(saveLBounds.Width) ?? cur.LyricsWindowWidth,
             LyricsWindowHeight: FiniteOrNull(saveLBounds.Height) ?? cur.LyricsWindowHeight,
             LyricsWindowState: saveLState.ToString(),
+            LyricsWindowOpen: (_lyricsWindow is not null) || (_mainWindowCompact && _lyricsWindowWasOpenBeforeCompact),
             ThemeMode: _themeMode,
             BackgroundMode: _backgroundMode,
             CustomBackgroundImagePath: string.IsNullOrWhiteSpace(_customBackgroundImagePath) ? null : _customBackgroundImagePath.Trim(),
@@ -10233,7 +10417,7 @@ public partial class MainWindow : Window
     {
         if (_lyricsTimer is null)
         {
-            _lyricsTimer = new DispatcherTimer
+            _lyricsTimer = new DispatcherTimer(DispatcherPriority.Render, Dispatcher)
             {
                 // 250ms misses fast lyric transitions. Use a faster tick, but keep CPU low by only updating UI when the line changes.
                 Interval = TimeSpan.FromMilliseconds(100),

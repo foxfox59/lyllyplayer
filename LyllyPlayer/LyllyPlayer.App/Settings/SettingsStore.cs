@@ -281,6 +281,7 @@ public static class SettingsStore
             PlayOrderVideoIds = loaded.PlayOrderVideoIds ?? GetStringList(nameof(AppSettings.PlayOrderVideoIds)),
             QueuedVideoIds = loaded.QueuedVideoIds ?? GetStringList(nameof(AppSettings.QueuedVideoIds)),
             CurrentPositionSeconds = loaded.CurrentPositionSeconds ?? GetDouble(nameof(AppSettings.CurrentPositionSeconds)),
+            CurrentDurationSeconds = loaded.CurrentDurationSeconds ?? GetInt(nameof(AppSettings.CurrentDurationSeconds)),
             WasPlaying = loaded.WasPlaying ?? GetBool(nameof(AppSettings.WasPlaying)),
 
             WindowLeft = loaded.WindowLeft ?? GetDouble(nameof(AppSettings.WindowLeft)),
@@ -360,6 +361,17 @@ public static class SettingsStore
             OptionsWindowBottomAlignToPlaylist = GetBool(nameof(AppSettings.OptionsWindowBottomAlignToPlaylist)) ?? loaded.OptionsWindowBottomAlignToPlaylist,
             OptionsWindowSelectedTab = loaded.OptionsWindowSelectedTab ?? GetString(nameof(AppSettings.OptionsWindowSelectedTab)),
 
+            LyricsWindowSnapped = GetBool(nameof(AppSettings.LyricsWindowSnapped)) ?? loaded.LyricsWindowSnapped,
+            LyricsWindowSnapEdge = GetString(nameof(AppSettings.LyricsWindowSnapEdge)) ?? loaded.LyricsWindowSnapEdge,
+            LyricsWindowDockYOffset = GetDouble(nameof(AppSettings.LyricsWindowDockYOffset)) ?? loaded.LyricsWindowDockYOffset,
+            LyricsWindowDockXOffset = GetDouble(nameof(AppSettings.LyricsWindowDockXOffset)) ?? loaded.LyricsWindowDockXOffset,
+            LyricsWindowLeft = GetDouble(nameof(AppSettings.LyricsWindowLeft)) ?? loaded.LyricsWindowLeft,
+            LyricsWindowTop = GetDouble(nameof(AppSettings.LyricsWindowTop)) ?? loaded.LyricsWindowTop,
+            LyricsWindowWidth = GetDouble(nameof(AppSettings.LyricsWindowWidth)) ?? loaded.LyricsWindowWidth,
+            LyricsWindowHeight = GetDouble(nameof(AppSettings.LyricsWindowHeight)) ?? loaded.LyricsWindowHeight,
+            LyricsWindowState = GetString(nameof(AppSettings.LyricsWindowState)) ?? loaded.LyricsWindowState,
+            LyricsWindowOpen = GetBool(nameof(AppSettings.LyricsWindowOpen)) ?? loaded.LyricsWindowOpen,
+
             PlaylistWindowSnapped = GetBool(nameof(AppSettings.PlaylistWindowSnapped)) ?? loaded.PlaylistWindowSnapped,
             PlaylistWindowSnapEdge = GetString(nameof(AppSettings.PlaylistWindowSnapEdge)) ?? loaded.PlaylistWindowSnapEdge,
             PlaylistWindowDockYOffset = GetDouble(nameof(AppSettings.PlaylistWindowDockYOffset)) ?? loaded.PlaylistWindowDockYOffset,
@@ -433,6 +445,7 @@ public static class SettingsStore
         TakeDouble(nameof(AppSettings.WindowHeight), ref s, (c, v) => c with { WindowHeight = v });
         TakeInt(nameof(AppSettings.UiScalePercent), ref s, (c, v) => c with { UiScalePercent = v });
         TakeInt(nameof(AppSettings.CacheMaxMb), ref s, (c, v) => c with { CacheMaxMb = v });
+        TakeInt(nameof(AppSettings.CurrentDurationSeconds), ref s, (c, v) => c with { CurrentDurationSeconds = v });
         TakeBool(nameof(AppSettings.ShuffleEnabled), ref s, (c, v) => c with { ShuffleEnabled = v });
         TakeBool(nameof(AppSettings.GlobalMediaKeysEnabled), ref s, (c, v) => c with { GlobalMediaKeysEnabled = v });
         TakeBool(nameof(AppSettings.WasPlaying), ref s, (c, v) => c with { WasPlaying = v });
@@ -440,6 +453,7 @@ public static class SettingsStore
         TakeBool(nameof(AppSettings.AlwaysOnTopPlaylistWindow), ref s, (c, v) => c with { AlwaysOnTopPlaylistWindow = v });
         TakeBool(nameof(AppSettings.AlwaysOnTopOptionsWindow), ref s, (c, v) => c with { AlwaysOnTopOptionsWindow = v });
         TakeBool(nameof(AppSettings.AlwaysOnTopLyricsWindow), ref s, (c, v) => c with { AlwaysOnTopLyricsWindow = v });
+        TakeBool(nameof(AppSettings.LyricsWindowOpen), ref s, (c, v) => c with { LyricsWindowOpen = v });
         TakeBool(nameof(AppSettings.CompactModeHidesAuxWindows), ref s, (c, v) => c with { CompactModeHidesAuxWindows = v });
         TakeString(nameof(AppSettings.CompactModeLayout), ref s, (c, v) => c with { CompactModeLayout = v });
 
@@ -507,6 +521,7 @@ public static class SettingsStore
         PlayOrderVideoIds: null,
         QueuedVideoIds: null,
         CurrentPositionSeconds: null,
+        CurrentDurationSeconds: null,
         WasPlaying: null,
         CacheMaxMb: null,
         Volume: null,
@@ -556,6 +571,7 @@ public static class SettingsStore
         LyricsWindowWidth: null,
         LyricsWindowHeight: null,
         LyricsWindowState: null,
+        LyricsWindowOpen: null,
         ThemeMode: null,
         BackgroundMode: null,
         CustomBackgroundImagePath: null,
@@ -625,6 +641,7 @@ public static class SettingsStore
             PlayOrderVideoIds: null,
             QueuedVideoIds: null,
             CurrentPositionSeconds: null,
+            CurrentDurationSeconds: null,
             WasPlaying: null,
             CacheMaxMb: DefaultCacheMaxMb,
             Volume: DefaultVolume,
@@ -674,6 +691,7 @@ public static class SettingsStore
             LyricsWindowWidth: null,
             LyricsWindowHeight: null,
             LyricsWindowState: null,
+            LyricsWindowOpen: false,
             ThemeMode: DefaultThemeMode,
             BackgroundMode: DefaultBackgroundMode,
             CustomBackgroundImagePath: null,
@@ -776,6 +794,7 @@ public static class SettingsStore
             LyricsEnabled = s.LyricsEnabled ?? false,
             LyricsLocalFilesEnabled = s.LyricsLocalFilesEnabled ?? false,
             AlwaysOnTopLyricsWindow = s.AlwaysOnTopLyricsWindow ?? false,
+            LyricsWindowOpen = s.LyricsWindowOpen ?? false,
             PlaylistWindowBoundsUiScalePercent = s.PlaylistWindowBoundsUiScalePercent is >= 50 and <= 200
                 ? s.PlaylistWindowBoundsUiScalePercent
                 : null,

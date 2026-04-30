@@ -15,6 +15,8 @@ public sealed record AppSettings(
     /// <summary>Queue (play next) instances, in order; duplicates allowed. Not exported with saved playlist files.</summary>
     List<string>? QueuedVideoIds,
     double? CurrentPositionSeconds,
+    /// <summary>Best-effort duration of the current track at save time (used to restore seek UI promptly).</summary>
+    int? CurrentDurationSeconds,
     bool? WasPlaying,
     int? CacheMaxMb,
     double? Volume,
@@ -79,6 +81,8 @@ public sealed record AppSettings(
     double? LyricsWindowHeight,
     /// <summary>Lyrics window persisted window state.</summary>
     string? LyricsWindowState,
+    /// <summary>Whether the lyrics window was open when the app last saved settings.</summary>
+    bool? LyricsWindowOpen,
     /// <summary>Light | Dark | Auto. Auto chooses based on background image luminance when possible.</summary>
     string? ThemeMode,
     string? BackgroundMode,
