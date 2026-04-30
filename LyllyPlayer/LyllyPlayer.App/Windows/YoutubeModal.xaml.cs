@@ -9,7 +9,7 @@ namespace LyllyPlayer.Windows;
 
 public partial class YoutubeModal : Window
 {
-    private readonly Func<string, int, int, CancellationToken, Task> _searchVideosAsync;
+    private readonly Func<string, int, int, bool, bool, CancellationToken, Task> _searchVideosAsync;
     private readonly Func<string, int, CancellationToken, Task<IReadOnlyList<YoutubePlaylistHit>>> _searchPlaylistsAsync;
     private readonly Func<int, CancellationToken, Task<IReadOnlyList<YoutubePlaylistHit>>> _listAccountPlaylistsAsync;
     private readonly Func<string, bool, bool, CancellationToken, Task> _importPlaylistAsync;
@@ -20,7 +20,7 @@ public partial class YoutubeModal : Window
     private readonly Func<string, CancellationToken, Task> _openUrlAsync;
 
     public YoutubeModal(
-        Func<string, int, int, CancellationToken, Task> searchVideosAsync,
+        Func<string, int, int, bool, bool, CancellationToken, Task> searchVideosAsync,
         Func<string, int, CancellationToken, Task<IReadOnlyList<YoutubePlaylistHit>>> searchPlaylistsAsync,
         Func<int, CancellationToken, Task<IReadOnlyList<YoutubePlaylistHit>>> listAccountPlaylistsAsync,
         Func<string, bool, bool, CancellationToken, Task> importPlaylistAsync,
@@ -100,7 +100,9 @@ public partial class YoutubeModal : Window
         {
             SearchVideosButton.IsEnabled = false;
             SearchVideosStatusTextBlock.Text = "Searching…";
-            await _searchVideosAsync(q, count, minLen, CancellationToken.None);
+            var append = AppendRadioButton.IsChecked ?? false;
+            var dedupe = GlobalDedupeCheckBox.IsChecked ?? true;
+            await _searchVideosAsync(q, count, minLen, append, dedupe, CancellationToken.None);
             SearchVideosStatusTextBlock.Text = "Done.";
         }
         catch (OperationCanceledException)

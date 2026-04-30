@@ -3650,7 +3650,7 @@ public partial class MainWindow : Window
         cancellationToken.ThrowIfCancellationRequested();
 
         var dlg = new YoutubeModal(
-            searchVideosAsync: async (query, count, minLen, ct) => await SearchYoutubeVideosAsync(query, count, minLen, ct).ConfigureAwait(true),
+            searchVideosAsync: async (query, count, minLen, append, dedupe, ct) => await SearchYoutubeVideosAsync(query, count, minLen, append, dedupe, ct).ConfigureAwait(true),
             searchPlaylistsAsync: async (query, count, ct) => await _ytDlp.ResolveYoutubePlaylistSearchAsync(query, count, ct).ConfigureAwait(true),
             listAccountPlaylistsAsync: async (count, ct) => await _ytDlp.ResolveAccountPlaylistsBestEffortAsync(count, ct).ConfigureAwait(true),
             importPlaylistAsync: async (urlOrId, append, dedupe, ct) => await ImportYoutubePlaylistAsync(urlOrId, append, dedupe, ct).ConfigureAwait(true),
@@ -3761,7 +3761,7 @@ public partial class MainWindow : Window
         return Task.CompletedTask;
     }
 
-    private async Task SearchYoutubeVideosAsync(string query, int count, int minLenSeconds, CancellationToken cancellationToken)
+    private async Task SearchYoutubeVideosAsync(string query, int count, int minLenSeconds, bool append, bool removeDuplicates, CancellationToken cancellationToken)
     {
         var q = (query ?? "").Trim();
         if (string.IsNullOrWhiteSpace(q))
@@ -3770,8 +3770,6 @@ public partial class MainWindow : Window
         count = Math.Clamp(count <= 0 ? 50 : count, 1, 200);
         minLenSeconds = Math.Clamp(minLenSeconds, 0, 3600);
 
-        // Replace current playlist with search results (same behavior as the old Search Youtube button).
-        try { BeginCancelPlaylistSnapshot(); } catch { /* ignore */ }
         try
         {
             _lastPlaylistSourceType = PlaylistSourceType.SearchYoutubeMusic;
@@ -3782,19 +3780,41 @@ public partial class MainWindow : Window
             var fetch = Math.Clamp((int)Math.Round(count * 2.0), 20, 200);
             var res = await _ytDlp.ResolveYoutubeMusicSearchAsync(q, count, minLenSeconds, fetch, cancellationToken).ConfigureAwait(true);
             var entries = PlaylistDeduper.DedupeForSearch(res.Entries);
-            await LoadPlaylistFromEntriesAsync(
+
+            var title = res.PlaylistTitle ?? $"Search: {q}";
+            var sourceKey = _playlistSourceText ?? "";
+
+            if (!append)
+            {
+                // Replace current playlist with search results.
+                try { BeginCancelPlaylistSnapshot(); } catch { /* ignore */ }
+                try
+                {
+                    await LoadPlaylistFromEntriesAsync(
+                        entries,
+                        title: title,
+                        sourceKey: sourceKey,
+                        isStartupAutoLoad: false,
+                        cancellationToken: cancellationToken).ConfigureAwait(true);
+                    CommitCancelPlaylistSnapshot();
+                }
+                catch
+                {
+                    try { RollbackCancelPlaylistSnapshot(); } catch { /* ignore */ }
+                    throw;
+                }
+                return;
+            }
+
+            // Append: preserve current playback. Search doesn't have a stable source URL, so treat as compound origin label.
+            AppendEntriesPreserveCurrent(
                 entries,
-                title: res.PlaylistTitle ?? $"Search: {q}",
-                sourceKey: _playlistSourceText ?? "",
-                isStartupAutoLoad: false,
-                cancellationToken: cancellationToken).ConfigureAwait(true);
-            CommitCancelPlaylistSnapshot();
+                originLabel: title,
+                originSource: sourceKey,
+                removeDuplicates: removeDuplicates,
+                cancellationToken: cancellationToken);
         }
-        catch
-        {
-            try { RollbackCancelPlaylistSnapshot(); } catch { /* ignore */ }
-            throw;
-        }
+        catch { throw; }
     }
 
     private async Task AddFolderAsync(
