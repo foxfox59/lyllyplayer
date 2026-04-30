@@ -362,10 +362,156 @@ public partial class MainWindow : Window
     private readonly AppSettings _startupSettings;
     private List<PlaylistEntry> _originalEntries = new();
     private readonly List<string> _recentlyPlayedVideoIds = new(5);
+    private int GetRecentlyPlayedWindowSize()
+    {
+        // Scale with playlist size (avoid a fixed constant).
+        // Examples: 25->5, 100->10, 400->20, 2500->40 (cap).
+        var n = Math.Max(0, _originalEntries.Count);
+        var scaled = (int)Math.Ceiling(Math.Sqrt(n));
+        return Math.Clamp(scaled, 5, 40);
+    }
+
+    /// <summary>
+    /// Shuffle "history tape": a list of played VideoIds plus a cursor pointing at the current position.
+    /// Prev/Next should traverse this tape when the user has gone back in history.
+    /// </summary>
+    private readonly List<string> _shuffleTapeVideoIds = new();
+    private int _shuffleTapeCursor = -1;
+    private int GetShuffleTapeMaxSize()
+    {
+        // "Generous" and scales with playlist size; always at least 10.
+        // Use ~10% of the playlist (cap to keep memory bounded for huge lists).
+        var n = Math.Max(0, _originalEntries.Count);
+        var scaled = (int)Math.Ceiling(n * 0.10);
+        var max = Math.Clamp(scaled, 10, 200);
+        return Math.Min(max, n == 0 ? max : n);
+    }
+
+    private void RecordNowPlayingForShuffleTape(string videoId)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(videoId))
+                return;
+
+            // If we're moving within the existing tape, just move the cursor.
+            if (_shuffleTapeCursor >= 0 && _shuffleTapeCursor < _shuffleTapeVideoIds.Count)
+            {
+                if (string.Equals(_shuffleTapeVideoIds[_shuffleTapeCursor], videoId, StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                if (_shuffleTapeCursor + 1 < _shuffleTapeVideoIds.Count &&
+                    string.Equals(_shuffleTapeVideoIds[_shuffleTapeCursor + 1], videoId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _shuffleTapeCursor++;
+                    return;
+                }
+
+                if (_shuffleTapeCursor - 1 >= 0 &&
+                    string.Equals(_shuffleTapeVideoIds[_shuffleTapeCursor - 1], videoId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _shuffleTapeCursor--;
+                    return;
+                }
+
+                // If we were in the middle and something else started playing (queued/manual),
+                // drop forward history and continue from the current cursor.
+                if (_shuffleTapeCursor < _shuffleTapeVideoIds.Count - 1)
+                    _shuffleTapeVideoIds.RemoveRange(_shuffleTapeCursor + 1, _shuffleTapeVideoIds.Count - (_shuffleTapeCursor + 1));
+            }
+
+            // Append if it isn't a duplicate of the tail.
+            if (_shuffleTapeVideoIds.Count == 0 ||
+                !string.Equals(_shuffleTapeVideoIds[^1], videoId, StringComparison.OrdinalIgnoreCase))
+            {
+                _shuffleTapeVideoIds.Add(videoId);
+            }
+            _shuffleTapeCursor = _shuffleTapeVideoIds.Count - 1;
+
+            // Trim oldest entries while keeping cursor valid.
+            var max = GetShuffleTapeMaxSize();
+            while (_shuffleTapeVideoIds.Count > max)
+            {
+                _shuffleTapeVideoIds.RemoveAt(0);
+                _shuffleTapeCursor--;
+            }
+            _shuffleTapeCursor = Math.Clamp(_shuffleTapeCursor, -1, _shuffleTapeVideoIds.Count - 1);
+        }
+        catch { /* ignore */ }
+    }
+
+    private void RecordRecentlyPlayedVideoId(string videoId)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(videoId))
+                return;
+
+            _recentlyPlayedVideoIds.Add(videoId);
+            var max = GetRecentlyPlayedWindowSize();
+            while (_recentlyPlayedVideoIds.Count > max)
+                _recentlyPlayedVideoIds.RemoveAt(0);
+        }
+        catch { /* ignore */ }
+    }
     /// <summary>Stack of previously played track VideoIds for "Previous" button navigation.</summary>
     private readonly Stack<string> _previousTrackHistory = new();
     /// <summary>Maximum number of entries in _previousTrackHistory to avoid unbounded growth.</summary>
     private const int MaxPreviousTrackHistory = 100;
+    private bool _suppressPreviousTrackHistoryPushOnce;
+
+    private void PlayTargetEntryNow(PlaylistEntry entry, bool suppressHistoryPushOnce)
+    {
+        try
+        {
+            _pendingResumeSeconds = 0;
+            _pendingResumeVideoId = null;
+            _suppressAutoScrollVideoId = null;
+
+            var idx = _originalEntries.FindIndex(e => string.Equals(e.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase));
+            if (idx < 0)
+                return;
+
+            _suppressPreviousTrackHistoryPushOnce = suppressHistoryPushOnce;
+            _engine.SetQueue(_originalEntries, startIndex: idx, raiseNowPlayingChanged: true);
+            _ = _engine.PlayCurrentAsync();
+        }
+        catch { /* ignore */ }
+    }
+
+    private void NavigateNextFromResolverBestEffort()
+    {
+        try
+        {
+            // Keep the old behavior: if current is a queued item, consume it on manual Next.
+            if (_nowPlayingEntry is not null && _queuedNext.Count > 0 &&
+                string.Equals(_queuedNext[0].Entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
+            {
+                _queuedNext.RemoveAt(0);
+                if (_queueItems.Count > 0 && _queueItems[0].IsQueued)
+                    _queueItems.RemoveAt(0);
+                UpdateQueueOrdinals();
+                _playlistWindow?.RefreshQueueView();
+                RequestPersistSnapshot();
+                if (_queuedNext.Count == 0)
+                    try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
+            }
+
+            var next = ResolveNextTrack();
+            if (next is null)
+            {
+                // End of list (repeat none) etc. Fall back to engine behavior.
+                _ = _engine.NextAsync();
+                return;
+            }
+
+            PlayTargetEntryNow(next, suppressHistoryPushOnce: false);
+        }
+        catch
+        {
+            try { _ = _engine.NextAsync(); } catch { /* ignore */ }
+        }
+    }
     ObservableCollection<QueueItem> _queueItems = new();
     ObservableCollection<QueueItem> _playlistItems = new ObservableCollection<QueueItem>();
     private readonly HashSet<string> _unavailableVideoIds = new(StringComparer.OrdinalIgnoreCase);
@@ -859,7 +1005,7 @@ public partial class MainWindow : Window
 
                     // Record previous track in history before updating _nowPlayingEntry.
                     // This enables "Previous" to navigate back to the actual previously playing track.
-                    if (_nowPlayingEntry is not null && !isSameTrack)
+                    if (_nowPlayingEntry is not null && !isSameTrack && !_suppressPreviousTrackHistoryPushOnce && !_shuffleEnabled)
                     {
                         var prevId = _nowPlayingEntry.VideoId;
                         if (!string.IsNullOrWhiteSpace(prevId))
@@ -875,13 +1021,14 @@ public partial class MainWindow : Window
                             }
                         }
                     }
+                    _suppressPreviousTrackHistoryPushOnce = false;
 
                     _nowPlayingEntry = entry;
 
-                    // Shuffle: remember which track is currently playing so ResolveNextTrack skips it
-                    _recentlyPlayedVideoIds.Add(entry.VideoId);
-                    if (_recentlyPlayedVideoIds.Count > 5)
-                        _recentlyPlayedVideoIds.RemoveAt(0);
+                    // Shuffle tape + "recently played" window for shuffle candidate selection.
+                    if (_shuffleEnabled)
+                        RecordNowPlayingForShuffleTape(entry.VideoId);
+                    RecordRecentlyPlayedVideoId(entry.VideoId);
 
                     // Only clear lyrics when the track actually changes.
                     // Resuming stopped playback on the same track should preserve lyrics.
@@ -3024,8 +3171,8 @@ public partial class MainWindow : Window
 
             _mediaHotkeys = new GlobalMediaHotkeys(hwnd);
             _mediaHotkeys.PlayPausePressed += (_, _) => Dispatcher.Invoke(OnGlobalPlayPause);
-            _mediaHotkeys.NextPressed += (_, _) => Dispatcher.Invoke(() => _ = _engine.NextAsync());
-            _mediaHotkeys.PrevPressed += (_, _) => Dispatcher.Invoke(() => _ = _engine.PrevAsync());
+            _mediaHotkeys.NextPressed += (_, _) => Dispatcher.Invoke(NavigateNextFromResolverBestEffort);
+            _mediaHotkeys.PrevPressed += (_, _) => Dispatcher.Invoke(() => NavigatePreviousFromHistoryBestEffort());
 
             _mediaHotkeys.TryRegister();
         }
@@ -3033,6 +3180,55 @@ public partial class MainWindow : Window
         {
             // ignore
         }
+    }
+
+    private void NavigatePreviousFromHistoryBestEffort()
+    {
+        try
+        {
+            _pendingResumeSeconds = 0;
+            _pendingResumeVideoId = null;
+            _suppressAutoScrollVideoId = null;
+
+            // Shuffle "tape": if we are at the beginning and user clicks Prev, disallow.
+            if (_shuffleEnabled)
+            {
+                if (_shuffleTapeCursor <= 0 || _shuffleTapeVideoIds.Count == 0)
+                    return;
+
+                // Walk back until we find an entry that still exists in the playlist.
+                for (var i = _shuffleTapeCursor - 1; i >= 0; i--)
+                {
+                    var prevVideoId = _shuffleTapeVideoIds[i];
+                    var prevEntry = _originalEntries.FirstOrDefault(e => string.Equals(e.VideoId, prevVideoId, StringComparison.OrdinalIgnoreCase));
+                    if (prevEntry is not null)
+                    {
+                        PlayTargetEntryNow(prevEntry, suppressHistoryPushOnce: true);
+                        return;
+                    }
+                }
+
+                // Nothing valid before current.
+                return;
+            }
+
+            // Try to navigate to the previous track from history first.
+            while (_previousTrackHistory.Count > 0)
+            {
+                var prevVideoId = _previousTrackHistory.Pop();
+                var prevEntry = _originalEntries.FirstOrDefault(e => string.Equals(e.VideoId, prevVideoId, StringComparison.OrdinalIgnoreCase));
+                if (prevEntry is not null)
+                {
+                    // Prevent "ping-pong": when going back, don't immediately push the current track into history.
+                    PlayTargetEntryNow(prevEntry, suppressHistoryPushOnce: true);
+                    return;
+                }
+            }
+        }
+        catch { /* ignore */ }
+
+        // Fallback to engine default.
+        try { _ = _engine.PrevAsync(); } catch { /* ignore */ }
     }
 
     private void PlaylistToolsButton_OnClick(object sender, RoutedEventArgs e)
@@ -5867,6 +6063,18 @@ public partial class MainWindow : Window
                 return;
 
             _nowPlayingEntry = cur;
+            try
+            {
+                // Startup restore path can bypass NowPlayingChanged; make sure shuffle tape / recently-played
+                // state is seeded so the current track is reachable via Prev after the next shuffle advance.
+                if (_shuffleEnabled)
+                {
+                    if (_shuffleTapeVideoIds.Count == 0 || _shuffleTapeCursor < 0)
+                        RecordNowPlayingForShuffleTape(cur.VideoId);
+                }
+                RecordRecentlyPlayedVideoId(cur.VideoId);
+            }
+            catch { /* ignore */ }
             _nowPlayingStatus = _engine.IsPlaying
                 ? "PLAYING"
                 : (_engine.CanResume ? "PAUSED" : "STOPPED");
@@ -6509,30 +6717,7 @@ public partial class MainWindow : Window
 
     private void PrevButton_OnClick(object sender, RoutedEventArgs e)
     {
-        _pendingResumeSeconds = 0;
-        _pendingResumeVideoId = null;
-        _suppressAutoScrollVideoId = null;
-
-        // Try to navigate to the previous track from history first.
-        if (_previousTrackHistory.Count > 0)
-        {
-            var prevVideoId = _previousTrackHistory.Pop();
-            // Find the previous track in the current playlist.
-            var prevEntry = _originalEntries.FirstOrDefault(e =>
-                string.Equals(e.VideoId, prevVideoId, StringComparison.OrdinalIgnoreCase));
-            if (prevEntry is not null)
-            {
-                // Set queue to the current playlist, starting at the previous track.
-                var startIndex = _originalEntries.FindIndex(e =>
-                    string.Equals(e.VideoId, prevVideoId, StringComparison.OrdinalIgnoreCase));
-                _engine.SetQueue(_originalEntries, startIndex: startIndex >= 0 ? startIndex : 0, raiseNowPlayingChanged: true);
-                return;
-            }
-            // If the previous track is no longer in the playlist, fall through to the default behavior.
-        }
-
-        // Fall back to engine default: go to index 0 or CurrentIndex - 1.
-        _ = _engine.PrevAsync();
+        NavigatePreviousFromHistoryBestEffort();
     }
 
     private void StopButton_OnClick(object sender, RoutedEventArgs e)
@@ -6585,29 +6770,33 @@ public partial class MainWindow : Window
 
     private void NextButton_OnClick(object sender, RoutedEventArgs e)
     {
-        _pendingResumeSeconds = 0;
-
-        // Consume current track from queue if it's queued (manual Next doesn't fire TrackEnded)
-        if (_nowPlayingEntry is not null && _queuedNext.Count > 0 &&
-            string.Equals(_queuedNext[0].Entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
-        {
-            _queuedNext.RemoveAt(0);
-            if (_queueItems.Count > 0 && _queueItems[0].IsQueued)
-                _queueItems.RemoveAt(0);
-            UpdateQueueOrdinals();
-            _playlistWindow?.RefreshQueueView();
-            RequestPersistSnapshot();
-            if (_queuedNext.Count == 0)
-                try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
-        }
-
-        _ = _engine.NextAsync();
+        NavigateNextFromResolverBestEffort();
     }
 
     private void SetShuffleEnabled(bool enabled)
     {
         _shuffleEnabled = enabled;
         UpdateShuffleToggleContent();
+
+        try
+        {
+            // Seed/reset shuffle tape when enabling shuffle so the current track becomes the first tape item.
+            if (_shuffleEnabled)
+            {
+                _shuffleTapeVideoIds.Clear();
+                _shuffleTapeCursor = -1;
+                var curId = _engine.GetCurrent()?.VideoId;
+                if (!string.IsNullOrWhiteSpace(curId))
+                    RecordNowPlayingForShuffleTape(curId);
+            }
+            else
+            {
+                _shuffleTapeVideoIds.Clear();
+                _shuffleTapeCursor = -1;
+            }
+        }
+        catch { /* ignore */ }
+
         ApplyShuffleAndPreserveCurrent();
     }
 
@@ -7163,6 +7352,9 @@ public partial class MainWindow : Window
             _hasLoadedPlaylist = true;
             _recentlyPlayedVideoIds.Clear();
             _previousTrackHistory.Clear();
+            _shuffleTapeVideoIds.Clear();
+            _shuffleTapeCursor = -1;
+            _shuffleNextBuffer.Clear();
             UpdateRefreshEnabled();
             FocusPlaylistOnNowPlaying();
             UpdatePlaylistTitleDisplayForNowPlaying();
@@ -7455,6 +7647,19 @@ public partial class MainWindow : Window
             {
                 var currentId = _engine.GetCurrent()?.VideoId;
 
+                // If the user previously navigated back in shuffle history, move forward within the tape first.
+                if (_shuffleTapeCursor >= 0 && _shuffleTapeCursor < _shuffleTapeVideoIds.Count - 1)
+                {
+                    // Skip over any tape entries that no longer exist in the playlist.
+                    for (var i = _shuffleTapeCursor + 1; i < _shuffleTapeVideoIds.Count; i++)
+                    {
+                        var vid = _shuffleTapeVideoIds[i];
+                        var e = _originalEntries.FirstOrDefault(x => string.Equals(x.VideoId, vid, StringComparison.OrdinalIgnoreCase));
+                        if (e is not null)
+                            return e;
+                    }
+                }
+
                 // Build candidate list: exclude current track, recently played, and unavailable tracks
                 var candidates = _originalEntries
                     .Where(e => !string.Equals(e.VideoId, currentId, StringComparison.OrdinalIgnoreCase)
@@ -7480,11 +7685,6 @@ public partial class MainWindow : Window
                 }
 
                 if (candidates.Count == 0) return null; // No playable tracks
-
-                // Track current as recently played for next time
-                _recentlyPlayedVideoIds.Add(currentId!);
-                if (_recentlyPlayedVideoIds.Count > 5)
-                    _recentlyPlayedVideoIds.RemoveAt(0);
 
                 // Pop the next track from the shuffle buffer (pre-populated with upcoming tracks)
                 PlaylistEntry? nextTrack = null;
@@ -7549,6 +7749,11 @@ public partial class MainWindow : Window
 
             if (_shuffleEnabled)
             {
+                // If we're in the middle of the shuffle tape, Next will be a history-forward move.
+                // Suppress prefetch/preheat (lyrics + audio) for history traversal.
+                if (_shuffleTapeCursor >= 0 && _shuffleTapeCursor < _shuffleTapeVideoIds.Count - 1)
+                    return null;
+
                 if (_shuffleNextBuffer.Count > 0)
                     return _shuffleNextBuffer.Peek();
                 return null;
