@@ -33,7 +33,7 @@
         <Grid Margin="{DynamicResource App.Theme.WindowChromeContentMargin}">
             <Border SnapsToDevicePixels="{DynamicResource App.Theme.WindowChromeSnapsToDevicePixels}"
                     UseLayoutRounding="True"
-                    Background="{DynamicResource App.Brush.WindowBgImage.Playlist}"
+                    Background="{DynamicResource App.Brush.WindowBgImage.Lyrics}"
                     CornerRadius="{DynamicResource App.Theme.WindowCornerRadiusOuter}"/>
             <!-- Layer 3: Custom window border ring -->
             <local:WindowChromeFrameRing Panel.ZIndex="5"

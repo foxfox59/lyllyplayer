@@ -16,7 +16,8 @@ public partial class BackgroundDesignerWindow : Window
         RectN MainCompact,
         RectN MainUltra,
         RectN Playlist,
-        RectN OptionsLog);
+        RectN OptionsLog,
+        RectN Lyrics);
 
     private readonly BitmapSource _src;
     private readonly Action<Result>? _apply;
@@ -25,14 +26,16 @@ public partial class BackgroundDesignerWindow : Window
     private readonly double _mainUltraAspect;
     private readonly double _playlistAspect;
     private readonly double _optionsLogAspect;
+    private readonly double _lyricsAspect;
 
     private RectN _mainNormal;
     private RectN _mainCompact;
     private RectN _mainUltra;
     private RectN _playlist;
     private RectN _optionsLog;
+    private RectN _lyrics;
 
-    private string _target = "Main"; // Main | Playlist | OptionsLog
+    private string _target = "Main"; // Main | Playlist | OptionsLog | Lyrics
     private string _mainMode = "Default"; // Default | Compact | Ultra
 
     // Render mapping (image displayed rect inside host)
@@ -47,6 +50,7 @@ public partial class BackgroundDesignerWindow : Window
     private bool _lockAspectMainUltra = true;
     private bool _lockAspectPlaylist = true;
     private bool _lockAspectOptionsLog = true;
+    private bool _lockAspectLyrics = true;
     private bool _resizing;
     private RectN _resizeStartRect;
     private double _resizeAnchorX;
@@ -61,11 +65,13 @@ public partial class BackgroundDesignerWindow : Window
         RectN mainUltra,
         RectN playlist,
         RectN optionsLog,
+        RectN lyrics,
         double mainDefaultAspect,
         double mainCompactAspect,
         double mainUltraAspect,
         double playlistAspect,
         double optionsLogAspect,
+        double lyricsAspect,
         Action<Result>? apply)
     {
         _src = src;
@@ -75,12 +81,14 @@ public partial class BackgroundDesignerWindow : Window
         _mainUltraAspect = mainUltraAspect > 0 ? mainUltraAspect : 600.0 / 110.0;
         _playlistAspect = playlistAspect > 0 ? playlistAspect : 560.0 / 720.0;
         _optionsLogAspect = optionsLogAspect > 0 ? optionsLogAspect : 640.0 / 480.0;
+        _lyricsAspect = lyricsAspect > 0 ? lyricsAspect : 700.0 / 500.0;
         _apply = apply;
         _mainNormal = SettingsStore.NormalizeRectN(mainNormal);
         _mainCompact = SettingsStore.NormalizeRectN(mainCompact);
         _mainUltra = SettingsStore.NormalizeRectN(mainUltra);
         _playlist = SettingsStore.NormalizeRectN(playlist);
         _optionsLog = SettingsStore.NormalizeRectN(optionsLog);
+        _lyrics = SettingsStore.NormalizeRectN(lyrics);
         CoalesceInitialMainSubRects();
 
         InitializeComponent();
@@ -185,6 +193,7 @@ public partial class BackgroundDesignerWindow : Window
     {
         if (string.Equals(_target, "Playlist", StringComparison.OrdinalIgnoreCase)) return _lockAspectPlaylist;
         if (string.Equals(_target, "OptionsLog", StringComparison.OrdinalIgnoreCase)) return _lockAspectOptionsLog;
+        if (string.Equals(_target, "Lyrics", StringComparison.OrdinalIgnoreCase)) return _lockAspectLyrics;
         return _mainMode switch
         {
             "Compact" => _lockAspectMainCompact,
@@ -197,6 +206,7 @@ public partial class BackgroundDesignerWindow : Window
     {
         if (string.Equals(_target, "Playlist", StringComparison.OrdinalIgnoreCase)) { _lockAspectPlaylist = value; return; }
         if (string.Equals(_target, "OptionsLog", StringComparison.OrdinalIgnoreCase)) { _lockAspectOptionsLog = value; return; }
+        if (string.Equals(_target, "Lyrics", StringComparison.OrdinalIgnoreCase)) { _lockAspectLyrics = value; return; }
         if (_mainMode == "Compact") _lockAspectMainCompact = value;
         else if (_mainMode == "Ultra") _lockAspectMainUltra = value;
         else _lockAspectMainDefault = value;
@@ -215,6 +225,8 @@ public partial class BackgroundDesignerWindow : Window
             return _playlistAspect;
         if (string.Equals(_target, "OptionsLog", StringComparison.OrdinalIgnoreCase))
             return _optionsLogAspect;
+        if (string.Equals(_target, "Lyrics", StringComparison.OrdinalIgnoreCase))
+            return _lyricsAspect;
 
         return _mainMode switch
         {
@@ -304,6 +316,7 @@ public partial class BackgroundDesignerWindow : Window
     {
         if (string.Equals(_target, "Playlist", StringComparison.OrdinalIgnoreCase)) return _playlist;
         if (string.Equals(_target, "OptionsLog", StringComparison.OrdinalIgnoreCase)) return _optionsLog;
+        if (string.Equals(_target, "Lyrics", StringComparison.OrdinalIgnoreCase)) return _lyrics;
         return _mainMode switch
         {
             "Compact" => _mainCompact,
@@ -319,6 +332,7 @@ public partial class BackgroundDesignerWindow : Window
             r = CoerceToAspect(r, GetTargetAspectForRectN(), GetOuterConstraintIfAny());
         if (string.Equals(_target, "Playlist", StringComparison.OrdinalIgnoreCase)) { _playlist = r; return; }
         if (string.Equals(_target, "OptionsLog", StringComparison.OrdinalIgnoreCase)) { _optionsLog = r; return; }
+        if (string.Equals(_target, "Lyrics", StringComparison.OrdinalIgnoreCase)) { _lyrics = r; return; }
 
         if (_mainMode == "Compact") _mainCompact = ConstrainInside(_mainNormal, r);
         else if (_mainMode == "Ultra") _mainUltra = ConstrainInside(_mainNormal, r);
@@ -499,7 +513,7 @@ public partial class BackgroundDesignerWindow : Window
     {
         try
         {
-            _apply?.Invoke(new Result(_mainNormal, _mainCompact, _mainUltra, _playlist, _optionsLog));
+            _apply?.Invoke(new Result(_mainNormal, _mainCompact, _mainUltra, _playlist, _optionsLog, _lyrics));
         }
         catch { /* ignore */ }
     }
@@ -634,6 +648,7 @@ public partial class BackgroundDesignerWindow : Window
             // Store without re-coercing aspect (it already matches; we only moved).
             if (string.Equals(_target, "Playlist", StringComparison.OrdinalIgnoreCase)) _playlist = next;
             else if (string.Equals(_target, "OptionsLog", StringComparison.OrdinalIgnoreCase)) _optionsLog = next;
+            else if (string.Equals(_target, "Lyrics", StringComparison.OrdinalIgnoreCase)) _lyrics = next;
             else
             {
                 if (_mainMode == "Compact") _mainCompact = next;
@@ -779,6 +794,7 @@ public partial class BackgroundDesignerWindow : Window
             // Store directly (don't re-coerce aspect during drag; we already handled it above).
             if (string.Equals(_target, "Playlist", StringComparison.OrdinalIgnoreCase)) _playlist = next;
             else if (string.Equals(_target, "OptionsLog", StringComparison.OrdinalIgnoreCase)) _optionsLog = next;
+            else if (string.Equals(_target, "Lyrics", StringComparison.OrdinalIgnoreCase)) _lyrics = next;
             else
             {
                 if (_mainMode == "Compact") _mainCompact = next;

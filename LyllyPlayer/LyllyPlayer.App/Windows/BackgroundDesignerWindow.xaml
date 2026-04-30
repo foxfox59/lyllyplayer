@@ -160,6 +160,7 @@
                                     <ComboBoxItem Content="Main" Tag="Main" IsSelected="True"/>
                                     <ComboBoxItem Content="Playlist" Tag="Playlist"/>
                                     <ComboBoxItem Content="Options / Log" Tag="OptionsLog"/>
+                                    <ComboBoxItem Content="Lyrics" Tag="Lyrics"/>
                                 </ComboBox>
                             </StackPanel>
 

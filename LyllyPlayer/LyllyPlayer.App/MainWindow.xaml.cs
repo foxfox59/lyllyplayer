@@ -557,6 +557,7 @@ public partial class MainWindow : Window
     private RectN? _backgroundUserDefinedMainUltra;
     private RectN? _backgroundUserDefinedPlaylist;
     private RectN? _backgroundUserDefinedOptionsLog;
+    private RectN? _backgroundUserDefinedLyrics;
     private LyllyPlayer.Windows.BackgroundDesignerWindow? _backgroundDesignerWindow;
     // Cached, measured window aspects (width/height) for background designer locking.
     // These are updated after layout settles so UserDefined crops match the real window footprint.
@@ -802,6 +803,7 @@ public partial class MainWindow : Window
         _backgroundUserDefinedMainUltra = _startupSettings.BackgroundUserDefinedMainUltra;
         _backgroundUserDefinedPlaylist = _startupSettings.BackgroundUserDefinedPlaylist;
         _backgroundUserDefinedOptionsLog = _startupSettings.BackgroundUserDefinedOptionsLog;
+        _backgroundUserDefinedLyrics = _startupSettings.BackgroundUserDefinedLyrics;
         ApplyBackgroundFromSettings();
         ApplyBackgroundColorsFromSettings();
         ApplyAlwaysOnTopFromSettings();
@@ -4360,6 +4362,8 @@ public partial class MainWindow : Window
                 setBackgroundUserDefinedPlaylist: (r) => { _backgroundUserDefinedPlaylist = r; },
                 getBackgroundUserDefinedOptionsLog: () => _backgroundUserDefinedOptionsLog,
                 setBackgroundUserDefinedOptionsLog: (r) => { _backgroundUserDefinedOptionsLog = r; },
+                getBackgroundUserDefinedLyrics: () => _backgroundUserDefinedLyrics,
+                setBackgroundUserDefinedLyrics: (r) => { _backgroundUserDefinedLyrics = r; },
                 openBackgroundDesigner: () => OpenBackgroundDesigner(),
                 getAppTitleMode: () => _appTitleMode,
                 setAppTitleMode: (m) =>
@@ -8400,6 +8404,7 @@ public partial class MainWindow : Window
             BackgroundUserDefinedMainUltra: _backgroundUserDefinedMainUltra,
             BackgroundUserDefinedPlaylist: _backgroundUserDefinedPlaylist,
             BackgroundUserDefinedOptionsLog: _backgroundUserDefinedOptionsLog,
+            BackgroundUserDefinedLyrics: _backgroundUserDefinedLyrics,
             AppTitleMode: _appTitleMode,
             CustomAppTitle: string.IsNullOrWhiteSpace(_customAppTitle) ? null : _customAppTitle.Trim(),
             AppIconVisibility: _appIconVisibility,
@@ -8499,6 +8504,7 @@ public partial class MainWindow : Window
             System.Windows.Media.Brush mainBrush;
             System.Windows.Media.Brush playlistBrush;
             System.Windows.Media.Brush optionsLogBrush;
+            System.Windows.Media.Brush lyricsBrush;
             System.Windows.Media.ImageBrush? rawMain = null;
             var isUserDefined = string.Equals(
                 SettingsStore.NormalizeBackgroundImageStretch(_backgroundImageStretch),
@@ -8522,6 +8528,7 @@ public partial class MainWindow : Window
                 mainBrush = surface;
                 playlistBrush = surface;
                 optionsLogBrush = surface;
+                lyricsBrush = surface;
             }
             else if (string.Equals(mode, "Custom", StringComparison.OrdinalIgnoreCase) &&
                      !string.IsNullOrWhiteSpace(_customBackgroundImagePath) &&
@@ -8546,6 +8553,11 @@ public partial class MainWindow : Window
                 ApplyBackgroundImageLayoutToBrushForTarget(imgOl, bi, _backgroundImageStretch, target: "OptionsLog");
                 try { imgOl.Freeze(); } catch { /* ignore */ }
                 optionsLogBrush = imgOl;
+
+                var imgLy = new System.Windows.Media.ImageBrush(bi);
+                ApplyBackgroundImageLayoutToBrushForTarget(imgLy, bi, _backgroundImageStretch, target: "Lyrics");
+                try { imgLy.Freeze(); } catch { /* ignore */ }
+                lyricsBrush = imgLy;
             }
             else
             {
@@ -8568,6 +8580,11 @@ public partial class MainWindow : Window
                     ApplyBackgroundImageLayoutToBrushForTarget(imgOl, srcDef, _backgroundImageStretch, target: "OptionsLog");
                     try { imgOl.Freeze(); } catch { /* ignore */ }
                     optionsLogBrush = imgOl;
+
+                    var imgLy = new System.Windows.Media.ImageBrush(srcDef);
+                    ApplyBackgroundImageLayoutToBrushForTarget(imgLy, srcDef, _backgroundImageStretch, target: "Lyrics");
+                    try { imgLy.Freeze(); } catch { /* ignore */ }
+                    lyricsBrush = imgLy;
                 }
                 else
                 {
@@ -8575,6 +8592,7 @@ public partial class MainWindow : Window
                     mainBrush = (System.Windows.Media.Brush)System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"];
                     playlistBrush = mainBrush;
                     optionsLogBrush = mainBrush;
+                    lyricsBrush = mainBrush;
                 }
             }
 
@@ -8588,6 +8606,8 @@ public partial class MainWindow : Window
                 ApplyScrimIfNeeded(playlistBrush, scrimPercent: _backgroundScrimPercent);
             System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.OptionsLog"] =
                 ApplyScrimIfNeeded(optionsLogBrush, scrimPercent: _backgroundScrimPercent);
+            System.Windows.Application.Current.Resources["App.Brush.WindowBgImage.Lyrics"] =
+                ApplyScrimIfNeeded(lyricsBrush, scrimPercent: _backgroundScrimPercent);
 
             // Legacy key (fallback).
             System.Windows.Application.Current.Resources["App.Brush.WindowBgImage"] =
@@ -8627,6 +8647,8 @@ public partial class MainWindow : Window
                 return _backgroundUserDefinedPlaylist;
             if (string.Equals(target, "OptionsLog", StringComparison.OrdinalIgnoreCase))
                 return _backgroundUserDefinedOptionsLog;
+            if (string.Equals(target, "Lyrics", StringComparison.OrdinalIgnoreCase))
+                return _backgroundUserDefinedLyrics;
 
             // Main target: choose sub-rect by current main layout state.
             if (_mainWindowCompact)
@@ -8835,6 +8857,7 @@ public partial class MainWindow : Window
             var mainUltraAspect = _measuredMainUltraAspect;
             var playlistAspect = (_playlistWindow is not null) ? SafeAspectFromWindow(_playlistWindow, _lastPlaylistBounds) : 0;
             var optionsLogAspect = (_optionsWindow is not null) ? SafeAspectFromWindow(_optionsWindow, _lastOptionsBounds) : 0;
+            var lyricsAspect = (_lyricsWindow is not null) ? SafeAspectFromWindow(_lyricsWindow, _lastLyricsBounds) : 0;
 
             var win = new LyllyPlayer.Windows.BackgroundDesignerWindow(
                 src: src,
@@ -8858,11 +8881,16 @@ public partial class MainWindow : Window
                     _backgroundUserDefinedOptionsLog
                     ?? (_optionsWindow is not null ? _optionsWindow.GetBackgroundDesignerDraft().optionsLog : RectN.Full)
                 ),
+                lyrics: (
+                    _backgroundUserDefinedLyrics
+                    ?? (_optionsWindow is not null ? _optionsWindow.GetBackgroundDesignerDraft().lyrics : RectN.Full)
+                ),
                 mainDefaultAspect: mainDefaultAspect,
                 mainCompactAspect: mainCompactAspect,
                 mainUltraAspect: mainUltraAspect,
                 playlistAspect: playlistAspect,
                 optionsLogAspect: optionsLogAspect,
+                lyricsAspect: lyricsAspect,
                 apply: (r) =>
                 {
                     try
@@ -8872,6 +8900,7 @@ public partial class MainWindow : Window
                         _backgroundUserDefinedMainUltra = r.MainUltra;
                         _backgroundUserDefinedPlaylist = r.Playlist;
                         _backgroundUserDefinedOptionsLog = r.OptionsLog;
+                        _backgroundUserDefinedLyrics = r.Lyrics;
 
                         ApplyBackgroundFromSettings();
                         ApplyBackgroundColorsFromSettings();
@@ -8883,7 +8912,8 @@ public partial class MainWindow : Window
                                 mainCompact: r.MainCompact,
                                 mainUltra: r.MainUltra,
                                 playlist: r.Playlist,
-                                optionsLog: r.OptionsLog);
+                                optionsLog: r.OptionsLog,
+                                lyrics: r.Lyrics);
                         }
                         catch { /* ignore */ }
                     }

@@ -48,6 +48,12 @@
                     AlignmentX="Center"
                     AlignmentY="Center"/>
 
+        <ImageBrush x:Key="App.Brush.WindowBgImage.Lyrics"
+                    ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"
+                    Stretch="Fill"
+                    AlignmentX="Center"
+                    AlignmentY="Center"/>
+
         <!-- Raw image background (no scrim). Used for 'From image' color sampling. -->
         <ImageBrush x:Key="App.Brush.WindowBgImageRaw"
                     ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"

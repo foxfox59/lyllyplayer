@@ -94,6 +94,7 @@ public sealed record AppSettings(
     RectN? BackgroundUserDefinedMainUltra,
     RectN? BackgroundUserDefinedPlaylist,
     RectN? BackgroundUserDefinedOptionsLog,
+    RectN? BackgroundUserDefinedLyrics,
     string? AppTitleMode,
     string? CustomAppTitle,
     /// <summary>Where the app icon is shown: TaskbarAndTray | TaskbarOnly | TrayOnly.</summary>

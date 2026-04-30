@@ -6,18 +6,18 @@
 **[1.1.0 in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**  
 **[Using the Theme Designer in 1.2.0 (YouTube link)](https://www.youtube.com/watch?v=Z1lniBzXm9Q)**  
 **[Compound playlists - song queue - M3U export in 1.4.1 (YouTube link)](https://www.youtube.com/watch?v=K855yiYLzeQ)**
-  
+
 [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
 ## Known issues
 
-  - Lyrics prefetch has a really annoying bug where it tries to prefetch the *current* track. Trying to fix.
-  - Lyrics fetching (1.5.0+) is a huge optimistic mess, works most of the time but don't be surprised if you occasionally get the wrong song, it's not perfect (yet)
-  - DisplayFusion has a slight conflict/race situation with how LyllyPlayer handles "always on top" - for now, use the Compatibility settings in DF. I'm going to fix this at some point, just not right now.
+- Lyrics prefetch has a really annoying bug where it tries to prefetch the *current* track. Trying to fix.
+- Lyrics fetching (1.5.0+) is a huge optimistic mess, works most of the time but don't be surprised if you occasionally get the wrong song, it's not perfect (yet)
+- DisplayFusion has a slight conflict/race situation with how LyllyPlayer handles "always on top" - for now, use the Compatibility settings in DF. I'm going to fix this at some point, just not right now.
 
----  
+---
 
 A multi-function desktop audio player with minimal external requirements: **ffmpeg** for any audio output, and **yt-dlp** for Youtube functionality.
 Supports login cookies from browser if you have **node.js**, but not required for playback in most cases.  

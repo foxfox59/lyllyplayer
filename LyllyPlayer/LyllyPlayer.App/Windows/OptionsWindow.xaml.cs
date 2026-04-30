@@ -131,6 +131,8 @@ public partial class OptionsWindow : Window
     private readonly Action<LyllyPlayer.Settings.RectN?> _setBackgroundUserDefinedPlaylist;
     private readonly Func<LyllyPlayer.Settings.RectN?> _getBackgroundUserDefinedOptionsLog;
     private readonly Action<LyllyPlayer.Settings.RectN?> _setBackgroundUserDefinedOptionsLog;
+    private readonly Func<LyllyPlayer.Settings.RectN?> _getBackgroundUserDefinedLyrics;
+    private readonly Action<LyllyPlayer.Settings.RectN?> _setBackgroundUserDefinedLyrics;
 
     private sealed class Draft
     {
@@ -153,6 +155,7 @@ public partial class OptionsWindow : Window
         public LyllyPlayer.Settings.RectN BackgroundUserDefinedMainUltra = LyllyPlayer.Settings.RectN.Full;
         public LyllyPlayer.Settings.RectN BackgroundUserDefinedPlaylist = LyllyPlayer.Settings.RectN.Full;
         public LyllyPlayer.Settings.RectN BackgroundUserDefinedOptionsLog = LyllyPlayer.Settings.RectN.Full;
+        public LyllyPlayer.Settings.RectN BackgroundUserDefinedLyrics = LyllyPlayer.Settings.RectN.Full;
         public string AppTitleMode = "Default";
         public string CustomAppTitle = "";
         public int UiScalePercent = 100;
@@ -236,6 +239,8 @@ public partial class OptionsWindow : Window
         Action<LyllyPlayer.Settings.RectN?> setBackgroundUserDefinedPlaylist,
         Func<LyllyPlayer.Settings.RectN?> getBackgroundUserDefinedOptionsLog,
         Action<LyllyPlayer.Settings.RectN?> setBackgroundUserDefinedOptionsLog,
+        Func<LyllyPlayer.Settings.RectN?> getBackgroundUserDefinedLyrics,
+        Action<LyllyPlayer.Settings.RectN?> setBackgroundUserDefinedLyrics,
         Action openBackgroundDesigner,
         Func<string> getAppTitleMode,
         Action<string> setAppTitleMode,
@@ -334,6 +339,8 @@ public partial class OptionsWindow : Window
         _setBackgroundUserDefinedPlaylist = setBackgroundUserDefinedPlaylist;
         _getBackgroundUserDefinedOptionsLog = getBackgroundUserDefinedOptionsLog;
         _setBackgroundUserDefinedOptionsLog = setBackgroundUserDefinedOptionsLog;
+        _getBackgroundUserDefinedLyrics = getBackgroundUserDefinedLyrics;
+        _setBackgroundUserDefinedLyrics = setBackgroundUserDefinedLyrics;
         _openBackgroundDesigner = openBackgroundDesigner;
         _getAppTitleMode = getAppTitleMode;
         _setAppTitleMode = setAppTitleMode;
@@ -464,6 +471,7 @@ public partial class OptionsWindow : Window
         try { _draft.BackgroundUserDefinedMainUltra = _getBackgroundUserDefinedMainUltra() ?? _draft.BackgroundUserDefinedMainNormal; } catch { _draft.BackgroundUserDefinedMainUltra = _draft.BackgroundUserDefinedMainNormal; }
         try { _draft.BackgroundUserDefinedPlaylist = _getBackgroundUserDefinedPlaylist() ?? LyllyPlayer.Settings.RectN.Full; } catch { _draft.BackgroundUserDefinedPlaylist = LyllyPlayer.Settings.RectN.Full; }
         try { _draft.BackgroundUserDefinedOptionsLog = _getBackgroundUserDefinedOptionsLog() ?? LyllyPlayer.Settings.RectN.Full; } catch { _draft.BackgroundUserDefinedOptionsLog = LyllyPlayer.Settings.RectN.Full; }
+        try { _draft.BackgroundUserDefinedLyrics = _getBackgroundUserDefinedLyrics() ?? LyllyPlayer.Settings.RectN.Full; } catch { _draft.BackgroundUserDefinedLyrics = LyllyPlayer.Settings.RectN.Full; }
         try { _draft.AppTitleMode = string.IsNullOrWhiteSpace(_getAppTitleMode()) ? "Default" : _getAppTitleMode().Trim(); } catch { _draft.AppTitleMode = "Default"; }
         try { _draft.CustomAppTitle = _getCustomAppTitle() ?? ""; } catch { _draft.CustomAppTitle = ""; }
         try { _draft.UiScalePercent = Math.Clamp(_getUiScalePercent(), 50, 200); } catch { _draft.UiScalePercent = 100; }
@@ -1420,6 +1428,7 @@ public partial class OptionsWindow : Window
         TryApply("Background crop (Main ultra)", () => _setBackgroundUserDefinedMainUltra(_draft.BackgroundUserDefinedMainUltra));
         TryApply("Background crop (Playlist)", () => _setBackgroundUserDefinedPlaylist(_draft.BackgroundUserDefinedPlaylist));
         TryApply("Background crop (Options/Log)", () => _setBackgroundUserDefinedOptionsLog(_draft.BackgroundUserDefinedOptionsLog));
+        TryApply("Background crop (Lyrics)", () => _setBackgroundUserDefinedLyrics(_draft.BackgroundUserDefinedLyrics));
         TryApply("Title mode", () => _setAppTitleMode((_draft.AppTitleMode ?? "Default").Trim()));
         TryApply("Custom title", () => _setCustomAppTitle(_draft.CustomAppTitle ?? ""));
         TryApply("UI scale", () => _setUiScalePercent(Math.Clamp(_draft.UiScalePercent, 50, 200)));
@@ -1848,7 +1857,7 @@ public partial class OptionsWindow : Window
         }
     }
 
-    public void UpdateBackgroundDesignerDraft(LyllyPlayer.Settings.RectN mainNormal, LyllyPlayer.Settings.RectN mainCompact, LyllyPlayer.Settings.RectN mainUltra, LyllyPlayer.Settings.RectN playlist, LyllyPlayer.Settings.RectN optionsLog)
+    public void UpdateBackgroundDesignerDraft(LyllyPlayer.Settings.RectN mainNormal, LyllyPlayer.Settings.RectN mainCompact, LyllyPlayer.Settings.RectN mainUltra, LyllyPlayer.Settings.RectN playlist, LyllyPlayer.Settings.RectN optionsLog, LyllyPlayer.Settings.RectN lyrics)
     {
         try
         {
@@ -1857,11 +1866,12 @@ public partial class OptionsWindow : Window
             _draft.BackgroundUserDefinedMainUltra = mainUltra;
             _draft.BackgroundUserDefinedPlaylist = playlist;
             _draft.BackgroundUserDefinedOptionsLog = optionsLog;
+            _draft.BackgroundUserDefinedLyrics = lyrics;
         }
         catch { /* ignore */ }
     }
 
-    public (LyllyPlayer.Settings.RectN mainNormal, LyllyPlayer.Settings.RectN mainCompact, LyllyPlayer.Settings.RectN mainUltra, LyllyPlayer.Settings.RectN playlist, LyllyPlayer.Settings.RectN optionsLog)
+    public (LyllyPlayer.Settings.RectN mainNormal, LyllyPlayer.Settings.RectN mainCompact, LyllyPlayer.Settings.RectN mainUltra, LyllyPlayer.Settings.RectN playlist, LyllyPlayer.Settings.RectN optionsLog, LyllyPlayer.Settings.RectN lyrics)
         GetBackgroundDesignerDraft()
     {
         try
@@ -1871,12 +1881,14 @@ public partial class OptionsWindow : Window
                 _draft.BackgroundUserDefinedMainCompact,
                 _draft.BackgroundUserDefinedMainUltra,
                 _draft.BackgroundUserDefinedPlaylist,
-                _draft.BackgroundUserDefinedOptionsLog
+                _draft.BackgroundUserDefinedOptionsLog,
+                _draft.BackgroundUserDefinedLyrics
             );
         }
         catch
         {
             return (
+                LyllyPlayer.Settings.RectN.Full,
                 LyllyPlayer.Settings.RectN.Full,
                 LyllyPlayer.Settings.RectN.Full,
                 LyllyPlayer.Settings.RectN.Full,
@@ -2176,6 +2188,7 @@ public partial class OptionsWindow : Window
         try { _setBackgroundUserDefinedMainUltra(_draft.BackgroundUserDefinedMainUltra); } catch { /* ignore */ }
         try { _setBackgroundUserDefinedPlaylist(_draft.BackgroundUserDefinedPlaylist); } catch { /* ignore */ }
         try { _setBackgroundUserDefinedOptionsLog(_draft.BackgroundUserDefinedOptionsLog); } catch { /* ignore */ }
+        try { _setBackgroundUserDefinedLyrics(_draft.BackgroundUserDefinedLyrics); } catch { /* ignore */ }
         try { _setAppTitleMode((_draft.AppTitleMode ?? "Default").Trim()); } catch { /* ignore */ }
         try { _setCustomAppTitle(_draft.CustomAppTitle ?? ""); } catch { /* ignore */ }
         try { _setUiScalePercent(Math.Clamp(_draft.UiScalePercent, 50, 200)); } catch { /* ignore */ }
