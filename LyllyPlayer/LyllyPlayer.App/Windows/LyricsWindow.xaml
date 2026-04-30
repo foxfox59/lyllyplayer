@@ -156,7 +156,7 @@
                              BorderThickness="0"
                              VirtualizingStackPanel.IsVirtualizing="False"
                              VirtualizingStackPanel.VirtualizationMode="Standard"
-                             ScrollViewer.CanContentScroll="True"
+                             ScrollViewer.CanContentScroll="False"
                              ScrollViewer.IsDeferredScrollingEnabled="False"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"

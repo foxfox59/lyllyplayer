@@ -599,6 +599,7 @@ public partial class MainWindow : Window
     private bool _lyricsLocalFilesEnabled;
     private LyricsManager _lyricsManager = new();
     private DispatcherTimer? _lyricsTimer;
+    private int _lastDisplayedLyricLineIndex = int.MinValue;
     private string? _lyricsResolvedVideoId;
     private System.Drawing.Icon? _trayIcon;
     private bool? _lastAppliedShowInTaskbar;
@@ -890,6 +891,7 @@ public partial class MainWindow : Window
                         // from the previous track. TryResolveLyricsAsync (called async below) will
                         // call Refresh() again once new lyrics are resolved.
                         _lyricsManager.Clear();
+                        _lastDisplayedLyricLineIndex = int.MinValue;
                         _lyricsResolvedVideoId = null;
                         _lyricsWindow?.Refresh();
                     }
@@ -940,6 +942,20 @@ public partial class MainWindow : Window
                 _nowPlayingStatus = isPlaying ? "BUFFERING" : (_engine.CanResume ? "PAUSED" : "STOPPED");
                 UpdateNowPlayingText();
                 UpdatePlaylistTitleDisplayForNowPlaying();
+
+                // Lyrics update cadence: run a lightweight timer only while playing.
+                // When paused/stopped, refresh once to keep the correct line highlighted.
+                try
+                {
+                    if (_lyricsEnabled && isPlaying)
+                        _startLyricsTimer();
+                    else
+                    {
+                        _stopLyricsTimer();
+                        UpdateLyricsDisplay(force: true);
+                    }
+                }
+                catch { /* ignore */ }
             });
         _engine.PlaybackFailed += (_, payload) =>
             Dispatcher.Invoke(() => HandlePlaybackFailed(payload.entry, payload.message));
@@ -2038,10 +2054,9 @@ public partial class MainWindow : Window
             }
             else
             {
-                // Expanded: transport * (clips if crowded) so the volume strip never extends past the card edge.
-                TransportVolumeRowGrid.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
-
-                TransportVolumeRowGrid.ColumnDefinitions[1].Width = new GridLength(0);
+                // Expanded: keep Auto + spacer + Auto (same as XAML) to avoid subtle clipping of the last button.
+                TransportVolumeRowGrid.ColumnDefinitions[0].Width = GridLength.Auto;
+                TransportVolumeRowGrid.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
                 var needReparent = VisualizerBorder.Parent != PlaybackCardInnerGrid || Grid.GetRow(VisualizerBorder) != 0;
                 if (needReparent)
                 {
@@ -3529,6 +3544,9 @@ public partial class MainWindow : Window
             _lyricsWindow.Closed += (_, _) =>
             {
                 _lyricsWindow = null;
+                // Ultra-compact title bar shows lyric line only when the lyrics window is closed.
+                // Force a refresh on close (even when paused) so the title bar switches immediately.
+                try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
             };
 
             ApplyLyricsWindowSettings(latestSettings, _lyricsWindow);
@@ -3536,6 +3554,9 @@ public partial class MainWindow : Window
             _lyricsWindow.MinHeight = 300.0 * UiScale;
 
             _lyricsWindow.Show();
+            // Ultra-compact title bar shows lyric line only when the lyrics window is closed.
+            // Force a refresh on open so the title switches immediately (even if the lyric line hasn't changed yet).
+            try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
 
             ApplyAlwaysOnTopFromSettings();
             // Restore snapped positioning relative to main window if previously snapped.
@@ -4233,10 +4254,11 @@ public partial class MainWindow : Window
                 setLyricsEnabled: (v) =>
                 {
                     _lyricsEnabled = v;
-                    if (v)
+                    if (!v)
+                        _stopLyricsTimer();
+                    else if (_engine.IsPlaying)
                         _startLyricsTimer();
-                    else
-                        _lyricsTimer?.Stop();
+                    try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
                     RequestPersistSnapshot();
                 },
                 getLyricsLocalFilesEnabled: () => _lyricsLocalFilesEnabled,
@@ -5753,9 +5775,19 @@ public partial class MainWindow : Window
             _nowPlayingStatus = _engine.IsPlaying
                 ? "PLAYING"
                 : (_engine.CanResume ? "PAUSED" : "STOPPED");
+            try
+            {
+                if (cur.DurationSeconds is int d && d > 0)
+                    _engine.OverrideCurrentDurationSeconds(d);
+                UpdateDurationUi(cur.DurationSeconds);
+            }
+            catch { /* ignore */ }
             UpdateNowPlayingText();
             UpdatePlaylistTitleDisplayForNowPlaying();
             _ = TryResolveLyricsAsync();
+            // Startup restore path can bypass NowPlayingChanged; kick enrichment so duration/seek overlay appears.
+            _ = EnrichLocalNowPlayingAsync(cur);
+            _ = EnrichYoutubeDurationNowPlayingAsync(cur);
         }
         catch
         {
@@ -6331,6 +6363,7 @@ public partial class MainWindow : Window
             // Full UI sync now that origins are correct
             SyncNowPlayingFromEngine();
             UpdatePlaylistTitleDisplayForNowPlaying();
+            try { _ = TryResolveLyricsAsync(); } catch { /* ignore */ }
             // SetStatusMessage("INFO", _originalEntries.Count == 0 ? "Playlist is empty." : $"Loaded {_originalEntries.Count} items.");
 
             return true;
@@ -8108,6 +8141,7 @@ public partial class MainWindow : Window
             SeekSlider.Minimum = 0;
             SeekSlider.Maximum = 1;
             SeekSlider.Value = 0;
+            try { UpdateUltraSeekOverlay(_engine.CurrentPositionSeconds, durationSeconds); } catch { /* ignore */ }
             return;
         }
 
@@ -8144,6 +8178,8 @@ public partial class MainWindow : Window
             }
         }
         catch { /* ignore */ }
+
+        try { UpdateUltraSeekOverlay(_engine.CurrentPositionSeconds, durationSeconds); } catch { /* ignore */ }
     }
 
     private void UpdateTimelineUi()
@@ -8153,6 +8189,7 @@ public partial class MainWindow : Window
 
         var dur = _engine.CurrentDurationSeconds;
         var pos = _engine.CurrentPositionSeconds;
+        try { UpdateUltraSeekOverlay(pos, dur); } catch { /* ignore */ }
 
         // If we were paused when closed, keep showing the saved position until playback starts.
         try
@@ -8173,6 +8210,7 @@ public partial class MainWindow : Window
                 try { SeekSlider.Value = clampedPending; }
                 finally { _ignoreSeekBar = false; }
 
+                try { UpdateUltraSeekOverlay(clampedPending, pdur); } catch { /* ignore */ }
                 return;
             }
         }
@@ -8194,6 +8232,55 @@ public partial class MainWindow : Window
         {
             _ignoreSeekBar = false;
         }
+    }
+
+    private void UpdateUltraSeekOverlay(double posSeconds, int? durationSeconds)
+    {
+        if (UltraSeekOverlayCanvas is null || UltraSeekFillRect is null || UltraSeekThumbRect is null || VisualizerHostGrid is null)
+            return;
+
+        var ultra = _mainWindowCompact && string.Equals(_compactModeLayout, "Ultra", StringComparison.OrdinalIgnoreCase);
+        if (!ultra || durationSeconds is not int dur || dur <= 0)
+        {
+            UltraSeekOverlayCanvas.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        // On startup, ActualWidth may be 0 until layout completes; defer one refresh rather than staying collapsed forever.
+        if (VisualizerHostGrid.ActualWidth <= 1)
+        {
+            UltraSeekOverlayCanvas.Visibility = Visibility.Collapsed;
+            try
+            {
+                Dispatcher.BeginInvoke(
+                    new Action(() => { try { UpdateUltraSeekOverlay(posSeconds, durationSeconds); } catch { /* ignore */ } }),
+                    DispatcherPriority.Loaded);
+            }
+            catch { /* ignore */ }
+            return;
+        }
+
+        UltraSeekOverlayCanvas.Visibility = Visibility.Visible;
+
+        var ratio = Math.Max(0.0, Math.Min(1.0, posSeconds / dur));
+        var w = VisualizerHostGrid.ActualWidth;
+        var fillW = Math.Max(0.0, Math.Min(w, w * ratio));
+
+        UltraSeekFillRect.Width = fillW;
+
+        // Thumb sits at the right edge of the fill.
+        var thumbW = UltraSeekThumbRect.Width > 0 ? UltraSeekThumbRect.Width : 2.0;
+        var thumbLeft = Math.Max(0.0, Math.Min(w - thumbW, fillW - (thumbW / 2.0)));
+        System.Windows.Controls.Canvas.SetLeft(UltraSeekThumbRect, thumbLeft);
+    }
+
+    private void VisualizerHostGrid_OnSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        try
+        {
+            UpdateUltraSeekOverlay(_engine.CurrentPositionSeconds, _engine.CurrentDurationSeconds);
+        }
+        catch { /* ignore */ }
     }
 
     private void ResetTimelineUiToStart()
@@ -9834,28 +9921,43 @@ public partial class MainWindow : Window
 
     private void _startLyricsTimer()
     {
-        if (_lyricsTimer is not null)
-            return;
-        _lyricsTimer = new DispatcherTimer
+        if (_lyricsTimer is null)
         {
-            Interval = TimeSpan.FromMilliseconds(250),
-        };
-        _lyricsTimer.Tick += (_, _) =>
-        {
-            try
+            _lyricsTimer = new DispatcherTimer
             {
-                UpdateLyricsDisplay();
-            }
-            catch { /* ignore */ }
-        };
-        _lyricsTimer.Start();
+                // 250ms misses fast lyric transitions. Use a faster tick, but keep CPU low by only updating UI when the line changes.
+                Interval = TimeSpan.FromMilliseconds(100),
+            };
+            _lyricsTimer.Tick += (_, _) =>
+            {
+                try { UpdateLyricsDisplay(force: false); } catch { /* ignore */ }
+            };
+        }
+
+        if (!_lyricsTimer.IsEnabled)
+        {
+            _lastDisplayedLyricLineIndex = int.MinValue;
+            _lyricsTimer.Start();
+        }
     }
 
-    private void UpdateLyricsDisplay()
+    private void _stopLyricsTimer()
+    {
+        try { _lyricsTimer?.Stop(); } catch { /* ignore */ }
+    }
+
+    private void UpdateLyricsDisplay(bool force)
     {
         // AppLog.Info($"UpdateLyricsDisplay: lyricsEnabled={_lyricsEnabled}, hasLyrics={_lyricsManager.HasLyrics}, lineCount={_lyricsManager.LineCount}, position={_engine.CurrentPositionSeconds:F2}s, compact={_mainWindowCompact}, layout={_compactModeLayout}");
         if (!_lyricsEnabled || !_lyricsManager.HasLyrics)
             return;
+
+        var lineIdx = _lyricsManager.GetCurrentLineIndex(_engine.CurrentPositionSeconds);
+        if (lineIdx < 0)
+            return;
+        if (!force && lineIdx == _lastDisplayedLyricLineIndex)
+            return;
+        _lastDisplayedLyricLineIndex = lineIdx;
 
         var lyricLine = _lyricsManager.GetCurrentLine(_engine.CurrentPositionSeconds);
         // AppLog.Info($"UpdateLyricsDisplay: GetCurrentLine result={lyricLine ?? "(null)"}");
@@ -9926,6 +10028,11 @@ public partial class MainWindow : Window
                 else if (isLocalFile && _lyricsLocalFilesEnabled)
                 {
                     var cacheKey = $"lyr_{entry.VideoId}";
+                    if (LyricsCache.IsMiss(cacheKey))
+                    {
+                        _lyricsWindow?.Refresh();
+                        return;
+                    }
                     var cached = LyricsCache.Get(cacheKey);
                     if (cached != null)
                     {
@@ -10010,6 +10117,7 @@ public partial class MainWindow : Window
                         else
                         {
                             AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (localDur={duration?.ToString("F0") ?? "null"}s)");
+                            LyricsCache.SetMiss(cacheKey);
                         }
                     }
                     catch (Exception ex)
@@ -10023,6 +10131,11 @@ public partial class MainWindow : Window
                 {
                     // Check cache first
                     var cacheKey = $"yt_{entry.VideoId}";
+                    if (LyricsCache.IsMiss(cacheKey))
+                    {
+                        _lyricsWindow?.Refresh();
+                        return;
+                    }
                     var cached = LyricsCache.Get(cacheKey);
                     if (cached != null)
                     {
@@ -10123,6 +10236,7 @@ public partial class MainWindow : Window
                                 else
                                 {
                                     AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
+                                    LyricsCache.SetMiss(cacheKey);
                                 }
                             }
                             catch (Exception ex)
@@ -10219,6 +10333,8 @@ public partial class MainWindow : Window
             catch { /* ignore */ }
 
             var cacheKey = entry.VideoId.StartsWith("local:") ? $"lyr_{entry.VideoId}" : $"yt_{entry.VideoId}";
+            if (LyricsCache.IsMiss(cacheKey))
+                return;
             var cached = LyricsCache.Get(cacheKey);
             if (cached != null)
                 return; // Already cached
@@ -10241,6 +10357,10 @@ public partial class MainWindow : Window
                     LyricsCache.Set(cacheKey, lrcLrclib);
                     AppLog.Info($"Preheat: cached lyrics for local file {entry.VideoId}");
                 }
+                else
+                {
+                    LyricsCache.SetMiss(cacheKey);
+                }
             }
             else
             {
@@ -10261,6 +10381,10 @@ public partial class MainWindow : Window
                     {
                         LyricsCache.Set(cacheKey, lrcLrclib);
                         AppLog.Info($"Preheat: cached lyrics for {entry.VideoId} via LRCLIB");
+                    }
+                    else
+                    {
+                        LyricsCache.SetMiss(cacheKey);
                     }
                 }
             }
@@ -12200,15 +12324,41 @@ public partial class MainWindow : Window
 
     private void VisualizerBorder_OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        var next = _visualizerMode switch
+        // Global rule: Shift+click toggles visualizer mode (all layouts), normal click never toggles.
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
         {
-            VisualizerMode.Vu => VisualizerMode.Spectrum,
-            VisualizerMode.Spectrum => VisualizerMode.Off,
-            VisualizerMode.Off => VisualizerMode.Vu,
-            _ => VisualizerMode.Vu,
-        };
-        ApplyVisualizerMode(next);
-        RequestPersistSnapshot();
+            var next = _visualizerMode switch
+            {
+                VisualizerMode.Vu => VisualizerMode.Spectrum,
+                VisualizerMode.Spectrum => VisualizerMode.Off,
+                VisualizerMode.Off => VisualizerMode.Vu,
+                _ => VisualizerMode.Vu,
+            };
+            ApplyVisualizerMode(next);
+            RequestPersistSnapshot();
+            e.Handled = true;
+            return;
+        }
+
+        // Ultra-compact: normal click seeks (when duration is known). Other layouts: no-op.
+        try
+        {
+            var ultra = _mainWindowCompact && string.Equals(_compactModeLayout, "Ultra", StringComparison.OrdinalIgnoreCase);
+            if (ultra && _engine.CurrentDurationSeconds is int dur && dur > 0)
+            {
+                var w = VisualizerHostGrid?.ActualWidth ?? 0;
+                if (w > 1)
+                {
+                    var p = e.GetPosition(VisualizerHostGrid);
+                    var ratio = Math.Max(0.0, Math.Min(1.0, p.X / w));
+                    _ = _engine.SeekAsync(ratio * dur);
+                    e.Handled = true;
+                    return;
+                }
+            }
+        }
+        catch { /* ignore */ }
+
         e.Handled = true;
     }
 

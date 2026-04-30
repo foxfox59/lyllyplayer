@@ -266,7 +266,17 @@
                                 Background="Transparent"
                                 MouseLeftButtonUp="VisualizerBorder_OnMouseLeftButtonUp">
                             <!-- Fixed-size inner area so VU / spectrum / off do not shift layout -->
-                            <Grid x:Name="VisualizerHostGrid" Height="26" VerticalAlignment="Center" Margin="0,0,0,0">
+                            <Grid x:Name="VisualizerHostGrid" Height="26" VerticalAlignment="Center" Margin="0,0,0,0"
+                                  SizeChanged="VisualizerHostGrid_OnSizeChanged">
+                                <!-- Subtle outline so the visualizer reads as a surface in all modes -->
+                                <Border x:Name="VisualizerHostOutline"
+                                        BorderBrush="{DynamicResource App.Theme.Border}"
+                                        BorderThickness="1"
+                                        CornerRadius="4"
+                                        Background="Transparent"
+                                        Opacity="0.65"
+                                        SnapsToDevicePixels="True"
+                                        IsHitTestVisible="False"/>
                                 <Grid x:Name="VuGrid" VerticalAlignment="Center">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
@@ -320,6 +330,31 @@
                                         VerticalAlignment="Stretch"
                                         Background="Transparent"/>
                             </Border>
+
+                            <!-- Ultra-compact seek overlay: subtle progress fill + slim thumb (non-interactive; click handling is on VisualizerBorder). -->
+                            <Canvas x:Name="UltraSeekOverlayCanvas"
+                                    IsHitTestVisible="False"
+                                    Visibility="Collapsed"
+                                    HorizontalAlignment="Stretch"
+                                    VerticalAlignment="Stretch"
+                                    Background="Transparent">
+                                <!-- Fill -->
+                                <Rectangle x:Name="UltraSeekFillRect"
+                                           Canvas.Left="0"
+                                           Canvas.Top="0"
+                                           Height="26"
+                                           Width="0"
+                                           Fill="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Opacity="0.18"/>
+                                <!-- Thumb: thin line at the right edge of the fill -->
+                                <Rectangle x:Name="UltraSeekThumbRect"
+                                           Canvas.Left="0"
+                                           Canvas.Top="3"
+                                           Width="2"
+                                           Height="20"
+                                           Fill="{DynamicResource App.Theme.Foreground}"
+                                           Opacity="0.55"/>
+                            </Canvas>
                         </Grid>
                     </Border>
 
@@ -408,9 +443,9 @@
                     <!-- Transport + volume; compact mode reparents VisualizerBorder into column 1 (between buttons and volume). -->
                     <Grid x:Name="TransportVolumeRowGrid" Grid.Row="4" Margin="10,8,10,10" ClipToBounds="False" UseLayoutRounding="True">
                         <Grid.ColumnDefinitions>
-                            <!-- * in expanded mode: volume column stays inside window; code sets Auto in compact (Auto,*,Auto). -->
+                            <!-- Use Auto+spacer+Auto to avoid subtle clipping when the left StackPanel is constrained by a star column. -->
+                            <ColumnDefinition Width="Auto" MinWidth="0"/>
                             <ColumnDefinition Width="*" MinWidth="0"/>
-                            <ColumnDefinition Width="0"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
@@ -506,7 +541,7 @@
                             <Button x:Name="RepeatButton"
                                     Content="Repeat: None"
                                     MinWidth="96"
-                                    Margin="0,0,0,0"
+                                    Margin="0,0,2,0"
                                     Padding="6,4"
                                     FontSize="11"
                                     HorizontalAlignment="Left"

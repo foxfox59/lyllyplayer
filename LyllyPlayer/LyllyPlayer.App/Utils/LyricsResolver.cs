@@ -134,33 +134,14 @@ public static class LyricsResolver
         if (string.IsNullOrWhiteSpace(trackName))
             return (null, null, null, null, false);
 
-        var searchQuery = CleanSearchQuery(trackName + " " + artist);
+        var searchQuery = BuildLrclibSearchQuery(trackName, artist);
         if (string.IsNullOrWhiteSpace(searchQuery))
             return (null, null, null, null, false);
 
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
 
-        // Try full query first (trackName + artist)
+        // Single-query policy: do not issue a second LRCLIB request (reduces load / avoids double misses).
         var candidates = await SearchAndScoreAsync(client, searchQuery, trackName, artist, targetDurationSeconds, ct);
-
-        // If no synced candidates, try trackName-only as fallback
-        string? fallbackQuery = null;
-        if (candidates.Count == 0)
-        {
-            fallbackQuery = CleanSearchQuery(trackName);
-            if (!string.IsNullOrWhiteSpace(fallbackQuery) && fallbackQuery != searchQuery)
-            {
-                AppLog.Info($"LRCLIB fallback: querying trackName-only: {fallbackQuery}");
-                var fallbackCandidates = await SearchAndScoreAsync(client, fallbackQuery, trackName, artist, targetDurationSeconds, ct, fallback: true);
-                // Deduplicate by LRCLIB track name (simple dedup: keep higher-scored candidate)
-                var existingNames = new HashSet<string>(candidates.Select(c => c.trackName ?? ""), StringComparer.OrdinalIgnoreCase);
-                foreach (var fb in fallbackCandidates)
-                {
-                    if (!existingNames.Contains(fb.trackName ?? ""))
-                        candidates.Add(fb);
-                }
-            }
-        }
 
         if (candidates.Count > 0)
         {
@@ -170,20 +151,231 @@ public static class LyricsResolver
             return (best.lrc, best.duration, best.artistName, best.trackName, false);
         }
 
-        // No synced lyrics found — check plain lyrics. Try full query first, then fallback.
+        // No synced lyrics found — check plain lyrics (same single-query policy).
         var plainFallback = await SearchPlainLyricsAsync(client, searchQuery, trackName, artist, ct);
         if (plainFallback != null)
             return plainFallback.Value;
 
-        // Fallback to trackName-only for plain lyrics
-        if (!string.IsNullOrWhiteSpace(fallbackQuery))
+        return (null, null, null, null, false);
+    }
+
+    private static string BuildLrclibSearchQuery(string trackName, string? artist)
+    {
+        try
         {
-            var plainFallback2 = await SearchPlainLyricsAsync(client, fallbackQuery, trackName, artist, ct);
-            if (plainFallback2 != null)
-                return plainFallback2.Value;
+            var tokens = new List<string>(32);
+
+            // 1) Extract tokens from the title itself (handles "Artist - Title", "A x B - Song", etc.)
+            tokens.AddRange(ExtractTokensFromTrackTitle(trackName));
+
+            // 2) Optionally include artist/channel tokens (weak signal for YouTube; avoid Topic/VEVO/etc).
+            if (LooksLikeTrustworthyArtistHint(artist))
+                tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(artist!)));
+
+            // 3) Remove junk tokens and dedupe.
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var filtered = new List<string>(tokens.Count);
+            foreach (var t in tokens)
+            {
+                var w = (t ?? "").Trim();
+                if (string.IsNullOrWhiteSpace(w))
+                    continue;
+                if (IsJunkToken(w))
+                    continue;
+                if (seen.Add(w))
+                    filtered.Add(w);
+            }
+
+            return CleanSearchQuery(string.Join(' ', filtered));
+        }
+        catch
+        {
+            return CleanSearchQuery(trackName);
+        }
+    }
+
+    private static bool LooksLikeTrustworthyArtistHint(string? artist)
+    {
+        if (string.IsNullOrWhiteSpace(artist))
+            return false;
+        var a = artist.Trim();
+        if (a.Length < 2)
+            return false;
+        var lower = a.ToLowerInvariant();
+        // Very common non-artist channels.
+        if (lower.Contains("- topic")) return false;
+        if (lower.Contains(" vevo")) return false;
+        if (lower.Contains("records")) return false;
+        if (lower.Contains("label")) return false;
+        if (lower.Contains("official") && (lower.Contains("music") || lower.Contains("channel"))) return false;
+        return true;
+    }
+
+    private static IEnumerable<string> ExtractTokensFromTrackTitle(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return Array.Empty<string>();
+
+        // Preserve the raw for structural split, but normalize common separators and feature markers first.
+        var s = raw.Trim();
+        s = StripBracketedJunk(s);
+        s = NormalizeFeatureMarkers(s);
+
+        // Prefer safe separators with spaces to avoid splitting hyphenated words.
+        var parts = SplitOnFirstSeparator(s, new[]
+        {
+            " - ", " – ", " — ", " : ", " | "
+        });
+
+        var tokens = new List<string>(32);
+        if (parts is { Left: { } l, Right: { } r })
+        {
+            tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(l)));
+            tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(r)));
+        }
+        else
+        {
+            tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(s)));
         }
 
-        return (null, null, null, null, false);
+        return tokens;
+    }
+
+    private static (string Left, string Right)? SplitOnFirstSeparator(string s, string[] seps)
+    {
+        try
+        {
+            foreach (var sep in seps)
+            {
+                var idx = s.IndexOf(sep, StringComparison.Ordinal);
+                if (idx > 0 && idx < s.Length - sep.Length - 1)
+                {
+                    var left = s.Substring(0, idx).Trim();
+                    var right = s.Substring(idx + sep.Length).Trim();
+                    if (!string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right))
+                        return (left, right);
+                }
+            }
+        }
+        catch { /* ignore */ }
+        return null;
+    }
+
+    private static string StripBracketedJunk(string s)
+    {
+        try
+        {
+            // Remove [...] blocks (resolutions, etc).
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\s*\[[^\]]*\]\s*", " ");
+            // Remove most (...) blocks, but keep those that contain feat/ft (we normalize later).
+            s = System.Text.RegularExpressions.Regex.Replace(
+                s,
+                @"\s*\((?!\s*(?:feat|ft|featuring)\b)[^)]*\)\s*",
+                " ",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+        catch { /* ignore */ }
+        return System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ").Trim();
+    }
+
+    private static string NormalizeFeatureMarkers(string s)
+    {
+        try
+        {
+            // Normalize to word boundaries so tokenization is stable.
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\bfeaturing\b", " feat ", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\bfeat\.?\b", " feat ", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\bft\.?\b", " feat ", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            // Common collab separator used as "A x B" or "A × B"
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\s[×xX]\s", " feat ", System.Text.RegularExpressions.RegexOptions.None);
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\bw/\b", " feat ", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+        catch { /* ignore */ }
+        return System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ").Trim();
+    }
+
+    private static string CleanTrackPrefixNumbers(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return s ?? "";
+
+        var t = s.Trim();
+        try
+        {
+            // Common filename-derived prefixes: "02 - Song", "02. Song", "1-02 - Song", "CD1-02 - Song"
+            t = System.Text.RegularExpressions.Regex.Replace(t, @"^\s*\d{1,3}\s*[-._)\]]\s+", "", System.Text.RegularExpressions.RegexOptions.None);
+            t = System.Text.RegularExpressions.Regex.Replace(t, @"^\s*\d{1,3}\s*-\s*\d{1,3}\s*[-._]\s+", "", System.Text.RegularExpressions.RegexOptions.None);
+            t = System.Text.RegularExpressions.Regex.Replace(t, @"^\s*(?:cd|disc)\s*\d+\s*[-._]\s*\d{1,3}\s*[-._]\s+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+        catch { /* ignore */ }
+
+        return t.Trim();
+    }
+
+    private static IEnumerable<string> TokenizeBasic(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return Array.Empty<string>();
+        try
+        {
+            // Preserve dotted acronyms (LRCLIB may differentiate "C.R.E.A.M" vs "CREAM").
+            var extra = new List<string>(4);
+            try
+            {
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                             s,
+                             @"\b(?:[A-Za-z]\.){2,}[A-Za-z]\b|\b(?:[A-Za-z]\.){2,}\b",
+                             System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+                {
+                    var raw = m.Value.Trim();
+                    if (string.IsNullOrWhiteSpace(raw))
+                        continue;
+                    extra.Add(raw);
+                }
+                // Remove them from the base string so punctuation stripping below doesn't shred them into single-letter tokens.
+                s = System.Text.RegularExpressions.Regex.Replace(
+                    s,
+                    @"\b(?:[A-Za-z]\.){2,}[A-Za-z]\b|\b(?:[A-Za-z]\.){2,}\b",
+                    " ",
+                    System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            }
+            catch { /* ignore */ }
+
+            // Keep letters/numbers, split on punctuation.
+            var cleaned = System.Text.RegularExpressions.Regex.Replace(s, @"[^\p{L}\p{N}]+", " ");
+            cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"\s+", " ").Trim();
+            var baseTokens = string.IsNullOrWhiteSpace(cleaned)
+                ? Array.Empty<string>()
+                : cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            if (extra.Count == 0)
+                return baseTokens;
+            if (baseTokens.Length == 0)
+                return extra;
+            var all = new List<string>(extra.Count + baseTokens.Length);
+            all.AddRange(extra);
+            all.AddRange(baseTokens);
+            return all;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    private static bool IsJunkToken(string token)
+    {
+        var t = token.Trim().ToLowerInvariant();
+        if (t.Length <= 1)
+        {
+            // Keep numeric tokens (e.g. "Part 2", "Vol 1") — single digits are meaningful for disambiguation.
+            // Still drop single-letter noise.
+            return !char.IsDigit(t[0]);
+        }
+
+        return t is
+               "official" or "video" or "music" or "mv" or "lyrics" or "lyric" or "audio" or "visualizer" or "hd" or "hq" or "uhd"
+               or "4k" or "8k" or "1080p" or "720p" or "remastered" or "remaster" or "explicit";
     }
 
     /// <summary>Searches LRCLIB and scores synced-lyric candidates against the given query.</summary>
@@ -296,9 +488,11 @@ public static class LyricsResolver
                     candidates.Add((score, lrc, lrclibDuration, lrclibArtist, lrclibName));
             }
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
-            // Best-effort — LRCLIB may be down
+            // Do NOT treat network/parse failures as "no results" — callers must not cache misses for failures.
+            throw;
         }
 
         return candidates;
@@ -351,9 +545,11 @@ public static class LyricsResolver
                 return (plainLyrics, lrclibDuration, lrclibArtist, lrclibName, true);
             }
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
-            // Best-effort
+            // Do NOT treat network/parse failures as "no results" — callers must not cache misses for failures.
+            throw;
         }
 
         return null;

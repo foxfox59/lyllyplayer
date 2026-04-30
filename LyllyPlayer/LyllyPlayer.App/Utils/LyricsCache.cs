@@ -10,6 +10,7 @@ public static class LyricsCache
 {
     private const string FileName = "lyrics-cache.json";
     private const int DefaultTtlDays = 30;
+    private const int MissTtlHours = 24;
     private const int MaxFileBytes = 512 * 1024; // 512 KB max file size
 
     private static readonly JsonSerializerOptions WriteOptions = new()
@@ -53,7 +54,28 @@ public static class LyricsCache
                 return null;
             }
 
-            return entry.LrcText;
+            return entry.IsMiss ? null : entry.LrcText;
+        }
+    }
+
+    /// <summary>Returns true if the given key is cached as a "miss" (no acceptable lyrics) and not expired.</summary>
+    public static bool IsMiss(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return false;
+
+        lock (_gate)
+        {
+            if (!_entries.TryGetValue(key, out var entry))
+                return false;
+
+            if (entry.IsExpired())
+            {
+                _entries.Remove(key);
+                return false;
+            }
+
+            return entry.IsMiss;
         }
     }
 
@@ -66,6 +88,20 @@ public static class LyricsCache
         lock (_gate)
         {
             _entries[key] = new CacheEntry(lrcText);
+        }
+
+        SaveBestEffort();
+    }
+
+    /// <summary>Caches an explicit "miss" (no acceptable lyrics) for the given key.</summary>
+    public static void SetMiss(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return;
+
+        lock (_gate)
+        {
+            _entries[key] = CacheEntry.CreateMiss();
         }
 
         SaveBestEffort();
@@ -168,16 +204,23 @@ public static class LyricsCache
     {
         public string LrcText { get; }
         public DateTime FetchedAtUtc { get; }
+        public bool IsMiss { get; }
 
-        public CacheEntry(string lrcText, DateTime? fetchedAtUtc = null)
+        public CacheEntry(string lrcText, DateTime? fetchedAtUtc = null, bool isMiss = false)
         {
             LrcText = lrcText;
             FetchedAtUtc = fetchedAtUtc ?? DateTime.UtcNow;
+            IsMiss = isMiss;
         }
+
+        public static CacheEntry CreateMiss() => new CacheEntry(lrcText: "MISS", fetchedAtUtc: DateTime.UtcNow, isMiss: true);
 
         public bool IsExpired()
         {
-            return (DateTime.UtcNow - FetchedAtUtc).TotalDays > DefaultTtlDays;
+            var age = DateTime.UtcNow - FetchedAtUtc;
+            if (IsMiss)
+                return age.TotalHours > MissTtlHours;
+            return age.TotalDays > DefaultTtlDays;
         }
     }
 }

@@ -248,6 +248,18 @@ public static class LocalMetadataService
             // Read duration synchronously via ffprobe (fast, ~100ms)
             int? durationSeconds = ReadDurationSync(ffmpegPath, filePath);
 
+            // Fallback: TagLib can often compute duration even when ffprobe fails (corrupt headers, odd MP3 layout, etc).
+            if (durationSeconds is null)
+            {
+                try
+                {
+                    var ts = f.Properties?.Duration;
+                    if (ts is { } d && d.TotalSeconds > 0.5)
+                        durationSeconds = (int)Math.Round(d.TotalSeconds);
+                }
+                catch { /* ignore */ }
+            }
+
             return (title, artist, durationSeconds);
         }
         catch
@@ -284,9 +296,18 @@ public static class LocalMetadataService
             var readStdoutTask = Task.Run(() => proc.StandardOutput.ReadToEnd());
             var readStderrTask = Task.Run(() => proc.StandardError.ReadToEnd());
 
-            readStdoutTask.Wait();
-            readStderrTask.Wait();
-            proc.WaitForExit();
+            // ffprobe can hang on some malformed media. Cap runtime so duration probing can't stall enrichment forever.
+            const int timeoutMs = 1500;
+            var exited = proc.WaitForExit(timeoutMs);
+            if (!exited)
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { /* ignore */ }
+                return default;
+            }
+
+            // Drain output after exit (should be quick).
+            if (!Task.WaitAll(new Task[] { readStdoutTask, readStderrTask }, millisecondsTimeout: 250))
+                return default;
 
             var stdout = readStdoutTask.Result;
 

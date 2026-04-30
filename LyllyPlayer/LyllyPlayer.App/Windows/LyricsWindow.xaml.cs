@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using LyllyPlayer.Utils;
 
@@ -83,9 +85,8 @@ public partial class LyricsWindow : Window
             LyricsTitleLabel.Content = title;
             LyricsListBox.ItemsSource = lines;
 
-            // Defer scroll-to-first-line until after layout settles.
-            // Without this, WPF's ScrollViewer can auto-scroll to bottom when ItemsSource changes,
-            // and RefreshCurrentLine() (called by the timer a few ms later) won't scroll correctly.
+            // Defer initial selection/scroll until after layout settles.
+            // On reopen we want to keep the currently highlighted line, not jump to index 0.
             _lastScrolledIndex = -1;
             Dispatcher.BeginInvoke(new Action(() =>
             {
@@ -93,11 +94,17 @@ public partial class LyricsWindow : Window
                 {
                     if (LyricsListBox.Items.Count > 0)
                     {
-                        LyricsListBox.SelectedIndex = 0;
-                        var selectedItem = LyricsListBox.SelectedItem;
-                        if (selectedItem is not null)
-                            LyricsListBox.ScrollIntoView(selectedItem);
-                        _lastScrolledIndex = 0;
+                        var idx = -1;
+                        try { idx = _getCurrentLineIndex(); } catch { idx = -1; }
+                        if (idx < 0 || idx >= LyricsListBox.Items.Count)
+                            idx = 0;
+
+                        LyricsListBox.SelectedIndex = idx;
+                        _lastScrolledIndex = idx;
+
+                        Dispatcher.BeginInvoke(
+                            new Action(() => ScrollSelectedNearTopBestEffort(selectedIndex: idx)),
+                            DispatcherPriority.Background);
                     }
                 }
                 catch { /* ignore */ }
@@ -137,12 +144,65 @@ public partial class LyricsWindow : Window
             LyricsListBox.SelectedIndex = index;
             _lastScrolledIndex = index;
 
-            // Ensure the selected item is scrolled into view
-            var selectedItem = LyricsListBox.SelectedItem;
-            if (selectedItem is not null)
-                LyricsListBox.ScrollIntoView(selectedItem);
+            // Pin the selected line near the top for better readability.
+            // Defer so layout/containers are ready and we don't fight ScrollIntoView.
+            Dispatcher.BeginInvoke(
+                new Action(() => ScrollSelectedNearTopBestEffort(selectedIndex: index)),
+                DispatcherPriority.Background);
         }
         catch { /* ignore */ }
+    }
+
+    private void ScrollSelectedNearTopBestEffort(int selectedIndex)
+    {
+        try
+        {
+            if (selectedIndex < 0 || selectedIndex >= LyricsListBox.Items.Count)
+                return;
+
+            // Ensure container exists (non-virtualizing list should have it after ScrollIntoView, but be defensive).
+            if (LyricsListBox.ItemContainerGenerator.ContainerFromIndex(selectedIndex) is not ListBoxItem item)
+                return;
+
+            var sv = FindScrollViewer(LyricsListBox);
+            if (sv is null)
+                return;
+
+            // Desired: keep highlighted line near the top with some padding.
+            const double topPaddingPx = 18;
+
+            // Compute the item’s Y within the scroll viewer, then convert to an absolute scroll offset target.
+            var pt = item.TransformToAncestor(sv).Transform(new System.Windows.Point(0, 0));
+            var itemTopYInViewport = pt.Y;
+            var currentOffset = sv.VerticalOffset;
+            var itemTopYInContent = currentOffset + itemTopYInViewport;
+            var desiredOffset = itemTopYInContent - topPaddingPx;
+
+            // Clamp to valid scroll range.
+            desiredOffset = Math.Max(0, Math.Min(desiredOffset, sv.ScrollableHeight));
+            sv.ScrollToVerticalOffset(desiredOffset);
+        }
+        catch { /* ignore */ }
+    }
+
+    private static ScrollViewer? FindScrollViewer(DependencyObject root)
+    {
+        try
+        {
+            if (root is ScrollViewer sv)
+                return sv;
+
+            var n = VisualTreeHelper.GetChildrenCount(root);
+            for (var i = 0; i < n; i++)
+            {
+                var child = VisualTreeHelper.GetChild(root, i);
+                var found = FindScrollViewer(child);
+                if (found is not null)
+                    return found;
+            }
+        }
+        catch { /* ignore */ }
+        return null;
     }
 
     private void ChromeBar_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
