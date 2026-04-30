@@ -1,5 +1,11 @@
 ### What's new, pussycat?
 
+- 1.6.0: lyrics fixes + QOL updates
+  - Lyrics window can now be themed
+  - Lyrics query has been optimized + caches lyrics better
+  - Fixed a small main window layout issue with the Repeat button
+  - The visualizer in Ultra Compact mode now doubles as a seek bar
+  - Caching and preheat optimizations
 - 1.5.1: fixes to lyrics prefetch (might still be a bit broken)
 - 1.5.0: added lyrics option
   - Best effort lyrics matching in case exact matches are not found (can go horribly wrong at times)
