@@ -1,5 +1,6 @@
 ### What's new, pussycat?
 
+- 1.5.1: fixes to lyrics prefetch (might still be a bit broken)
 - 1.5.0: added lyrics option
   - Best effort lyrics matching in case exact matches are not found (can go horribly wrong at times)
   - Lyrics shown either as status text or in a separate window
