@@ -384,6 +384,7 @@ public partial class MainWindow : Window
     private DateTime _suppressAutoScrollUntilUtc;
     private bool _shuffleEnabled;
     private readonly Random _shuffleRandom = new();
+    private Queue<PlaylistEntry> _shuffleNextBuffer = new();
 
     private bool _startupResumeAttempted;
     private bool _hasLoadedPlaylist;
@@ -925,6 +926,9 @@ public partial class MainWindow : Window
             _ = EnrichLocalNowPlayingAsync(entry);
             _ = EnrichYoutubeDurationNowPlayingAsync(entry);
             _ = TryResolveLyricsAsync();
+
+            // Pre-heat lyrics for the next track (runs during current track's full duration)
+            PreheatNextLyricsAsync();
         };
         _engine.PlaybackStateChanged += (_, isPlaying) =>
             Dispatcher.Invoke(() =>
@@ -6030,6 +6034,12 @@ public partial class MainWindow : Window
             var list = entries?.ToList() ?? new List<PlaylistEntry>();
             _originalEntries = list;
 
+            // Populate shuffle buffer so the first "Next" click has tracks ready
+            if (_shuffleEnabled)
+            {
+                _EnsureShuffleBufferHasItems();
+            }
+
             // Restore queue only for startup auto-load (internal state), not when user explicitly loads a playlist file.
             if (isStartupAutoLoad && !_hasLoadedPlaylist && _startupSettings.QueuedVideoIds is { Count: > 0 } qids)
             {
@@ -7262,6 +7272,12 @@ public partial class MainWindow : Window
 
     private PlaylistEntry? ResolveNextTrack()
     {
+        // DEBUG: log entry to ResolveNextTrack
+        var dbgCurrentEntry = _engine.GetCurrent();
+        var dbgCurrentIndex = _engine.CurrentIndex;
+        var dbgCurrentVid = dbgCurrentEntry?.VideoId ?? "<null>";
+        AppLog.Info($"ResolveNextTrack: CurrentIndex={dbgCurrentIndex} CurrentVideoId={dbgCurrentVid[..Math.Min(40, dbgCurrentVid.Length)]}... Shuffle={_shuffleEnabled} QueueItems={_queuedNext.Count}");
+
         // 1. Queue Priority: If queue has items, return first one that isn't currently playing
         if (_queuedNext.Count > 0)
         {
@@ -7289,7 +7305,6 @@ public partial class MainWindow : Window
                 if (q.Id != _playingQueuedInstanceId)
                 {
                     var nextTrack = q.Entry;
-                    _ = PreheatLyricsAsync(nextTrack);
                     return nextTrack;
                 }
             }
@@ -7310,6 +7325,8 @@ public partial class MainWindow : Window
                              && !_premiumVideoIds.Contains(e.VideoId))
                     .ToList();
 
+                AppLog.Info($"ResolveNextTrack[SHUFFLE]: currentId={currentId?[..Math.Min(40, currentId.Length)] ?? "<null>"} candidates={candidates.Count} recentlyPlayed={_recentlyPlayedVideoIds.Count}");
+
                 if (candidates.Count == 0)
                 {
                     // All tracks excluded — reset recently played and try again
@@ -7320,22 +7337,33 @@ public partial class MainWindow : Window
                                  && !_ageRestrictedVideoIds.Contains(e.VideoId)
                                  && !_premiumVideoIds.Contains(e.VideoId))
                         .ToList();
+                    AppLog.Info($"ResolveNextTrack[SHUFFLE]: reset recentlyPlayed, new candidates={candidates.Count}");
                 }
 
                 if (candidates.Count == 0) return null; // No playable tracks
 
-                // Random selection
-                var rndIndex = _shuffleRandom.Next(candidates.Count);
-                var selected = candidates[rndIndex];
-
-                // Track as recently played for next time
-                _recentlyPlayedVideoIds.Add(selected.VideoId);
+                // Track current as recently played for next time
+                _recentlyPlayedVideoIds.Add(currentId!);
                 if (_recentlyPlayedVideoIds.Count > 5)
                     _recentlyPlayedVideoIds.RemoveAt(0);
 
-                // Pre-heat lyrics for the next track (non-blocking — checks cache first)
-                var nextTrack = selected;
-                _ = PreheatLyricsAsync(nextTrack);
+                // Pop the next track from the shuffle buffer (pre-populated with upcoming tracks)
+                PlaylistEntry? nextTrack = null;
+                if (_shuffleNextBuffer.Count > 0)
+                {
+                    nextTrack = _shuffleNextBuffer.Dequeue();
+                }
+
+                // Refill buffer if needed (keep it at 3 items)
+                while (_shuffleNextBuffer.Count < 3 && candidates.Count > 0)
+                {
+                    var rndIndex = _shuffleRandom.Next(candidates.Count);
+                    var entry = candidates[rndIndex];
+                    _shuffleNextBuffer.Enqueue(entry);
+                    candidates.RemoveAt(rndIndex); // don't pick the same track again
+                }
+
+                AppLog.Info($"ResolveNextTrack[SHUFFLE]: popped={nextTrack?.VideoId[..Math.Min(40, nextTrack.VideoId.Length)] ?? "<empty>"}... buffer={_shuffleNextBuffer.Count} remaining");
                 return nextTrack;
             }
 
@@ -7347,14 +7375,18 @@ public partial class MainWindow : Window
                 nextIndex = 0; // Loop back to start
             }
 
-            if (nextIndex >= _originalEntries.Count) return null; // End of list (Repeat:None)
+            if (nextIndex >= _originalEntries.Count)
+            {
+                AppLog.Info($"ResolveNextTrack[SEQ]: nextIndex={nextIndex} >= entries={_originalEntries.Count} -> returning null");
+                return null; // End of list (Repeat:None)
+            }
 
-            // Pre-heat lyrics for the next track (non-blocking — checks cache first)
             var sequentialNextTrack = _originalEntries[nextIndex];
-            _ = PreheatLyricsAsync(sequentialNextTrack);
+            AppLog.Info($"ResolveNextTrack[SEQ]: nextIndex={nextIndex} nextVideoId={sequentialNextTrack.VideoId[..Math.Min(40, sequentialNextTrack.VideoId.Length)]}... (CURRENT index={dbgCurrentIndex})");
             return sequentialNextTrack;
         }
 
+        AppLog.Info("ResolveNextTrack: returning null");
         return null; // something went wrong
     }
 
@@ -10052,13 +10084,89 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Ensures the shuffle buffer has at least 3 upcoming tracks pre-populated.
+    /// Must be called when shuffle is enabled and the playlist is loaded (including app startup).
+    /// </summary>
+    private void _EnsureShuffleBufferHasItems()
+    {
+        if (_shuffleNextBuffer.Count >= 3)
+            return;
+
+        var currentId = _engine.GetCurrent()?.VideoId;
+        var candidates = _originalEntries
+            .Where(e => !string.Equals(e.VideoId, currentId, StringComparison.OrdinalIgnoreCase)
+                     && !_recentlyPlayedVideoIds.Contains(e.VideoId)
+                     && !_unavailableVideoIds.Contains(e.VideoId)
+                     && !_ageRestrictedVideoIds.Contains(e.VideoId)
+                     && !_premiumVideoIds.Contains(e.VideoId))
+            .ToList();
+
+        while (_shuffleNextBuffer.Count < 3 && candidates.Count > 0)
+        {
+            var rndIndex = _shuffleRandom.Next(candidates.Count);
+            var entry = candidates[rndIndex];
+            _shuffleNextBuffer.Enqueue(entry);
+            candidates.RemoveAt(rndIndex); // don't pick the same track again
+        }
+
+        AppLog.Info($"Shuffle buffer populated: {_shuffleNextBuffer.Count} items ready");
+    }
+
+    /// <summary>
+    /// Computes the next track based on the current engine state and preheats its lyrics.
+    /// Called from NowPlayingChanged so preheat runs during the current track's full duration,
+    /// ensuring lyrics are cached before the user navigates to the next track.
+    /// </summary>
+    private void PreheatNextLyricsAsync()
+    {
+        if (!_lyricsEnabled)
+            return;
+
+        var currentEntry = _engine.GetCurrent();
+        if (currentEntry is null)
+            return;
+
+        PlaylistEntry? nextEntry = null;
+
+        if (_shuffleEnabled)
+        {
+            // Use the shuffle buffer's next item (populated by ResolveNextTrack)
+            if (_shuffleNextBuffer.Count > 0)
+            {
+                nextEntry = _shuffleNextBuffer.Peek();
+            }
+        }
+        else
+        {
+            // Sequential: compute next index
+            int nextIndex = _engine.CurrentIndex + 1;
+
+            if (_repeatMode == RepeatMode.Playlist && nextIndex >= _originalEntries.Count)
+            {
+                nextIndex = 0; // Loop back to start
+            }
+
+            if (nextIndex < _originalEntries.Count)
+            {
+                nextEntry = _originalEntries[nextIndex];
+            }
+        }
+
+        if (nextEntry != null)
+        {
+            _ = PreheatLyricsAsync(nextEntry);
+        }
+    }
+
+    /// <summary>
     /// Pre-fetches and caches lyrics for a track without updating the UI.
-    /// Called from ResolveNextTrack so lyrics are ready when playback starts.
+    /// Called from PreheatNextLyricsAsync (via NowPlayingChanged) to preheat lyrics for the next track.
     /// </summary>
     private async Task PreheatLyricsAsync(PlaylistEntry entry)
     {
         try
         {
+            AppLog.Info($"Preheat: starting to preheat lyrics for local file {entry.VideoId}");
             if (!_lyricsEnabled || string.IsNullOrWhiteSpace(entry.VideoId))
                 return;
 
