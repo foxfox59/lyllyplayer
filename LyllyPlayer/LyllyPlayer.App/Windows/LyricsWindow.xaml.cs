@@ -219,4 +219,53 @@ public partial class LyricsWindow : Window
     {
         try { Close(); } catch { /* ignore */ }
     }
+
+    private void CopyButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        CopyLyricsToClipboardBestEffort();
+    }
+
+    private void CopyCommand_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+    {
+        try
+        {
+            e.CanExecute = LyricsListBox?.Items is { Count: > 0 };
+            e.Handled = true;
+        }
+        catch
+        {
+            e.CanExecute = false;
+            e.Handled = true;
+        }
+    }
+
+    private void CopyCommand_Executed(object sender, ExecutedRoutedEventArgs e)
+    {
+        CopyLyricsToClipboardBestEffort();
+        e.Handled = true;
+    }
+
+    private void CopyLyricsToClipboardBestEffort()
+    {
+        try
+        {
+            var enabled = _getLyricsEnabled();
+            if (!enabled || !_getHasLyrics())
+            {
+                var fallback = (LyricsTitleLabel?.Content?.ToString() ?? "No lyrics available").Trim();
+                if (!string.IsNullOrWhiteSpace(fallback))
+                    System.Windows.Clipboard.SetText(fallback);
+                return;
+            }
+
+            var lines = _getLyricsLines();
+            if (lines is null || lines.Count == 0)
+                return;
+
+            var text = string.Join(Environment.NewLine, lines);
+            if (!string.IsNullOrWhiteSpace(text))
+                System.Windows.Clipboard.SetText(text);
+        }
+        catch { /* ignore */ }
+    }
 }
