@@ -13,7 +13,6 @@
 
 ## Known issues
 
-- Lyrics prefetch has a really annoying bug where it tries to prefetch the *current* track. Trying to fix.
 - Lyrics fetching (1.5.0+) is a huge optimistic mess, works most of the time but don't be surprised if you occasionally get the wrong song, it's not perfect (yet)
 - DisplayFusion has a slight conflict/race situation with how LyllyPlayer handles "always on top" - for now, use the Compatibility settings in DF. I'm going to fix this at some point, just not right now.
 

@@ -18,6 +18,12 @@ public sealed class PlaybackEngine : IDisposable
 {
     public delegate PlaylistEntry? NextTrackResolver();
     private NextTrackResolver? _nextTrackResolver;
+    /// <summary>
+    /// Optional "peek" resolver for background warm/prefetch that must NOT mutate shuffle/queue state.
+    /// When not set, warm/prefetch uses sequential <see cref="PlayOrder"/> based logic.
+    /// </summary>
+    public delegate PlaylistEntry? NextTrackPeekResolver();
+    private NextTrackPeekResolver? _nextTrackPeekResolver;
     private readonly YtDlpClient _ytDlp;
     private readonly FfmpegDecoder _decoder;
     private readonly string _ffmpegPath;
@@ -223,6 +229,11 @@ public sealed class PlaybackEngine : IDisposable
     public void SetNextTrackResolver(NextTrackResolver resolver)
     {
         _nextTrackResolver = resolver;
+    }
+
+    public void SetNextTrackPeekResolver(NextTrackPeekResolver resolver)
+    {
+        _nextTrackPeekResolver = resolver;
     }
 
     public async Task PlayTrackAsync(PlaylistEntry entry)
@@ -1168,6 +1179,26 @@ public sealed class PlaybackEngine : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Best-effort "next" used for background prefetch/warm. If a peek resolver is configured (e.g. Shuffle buffer),
+    /// prefer it; otherwise fall back to sequential play order scanning.
+    /// </summary>
+    private PlaylistEntry? GetNextEntryForWarmPrefetch()
+    {
+        try
+        {
+            if (_nextTrackPeekResolver is not null)
+            {
+                var peek = _nextTrackPeekResolver();
+                if (peek is not null && !_prefetchSkipVideoIds.ContainsKey(peek.VideoId))
+                    return peek;
+            }
+        }
+        catch { /* ignore */ }
+
+        return GetNextPlayableEntryAfterCurrent();
+    }
+
     /// <summary>After a definitive prefetch/cache skip, warm the next playable YouTube track (if any).</summary>
     private void TryBeginPrefetchForNextPlayableAfterMarkedSkip()
     {
@@ -1637,7 +1668,7 @@ public sealed class PlaybackEngine : IDisposable
             // if (!raiseNowPlayingChanged)
             //     return;
 
-            var next = GetNextPlayableEntryAfterCurrent();
+            var next = GetNextEntryForWarmPrefetch();
             if (next is null)
                 return;
 
@@ -1706,7 +1737,7 @@ public sealed class PlaybackEngine : IDisposable
             if (GetCurrent() is not { } cur || !string.Equals(cur.VideoId, anchor.VideoId, StringComparison.OrdinalIgnoreCase))
                 return;
 
-            var next = GetNextPlayableEntryAfterCurrent();
+            var next = GetNextEntryForWarmPrefetch();
             if (next is null || !IsYoutubeDiskCacheEligible(next))
             {
                 CancelNextTrackWarmBestEffort();
@@ -1778,7 +1809,7 @@ public sealed class PlaybackEngine : IDisposable
                 return;
             }
 
-            if (GetNextPlayableEntryAfterCurrent() is not { } expect0 || !string.Equals(expect0.VideoId, vid, StringComparison.Ordinal))
+            if (GetNextEntryForWarmPrefetch() is not { } expect0 || !string.Equals(expect0.VideoId, vid, StringComparison.Ordinal))
             {
                 ClearPrefetchIfStillForVideo(vid);
                 return;
@@ -1799,7 +1830,7 @@ public sealed class PlaybackEngine : IDisposable
             if (!string.Equals(_prefetchNextStreamUrlVideoId, vid, StringComparison.Ordinal))
                 return;
 
-            if (GetNextPlayableEntryAfterCurrent() is not { } expect || !string.Equals(expect.VideoId, vid, StringComparison.Ordinal))
+            if (GetNextEntryForWarmPrefetch() is not { } expect || !string.Equals(expect.VideoId, vid, StringComparison.Ordinal))
                 return;
 
             _prefetchedStreamInput = new YoutubeStreamInput(resolved.Url.Trim(), resolved.HttpHeaders, resolved.DecodeViaYtdlpStdoutPipe);
@@ -1864,7 +1895,7 @@ public sealed class PlaybackEngine : IDisposable
 
             // Final guard: next track may have changed while we were starting the pipeline.
             if (!string.Equals(_prefetchNextStreamUrlVideoId, vid, StringComparison.Ordinal) ||
-                GetNextPlayableEntryAfterCurrent() is not { } guard || !string.Equals(guard.VideoId, vid, StringComparison.Ordinal))
+                GetNextEntryForWarmPrefetch() is not { } guard || !string.Equals(guard.VideoId, vid, StringComparison.Ordinal))
             {
                 prefetchDecoder.Stop();
                 return;

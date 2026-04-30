@@ -826,6 +826,7 @@ public partial class MainWindow : Window
 
         _engine = new PlaybackEngine(_ytDlp, ffmpegPath: _ffmpegPath);
         _engine.SetNextTrackResolver(ResolveNextTrack);
+        _engine.SetNextTrackPeekResolver(PeekNextTrackForPreheatOrPrefetch);
         ApplyYtdlpPlaybackOptions();
         try { _ytDlp.SetAudioQuality(_audioQuality); } catch { /* ignore */ }
         try { _engine.NotifyYoutubeAudioQualityChanged(); } catch { /* ignore */ }
@@ -7394,6 +7395,45 @@ public partial class MainWindow : Window
         return null; // something went wrong
     }
 
+    /// <summary>
+    /// Non-mutating "peek next" used for background operations (prefetch/warm and lyrics preheating).
+    /// Must NOT dequeue or otherwise advance shuffle/queue state.
+    /// </summary>
+    private PlaylistEntry? PeekNextTrackForPreheatOrPrefetch()
+    {
+        try
+        {
+            // Queue takes precedence over shuffle/sequential.
+            if (_queuedNext.Count > 0)
+            {
+                foreach (var q in _queuedNext)
+                {
+                    if (q.Id != _playingQueuedInstanceId)
+                        return q.Entry;
+                }
+            }
+
+            if (_shuffleEnabled)
+            {
+                if (_shuffleNextBuffer.Count > 0)
+                    return _shuffleNextBuffer.Peek();
+                return null;
+            }
+
+            // Sequential.
+            var nextIndex = _engine.CurrentIndex + 1;
+            if (_repeatMode == RepeatMode.Playlist && nextIndex >= _originalEntries.Count)
+                nextIndex = 0;
+            if (nextIndex < 0 || nextIndex >= _originalEntries.Count)
+                return null;
+            return _originalEntries[nextIndex];
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private QueueItem CreateQueueItemForQueuedInstance(QueuedInstance qe, int ordinal)
     {
         var qi = new QueueItem(qe.Entry)
@@ -10155,37 +10195,9 @@ public partial class MainWindow : Window
         var currentEntry = _engine.GetCurrent();
         if (currentEntry is null)
             return;
-
-        PlaylistEntry? nextEntry = null;
-
-        if (_shuffleEnabled)
-        {
-            // Use the shuffle buffer's next item (populated by ResolveNextTrack)
-            if (_shuffleNextBuffer.Count > 0)
-            {
-                nextEntry = _shuffleNextBuffer.Peek();
-            }
-        }
-        else
-        {
-            // Sequential: compute next index
-            int nextIndex = _engine.CurrentIndex + 1;
-
-            if (_repeatMode == RepeatMode.Playlist && nextIndex >= _originalEntries.Count)
-            {
-                nextIndex = 0; // Loop back to start
-            }
-
-            if (nextIndex < _originalEntries.Count)
-            {
-                nextEntry = _originalEntries[nextIndex];
-            }
-        }
-
-        if (nextEntry != null)
-        {
+        var nextEntry = PeekNextTrackForPreheatOrPrefetch();
+        if (nextEntry is not null)
             _ = PreheatLyricsAsync(nextEntry);
-        }
     }
 
     /// <summary>
@@ -10196,9 +10208,15 @@ public partial class MainWindow : Window
     {
         try
         {
-            AppLog.Info($"Preheat: starting to preheat lyrics for local file {entry.VideoId}");
             if (!_lyricsEnabled || string.IsNullOrWhiteSpace(entry.VideoId))
                 return;
+
+            try
+            {
+                var kind = entry.VideoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase) ? "local file" : "YouTube";
+                AppLog.Info($"Preheat: starting to preheat lyrics for {kind} {entry.VideoId}");
+            }
+            catch { /* ignore */ }
 
             var cacheKey = entry.VideoId.StartsWith("local:") ? $"lyr_{entry.VideoId}" : $"yt_{entry.VideoId}";
             var cached = LyricsCache.Get(cacheKey);
