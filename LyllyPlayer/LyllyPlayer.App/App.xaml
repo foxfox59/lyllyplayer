@@ -15,7 +15,19 @@
         <sys:Boolean x:Key="App.Theme.WindowChromeRoundedClipEnabled">True</sys:Boolean>
         <sys:Double x:Key="App.Theme.WindowChromeStrokeWidth">0</sys:Double>
 
-        <!-- Window background brush (applies to all windows; can be overridden at runtime) -->
+        <!-- Bundled default backgrounds -->
+        <ImageBrush x:Key="App.Brush.DefaultWindowBgImage.Lylly"
+                    ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"
+                    Stretch="Fill"
+                    AlignmentX="Center"
+                    AlignmentY="Center"/>
+        <ImageBrush x:Key="App.Brush.DefaultWindowBgImage.MeowCat"
+                    ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/BackgroundMeowCat.jpg"
+                    Stretch="Fill"
+                    AlignmentX="Center"
+                    AlignmentY="Center"/>
+
+        <!-- Legacy key: keep as the original default -->
         <ImageBrush x:Key="App.Brush.DefaultWindowBgImage"
                     ImageSource="pack://application:,,,/LyllyPlayer;component/Assets/Background.png"
                     Stretch="Fill"

@@ -41,7 +41,7 @@ public static class SettingsStore
     private const bool DefaultGlobalMediaKeysEnabled = true;
     private const bool DefaultIncludeSubfoldersOnFolderLoad = false;
     private const string DefaultLastPlaylistSourceType = "YouTube";
-    private const string DefaultBackgroundMode = "Default";
+    private const string DefaultBackgroundMode = "Default (Lylly)";
     /// <summary>Default when settings omit color scheme: derive palette from background image when possible.</summary>
     private const string DefaultBackgroundColorMode = "From image";
     /// <summary>Default UI opacity (~50%) when settings.json is missing or keys are absent.</summary>
@@ -735,7 +735,7 @@ public static class SettingsStore
             OptionsWindowBottomAlignToPlaylist = s.OptionsWindowBottomAlignToPlaylist ?? false,
             OptionsWindowSelectedTab = NormalizeOptionsWindowSelectedTab(s.OptionsWindowSelectedTab),
             ThemeMode = NormalizeThemeMode(s.ThemeMode),
-            BackgroundMode = string.IsNullOrWhiteSpace(s.BackgroundMode) ? DefaultBackgroundMode : s.BackgroundMode.Trim(),
+            BackgroundMode = NormalizeBackgroundMode(s.BackgroundMode),
             BackgroundColorMode = NormalizeBackgroundColorMode(s.BackgroundColorMode),
             BackgroundAlpha = s.BackgroundAlpha is >= 0 and <= 255 ? s.BackgroundAlpha : DefaultBackgroundAlpha,
             BackgroundScrimPercent = s.BackgroundScrimPercent is >= 0 and <= 80 ? s.BackgroundScrimPercent : DefaultBackgroundScrimPercent,
@@ -780,6 +780,18 @@ public static class SettingsStore
                 ? s.PlaylistWindowBoundsUiScalePercent
                 : null,
         };
+
+    public static string NormalizeBackgroundMode(string? v)
+    {
+        var t = string.IsNullOrWhiteSpace(v) ? DefaultBackgroundMode : v.Trim();
+        if (string.Equals(t, "None", StringComparison.OrdinalIgnoreCase)) return "None";
+        if (string.Equals(t, "Custom", StringComparison.OrdinalIgnoreCase)) return "Custom";
+        // Legacy value (pre-multiple-defaults).
+        if (string.Equals(t, "Default", StringComparison.OrdinalIgnoreCase)) return "Default (Lylly)";
+        if (string.Equals(t, "Default (Lylly)", StringComparison.OrdinalIgnoreCase)) return "Default (Lylly)";
+        if (string.Equals(t, "Default (Meow Cat)", StringComparison.OrdinalIgnoreCase)) return "Default (Meow Cat)";
+        return DefaultBackgroundMode;
+    }
 
     public static string NormalizeAppTitleMode(string? v)
     {
@@ -829,11 +841,15 @@ public static class SettingsStore
         if (string.Equals(t, "Tools", StringComparison.OrdinalIgnoreCase)) return "Tools";
         if (string.Equals(t, "System", StringComparison.OrdinalIgnoreCase)) return "System";
         if (string.Equals(t, "Audio", StringComparison.OrdinalIgnoreCase)) return "Audio";
+        if (string.Equals(t, "Playlist", StringComparison.OrdinalIgnoreCase)) return "Playlist";
         if (string.Equals(t, "Theme", StringComparison.OrdinalIgnoreCase)) return "Theme";
-        if (string.Equals(t, "Search", StringComparison.OrdinalIgnoreCase)) return "Search";
-        if (string.Equals(t, "Local", StringComparison.OrdinalIgnoreCase)) return "Local";
         if (string.Equals(t, "Lyrics", StringComparison.OrdinalIgnoreCase)) return "Lyrics";
-        if (string.Equals(t, "Advanced", StringComparison.OrdinalIgnoreCase)) return "Advanced";
+        if (string.Equals(t, "Log", StringComparison.OrdinalIgnoreCase)) return "Log";
+
+        // Backwards compatibility: older builds stored these tabs which are now grouped into Playlist/Tools.
+        if (string.Equals(t, "Search", StringComparison.OrdinalIgnoreCase)) return "Playlist";
+        if (string.Equals(t, "Local", StringComparison.OrdinalIgnoreCase)) return "Playlist";
+        if (string.Equals(t, "Advanced", StringComparison.OrdinalIgnoreCase)) return "Tools";
         return DefaultOptionsWindowSelectedTab;
     }
 

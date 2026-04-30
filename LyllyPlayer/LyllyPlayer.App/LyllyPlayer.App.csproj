@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Version>1.6.0</Version>
+    <Version>1.6.1</Version>
     <AssemblyTitle>LyllyPlayer</AssemblyTitle>
     <Product>LyllyPlayer</Product>
     <Company>MuiluFox</Company>
@@ -46,6 +46,7 @@
     <!-- Ensure .ico is packaged so Window Icon can load it -->
     <Resource Include="Assets\LyllyPlayer.ico" />
     <Resource Include="Assets\Background.png" />
+    <Resource Include="Assets\BackgroundMeowCat.jpg" />
     <Resource Include="Assets\icon-128.png" />
   </ItemGroup>
 

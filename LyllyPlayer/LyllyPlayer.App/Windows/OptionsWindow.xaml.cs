@@ -112,6 +112,7 @@ public partial class OptionsWindow : Window
     private readonly Func<int> _getAppLogMaxMb;
     private readonly Action<int> _setAppLogMaxMb;
     private readonly Action _showLog;
+    private bool _logPopoutOpen;
     private readonly Action? _persistSettingsNow;
     private readonly Func<string> _getAudioQuality;
     private readonly Action<string> _setAudioQuality;
@@ -459,7 +460,7 @@ public partial class OptionsWindow : Window
         try { _draft.GlobalMediaKeysEnabled = _getGlobalMediaKeysEnabled(); } catch { _draft.GlobalMediaKeysEnabled = false; }
 
         try { _draft.ThemeMode = SettingsStore.NormalizeThemeMode(_getThemeMode()); } catch { _draft.ThemeMode = "Auto"; }
-        try { _draft.BackgroundMode = string.IsNullOrWhiteSpace(_getBackgroundMode()) ? "Default" : _getBackgroundMode().Trim(); } catch { _draft.BackgroundMode = "Default"; }
+        try { _draft.BackgroundMode = SettingsStore.NormalizeBackgroundMode(_getBackgroundMode()); } catch { _draft.BackgroundMode = "Default (Lylly)"; }
         try { _draft.CustomBackgroundImagePath = _getCustomBackgroundImagePath() ?? ""; } catch { _draft.CustomBackgroundImagePath = ""; }
         try { _draft.BackgroundColorMode = SettingsStore.NormalizeBackgroundColorMode(_getBackgroundColorMode()); } catch { _draft.BackgroundColorMode = "Default"; }
         try { _draft.CustomBackgroundColor = _getCustomBackgroundColor() ?? ""; } catch { _draft.CustomBackgroundColor = ""; }
@@ -791,7 +792,9 @@ public partial class OptionsWindow : Window
 
     private void ApplyBackgroundSelection(string? mode)
     {
-        var label = string.IsNullOrWhiteSpace(mode) ? "Default" : mode.Trim();
+        var label = string.IsNullOrWhiteSpace(mode) ? "Default (Lylly)" : mode.Trim();
+        if (string.Equals(label, "Default", StringComparison.OrdinalIgnoreCase))
+            label = "Default (Lylly)";
         foreach (var obj in BackgroundModeComboBox.Items)
         {
             if (obj is not ComboBoxItem item)
@@ -806,11 +809,11 @@ public partial class OptionsWindow : Window
 
     private void UpdateBackgroundBrowseEnabled()
     {
-        var mode = "Default";
+        var mode = "Default (Lylly)";
         try
         {
             if (BackgroundModeComboBox.SelectedItem is ComboBoxItem item)
-                mode = (item.Content as string)?.Trim() ?? "Default";
+                mode = (item.Content as string)?.Trim() ?? "Default (Lylly)";
         }
         catch { /* ignore */ }
 
@@ -1161,7 +1164,21 @@ public partial class OptionsWindow : Window
 
     private void OpenLogButton_OnClick(object sender, RoutedEventArgs e)
     {
-        try { _showLog(); } catch { }
+        try
+        {
+            SetLogPopoutOpen(true);
+            _showLog();
+        }
+        catch
+        {
+            SetLogPopoutOpen(false);
+        }
+    }
+
+    public void SetLogPopoutOpen(bool isOpen)
+    {
+        _logPopoutOpen = isOpen;
+        try { EmbeddedLogViewer?.SetSuspended(isOpen); } catch { /* ignore */ }
     }
 
     private void GlobalMediaKeysCheckBox_OnChecked(object sender, RoutedEventArgs e)

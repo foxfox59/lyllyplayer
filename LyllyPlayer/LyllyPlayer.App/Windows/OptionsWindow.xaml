@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:local="clr-namespace:LyllyPlayer"
+        xmlns:controls="clr-namespace:LyllyPlayer.Windows.Controls"
         Title="LyllyPlayer — Options"
         Icon="pack://application:,,,/Assets/LyllyPlayer.ico"
         Background="Transparent"
@@ -141,107 +142,344 @@
                             SelectionChanged="OptionsTabControl_OnSelectionChanged">
                     <TabItem Header="Tools">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <Grid Margin="6">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
+                            <StackPanel Margin="6">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="4"
-                                           x:Name="ToolsPathNoticeTextBlock"
-                                           TextWrapping="Wrap"
-                                           Margin="0,0,0,10"
-                                           Foreground="{DynamicResource App.Theme.Foreground}"
-                                           FontSize="11"/>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="4"
+                                               x:Name="ToolsPathNoticeTextBlock"
+                                               TextWrapping="Wrap"
+                                               Margin="0,0,0,10"
+                                               Foreground="{DynamicResource App.Theme.Foreground}"
+                                               FontSize="11"/>
 
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="yt-dlp:" VerticalAlignment="Top" Margin="0,6,8,0"/>
-                                <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,8,10">
-                                    <TextBox x:Name="YtDlpPathTextBox" Height="30" IsReadOnly="True"/>
-                                    <TextBlock x:Name="YtDlpSourceTextBlock" FontSize="11" Margin="2,2,0,0"
-                                               Foreground="{DynamicResource App.Theme.Foreground}"/>
-                                </StackPanel>
-                                <Button Grid.Row="1" Grid.Column="2" x:Name="YtDlpBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="YtDlpBrowseButton_OnClick"/>
-                                <Button Grid.Row="1" Grid.Column="3" x:Name="YtDlpUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="YtDlpUsePathButton_OnClick"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="yt-dlp:" VerticalAlignment="Top" Margin="0,6,8,0"/>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,8,10">
+                                        <TextBox x:Name="YtDlpPathTextBox" Height="30" IsReadOnly="True"/>
+                                        <TextBlock x:Name="YtDlpSourceTextBlock" FontSize="11" Margin="2,2,0,0"
+                                                   Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                    </StackPanel>
+                                    <Button Grid.Row="1" Grid.Column="2" x:Name="YtDlpBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="YtDlpBrowseButton_OnClick"/>
+                                    <Button Grid.Row="1" Grid.Column="3" x:Name="YtDlpUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="YtDlpUsePathButton_OnClick"/>
 
-                                <TextBlock Grid.Row="2" Grid.Column="0" Text="ffmpeg:" VerticalAlignment="Top" Margin="0,6,8,0"/>
-                                <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,8,10">
-                                    <TextBox x:Name="FfmpegPathTextBox" Height="30" IsReadOnly="True"/>
-                                    <TextBlock x:Name="FfmpegSourceTextBlock" FontSize="11" Margin="2,2,0,0"
-                                               Foreground="{DynamicResource App.Theme.Foreground}"/>
-                                </StackPanel>
-                                <Button Grid.Row="2" Grid.Column="2" x:Name="FfmpegBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="FfmpegBrowseButton_OnClick"/>
-                                <Button Grid.Row="2" Grid.Column="3" x:Name="FfmpegUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="FfmpegUsePathButton_OnClick"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="ffmpeg:" VerticalAlignment="Top" Margin="0,6,8,0"/>
+                                    <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,8,10">
+                                        <TextBox x:Name="FfmpegPathTextBox" Height="30" IsReadOnly="True"/>
+                                        <TextBlock x:Name="FfmpegSourceTextBlock" FontSize="11" Margin="2,2,0,0"
+                                                   Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                    </StackPanel>
+                                    <Button Grid.Row="2" Grid.Column="2" x:Name="FfmpegBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="FfmpegBrowseButton_OnClick"/>
+                                    <Button Grid.Row="2" Grid.Column="3" x:Name="FfmpegUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="FfmpegUsePathButton_OnClick"/>
 
-                                <TextBlock Grid.Row="3" Grid.Column="0" Text="Node.js:" VerticalAlignment="Top" Margin="0,6,8,0"/>
-                                <StackPanel Grid.Row="3" Grid.Column="1" Margin="0,0,8,10">
-                                    <TextBox x:Name="NodePathTextBox" Height="30" IsReadOnly="True"/>
-                                    <TextBlock x:Name="NodeSourceTextBlock" FontSize="11" Margin="2,2,0,0"
-                                               Foreground="{DynamicResource App.Theme.Foreground}"/>
-                                </StackPanel>
-                                <Button Grid.Row="3" Grid.Column="2" x:Name="NodeBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="NodeBrowseButton_OnClick"/>
-                                <Button Grid.Row="3" Grid.Column="3" x:Name="NodeUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="NodeUsePathButton_OnClick"/>
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Node.js:" VerticalAlignment="Top" Margin="0,6,8,0"/>
+                                    <StackPanel Grid.Row="3" Grid.Column="1" Margin="0,0,8,10">
+                                        <TextBox x:Name="NodePathTextBox" Height="30" IsReadOnly="True"/>
+                                        <TextBlock x:Name="NodeSourceTextBlock" FontSize="11" Margin="2,2,0,0"
+                                                   Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                    </StackPanel>
+                                    <Button Grid.Row="3" Grid.Column="2" x:Name="NodeBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="NodeBrowseButton_OnClick"/>
+                                    <Button Grid.Row="3" Grid.Column="3" x:Name="NodeUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="NodeUsePathButton_OnClick"/>
 
-                                <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4"
-                                           TextWrapping="Wrap"
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4"
+                                               TextWrapping="Wrap"
+                                               FontSize="11"
+                                               Foreground="{DynamicResource App.Theme.Foreground}"
+                                               Text="Node.js is not required for basic use — only for Advanced YouTube options (browser cookies / signed-in playback). Leave unset unless you need that."/>
+                                </Grid>
+
+                                <Border x:Name="AdvancedNodeGatingBorder"
+                                        Padding="10"
+                                        Margin="0,12,0,12"
+                                        CornerRadius="4"
+                                        Background="{DynamicResource App.Theme.SurfaceRaised}"
+                                        BorderBrush="{DynamicResource App.Theme.Border}"
+                                        BorderThickness="1"
+                                        Visibility="Collapsed">
+                                    <TextBlock TextWrapping="Wrap"
+                                               Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                               Text="To use Advanced YouTube options (browser cookies / signed-in content), resolve Node.js above (install Node or browse to node.exe). Basic playback and normal playlists do not require Node."/>
+                                </Border>
+
+                                <TextBlock Text="YouTube EJS solvers"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
                                            FontSize="11"
-                                           Foreground="{DynamicResource App.Theme.Foreground}"
-                                           Text="Node.js is not required for basic use — only for Advanced YouTube options (browser cookies / signed-in playback). Leave unset unless you need that."/>
-                            </Grid>
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Prefer from GitHub may download solver code on first use. Bundled only uses yt-dlp’s embedded files (more offline-friendly)."/>
+                                <StackPanel x:Name="EjsSourcePanel" Margin="0,0,0,16" Background="Transparent">
+                                    <RadioButton x:Name="EjsGithubRadio" GroupName="EjsSource" Margin="0,0,0,4"
+                                                 Content="Prefer from GitHub (ejs:github)"
+                                                 Checked="EjsGithubRadio_OnChecked"/>
+                                    <RadioButton x:Name="EjsBundledRadio" GroupName="EjsSource"
+                                                 Content="Use yt-dlp bundled only (no remote EJS)"
+                                                 Checked="EjsBundledRadio_OnChecked"/>
+                                </StackPanel>
+
+                                <TextBlock Text="YouTube cookies from browser"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Passes --cookies-from-browser to yt-dlp with the value you enter (see yt-dlp --help). Close the browser if the cookie database is locked. Using cookies exposes your browser session to yt-dlp."/>
+                                <StackPanel x:Name="CookiesPanel" Margin="0,0,0,8" Background="Transparent">
+                                    <CheckBox x:Name="YoutubeCookiesCheckBox"
+                                              Content="Use cookies from browser for YouTube"
+                                              Margin="0,0,0,8"
+                                              Foreground="{DynamicResource App.Theme.Foreground}"
+                                              Checked="YoutubeCookiesCheckBox_OnChecked"
+                                              Unchecked="YoutubeCookiesCheckBox_OnUnchecked"/>
+                                    <TextBox x:Name="YoutubeCookiesTextBox"
+                                             MinHeight="28"
+                                             VerticalContentAlignment="Center"
+                                             Margin="0,0,0,4"
+                                             TextChanged="YoutubeCookiesTextBox_OnTextChanged"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+
+                    <TabItem Header="Playlist">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="6" Background="Transparent">
+                                <TextBlock Text="Cache"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <TextBlock Text="Cache MB:"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,8,0"
+                                               Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                    <TextBox x:Name="CacheMaxMbTextBox"
+                                             Width="120"
+                                             Height="30"
+                                             VerticalContentAlignment="Center"/>
+                                </StackPanel>
+
+                                <TextBlock Text="Auto-refresh"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <TextBlock Text="Playlist auto-refresh:"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,8,0"
+                                               Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                    <ComboBox x:Name="PlaylistAutoRefreshComboBox"
+                                              Height="30"
+                                              MinWidth="200"
+                                              Margin="0,0,0,0"
+                                              IsEnabled="True"
+                                              IsHitTestVisible="True"
+                                              PreviewMouseLeftButtonDown="PlaylistAutoRefreshComboBox_OnPreviewMouseLeftButtonDown"
+                                              SelectionChanged="PlaylistAutoRefreshComboBox_OnSelectionChanged">
+                                        <ComboBoxItem Content="Disabled" IsSelected="True"/>
+                                        <ComboBoxItem Content="1 minute"/>
+                                        <ComboBoxItem Content="5 minutes"/>
+                                        <ComboBoxItem Content="30 minutes"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <TextBlock Text="Behavior"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Applies when you cancel a YouTube search (Cancel) or cancel a playlist refresh from the playlist window. When off, the playlist is restored to how it was before that operation. Stop search still keeps partial results."/>
+                                <CheckBox x:Name="KeepIncompletePlaylistOnCancelCheckBox"
+                                          Content="Keep incomplete playlist on cancel"
+                                          Margin="0,0,0,12"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="KeepIncompletePlaylistOnCancelCheckBox_OnChecked"
+                                          Unchecked="KeepIncompletePlaylistOnCancelCheckBox_OnUnchecked"/>
+
+                                <TextBlock Text="Playlist export (M3U)"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="M3U is widely compatible for local files and direct stream URLs. YouTube URLs are typically not playable in other players; you can still include them for reference."/>
+                                <CheckBox x:Name="ExportM3uIncludeYoutubeCheckBox"
+                                          Content="Include YouTube entries (as webpage URLs)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="ExportM3uIncludeYoutubeCheckBox_OnChecked"
+                                          Unchecked="ExportM3uIncludeYoutubeCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="ExportM3uPreferRelativePathsCheckBox"
+                                          Content="Prefer relative paths (when exporting to the same folder tree)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="ExportM3uPreferRelativePathsCheckBox_OnChecked"
+                                          Unchecked="ExportM3uPreferRelativePathsCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="ExportM3uIncludeLyllyMetadataCheckBox"
+                                          Content="Include LyllyPlayer rich metadata comments (#LYLLY:...)"
+                                          Margin="0,0,0,12"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="ExportM3uIncludeLyllyMetadataCheckBox_OnChecked"
+                                          Unchecked="ExportM3uIncludeLyllyMetadataCheckBox_OnUnchecked"/>
+
+                                <TextBlock Text="Search"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Default results:" VerticalAlignment="Center" Margin="0,0,8,10"/>
+                                    <TextBox Grid.Row="0" Grid.Column="1" x:Name="SearchDefaultCountTextBox" Height="30" Margin="0,0,0,10" VerticalContentAlignment="Center" LostFocus="SearchDefaultCountTextBox_OnLostFocus"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Min length:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <ComboBox Grid.Row="1" Grid.Column="1"
+                                              x:Name="SearchMinLengthComboBox"
+                                              Height="30"
+                                              Margin="0,0,0,0"
+                                              SelectionChanged="SearchMinLengthComboBox_OnSelectionChanged">
+                                        <ComboBoxItem Content="Any" IsSelected="True"/>
+                                        <ComboBoxItem Content="30 sec"/>
+                                        <ComboBoxItem Content="1 min"/>
+                                        <ComboBoxItem Content="2 min"/>
+                                    </ComboBox>
+                                </Grid>
+
+                                <TextBlock Text="Local import defaults"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <CheckBox x:Name="IncludeSubfoldersOnFolderLoadCheckBox"
+                                          Content="Include sub-folders by default"
+                                          Margin="0,0,0,10"
+                                          Checked="IncludeSubfoldersOnFolderLoadCheckBox_OnChecked"
+                                          Unchecked="IncludeSubfoldersOnFolderLoadCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="ReadMetadataOnLoadCheckBox"
+                                          Content="Read metadata on load (slow!)"
+                                          Margin="0,0,0,0"
+                                          Checked="ReadMetadataOnLoadCheckBox_OnChecked"
+                                          Unchecked="ReadMetadataOnLoadCheckBox_OnUnchecked"/>
+                            </StackPanel>
                         </ScrollViewer>
                     </TabItem>
 
                     <TabItem Header="System">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <Grid Margin="6">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Cache MB:" VerticalAlignment="Center" Margin="0,0,8,10"/>
-                                <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" x:Name="CacheMaxMbTextBox" Height="30" Margin="0,0,0,10" VerticalContentAlignment="Center"/>
-
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Playlist auto-refresh:" VerticalAlignment="Center" Margin="0,0,8,10"/>
-                                <ComboBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
-                                          x:Name="PlaylistAutoRefreshComboBox"
-                                          Height="30"
-                                          Margin="0,0,0,10"
-                                          IsEnabled="True"
-                                          IsHitTestVisible="True"
-                                          PreviewMouseLeftButtonDown="PlaylistAutoRefreshComboBox_OnPreviewMouseLeftButtonDown"
-                                          SelectionChanged="PlaylistAutoRefreshComboBox_OnSelectionChanged">
-                                    <ComboBoxItem Content="Disabled" IsSelected="True"/>
-                                    <ComboBoxItem Content="1 minute"/>
-                                    <ComboBoxItem Content="5 minutes"/>
-                                    <ComboBoxItem Content="30 minutes"/>
-                                </ComboBox>
-
-                                <CheckBox Grid.Row="2"
-                                          Grid.Column="0"
-                                          Grid.ColumnSpan="3"
-                                          x:Name="GlobalMediaKeysCheckBox"
+                            <StackPanel Margin="6" Background="Transparent">
+                                <TextBlock Text="Input"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <CheckBox x:Name="GlobalMediaKeysCheckBox"
                                           Content="Enable global media keys"
-                                          Margin="0,10,0,0"
+                                          Margin="0,0,0,12"
                                           VerticalAlignment="Top"
                                           Checked="GlobalMediaKeysCheckBox_OnChecked"
                                           Unchecked="GlobalMediaKeysCheckBox_OnUnchecked"/>
-                            </Grid>
+
+                                <TextBlock Text="Window"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <CheckBox x:Name="AlwaysOnTopPlaylistWindowCheckBox"
+                                          Content="Also keep Playlist window on top (when TOP is enabled)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="AlwaysOnTopPlaylistWindowCheckBox_OnChecked"
+                                          Unchecked="AlwaysOnTopPlaylistWindowCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="AlwaysOnTopOptionsWindowCheckBox"
+                                          Content="Also keep Options window on top (when TOP is enabled)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="AlwaysOnTopOptionsWindowCheckBox_OnChecked"
+                                          Unchecked="AlwaysOnTopOptionsWindowCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="AlwaysOnTopLyricsWindowCheckBox"
+                                          Content="Also keep Lyrics window on top (when TOP is enabled)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="AlwaysOnTopLyricsWindowCheckBox_OnChecked"
+                                          Unchecked="AlwaysOnTopLyricsWindowCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="CompactHidesAuxWindowsCheckBox"
+                                          Content="Compact mode hides Playlist and Options"
+                                          Margin="0,0,0,12"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="CompactHidesAuxWindowsCheckBox_OnChecked"
+                                          Unchecked="CompactHidesAuxWindowsCheckBox_OnUnchecked"/>
+
+                                <TextBlock Text="Compact layout"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Choose the layout used when Compact mode is enabled. Ultra compact stacks visualizer + PL on the first row, with transport + S + R + volume on the second row."/>
+                                <StackPanel x:Name="CompactLayoutPanel" Margin="0,0,0,12" Background="Transparent">
+                                    <RadioButton x:Name="CompactLayoutNormalRadio"
+                                                 GroupName="CompactLayout"
+                                                 Margin="0,0,0,4"
+                                                 Content="Normal compact"
+                                                 Checked="CompactLayoutNormalRadio_OnChecked"/>
+                                    <RadioButton x:Name="CompactLayoutUltraRadio"
+                                                 GroupName="CompactLayout"
+                                                 Content="Ultra compact"
+                                                 Checked="CompactLayoutUltraRadio_OnChecked"/>
+                                </StackPanel>
+
+                                <TextBlock Text="App icon"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Choose where the app icon appears: on the taskbar, in the notification area (system tray), or both."/>
+                                <StackPanel x:Name="AppIconVisibilityPanel" Margin="0,0,0,0" Background="Transparent">
+                                    <RadioButton x:Name="AppIconTaskbarAndTrayRadio"
+                                                 GroupName="AppIconVisibility"
+                                                 Margin="0,0,0,4"
+                                                 Content="Taskbar and notification area"
+                                                 Checked="AppIconTaskbarAndTrayRadio_OnChecked"/>
+                                    <RadioButton x:Name="AppIconTaskbarOnlyRadio"
+                                                 GroupName="AppIconVisibility"
+                                                 Margin="0,0,0,4"
+                                                 Content="Taskbar only"
+                                                 Checked="AppIconTaskbarOnlyRadio_OnChecked"/>
+                                    <RadioButton x:Name="AppIconTrayOnlyRadio"
+                                                 GroupName="AppIconVisibility"
+                                                 Content="Notification area only"
+                                                 Checked="AppIconTrayOnlyRadio_OnChecked"/>
+                                </StackPanel>
+                            </StackPanel>
                         </ScrollViewer>
                     </TabItem>
 
@@ -333,7 +571,8 @@
                                               VerticalAlignment="Center"
                                               SelectionChanged="BackgroundModeComboBox_OnSelectionChanged">
                                         <ComboBoxItem Content="None"/>
-                                        <ComboBoxItem Content="Default" IsSelected="True"/>
+                                        <ComboBoxItem Content="Default (Lylly)" IsSelected="True"/>
+                                        <ComboBoxItem Content="Default (Meow Cat)"/>
                                         <ComboBoxItem Content="Custom"/>
                                     </ComboBox>
                                     <Button Grid.Column="1"
@@ -568,55 +807,6 @@
                         </ScrollViewer>
                     </TabItem>
 
-                    <TabItem Header="Search">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <Grid Margin="6">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Default results:" VerticalAlignment="Center" Margin="0,0,8,10"/>
-                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="SearchDefaultCountTextBox" Height="30" Margin="0,0,0,10" VerticalContentAlignment="Center" LostFocus="SearchDefaultCountTextBox_OnLostFocus"/>
-
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Min length:" VerticalAlignment="Center" Margin="0,0,8,10"/>
-                                <ComboBox Grid.Row="1" Grid.Column="1"
-                                          x:Name="SearchMinLengthComboBox"
-                                          Height="30"
-                                          Margin="0,0,0,10"
-                                          SelectionChanged="SearchMinLengthComboBox_OnSelectionChanged">
-                                    <ComboBoxItem Content="Any" IsSelected="True"/>
-                                    <ComboBoxItem Content="30 sec"/>
-                                    <ComboBoxItem Content="1 min"/>
-                                    <ComboBoxItem Content="2 min"/>
-                                </ComboBox>
-                            </Grid>
-                        </ScrollViewer>
-                    </TabItem>
-
-                    <TabItem Header="Local">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <StackPanel Margin="6">
-                                <CheckBox x:Name="IncludeSubfoldersOnFolderLoadCheckBox"
-                                          Content="Include sub-folders by default"
-                                          Margin="0,0,0,10"
-                                          Checked="IncludeSubfoldersOnFolderLoadCheckBox_OnChecked"
-                                          Unchecked="IncludeSubfoldersOnFolderLoadCheckBox_OnUnchecked"/>
-
-                                <CheckBox x:Name="ReadMetadataOnLoadCheckBox"
-                                          Content="Read metadata on load (slow!)"
-                                          Margin="0,0,0,10"
-                                          Checked="ReadMetadataOnLoadCheckBox_OnChecked"
-                                          Unchecked="ReadMetadataOnLoadCheckBox_OnUnchecked"/>
-                            </StackPanel>
-                        </ScrollViewer>
-                    </TabItem>
-
                     <TabItem Header="Lyrics">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <StackPanel Margin="6">
@@ -646,184 +836,14 @@
                         </ScrollViewer>
                     </TabItem>
 
-                    <TabItem Header="Advanced">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                      Background="Transparent">
-                            <StackPanel Margin="6" Background="Transparent">
-                                <Border x:Name="AdvancedNodeGatingBorder"
-                                        Padding="10"
-                                        Margin="0,0,0,12"
-                                        CornerRadius="4"
-                                        Background="{DynamicResource App.Theme.SurfaceRaised}"
-                                        BorderBrush="{DynamicResource App.Theme.Border}"
-                                        BorderThickness="1"
-                                        Visibility="Collapsed">
-                                    <TextBlock TextWrapping="Wrap"
-                                               Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
-                                               Text="To use Advanced YouTube options (browser cookies / signed-in content), resolve Node.js on the Tools tab (install Node or browse to node.exe). Basic playback and normal playlists do not require Node."/>
-                                </Border>
+                    <TabItem Header="Log">
+                        <Grid Margin="6" Background="Transparent">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
 
-                                <TextBlock Text="YouTube EJS solvers"
-                                           FontWeight="SemiBold"
-                                           Margin="0,0,0,6"
-                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
-                                <TextBlock TextWrapping="Wrap"
-                                           FontSize="11"
-                                           Margin="0,0,0,8"
-                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
-                                           Text="Prefer from GitHub may download solver code on first use. Bundled only uses yt-dlp’s embedded files (more offline-friendly)."/>
-                                <StackPanel x:Name="EjsSourcePanel" Margin="0,0,0,16" Background="Transparent">
-                                    <RadioButton x:Name="EjsGithubRadio" GroupName="EjsSource" Margin="0,0,0,4"
-                                                 Content="Prefer from GitHub (ejs:github)"
-                                                 Checked="EjsGithubRadio_OnChecked"/>
-                                    <RadioButton x:Name="EjsBundledRadio" GroupName="EjsSource"
-                                                 Content="Use yt-dlp bundled only (no remote EJS)"
-                                                 Checked="EjsBundledRadio_OnChecked"/>
-                                </StackPanel>
-
-                                <TextBlock Text="YouTube cookies from browser"
-                                           FontWeight="SemiBold"
-                                           Margin="0,0,0,6"
-                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
-                                <TextBlock TextWrapping="Wrap"
-                                           FontSize="11"
-                                           Margin="0,0,0,8"
-                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
-                                           Text="Passes --cookies-from-browser to yt-dlp with the value you enter (see yt-dlp --help). Close the browser if the cookie database is locked. Using cookies exposes your browser session to yt-dlp."/>
-                                <StackPanel x:Name="CookiesPanel" Margin="0,0,0,8" Background="Transparent">
-                                    <CheckBox x:Name="YoutubeCookiesCheckBox"
-                                              Content="Use cookies from browser for YouTube"
-                                              Margin="0,0,0,8"
-                                              Foreground="{DynamicResource App.Theme.Foreground}"
-                                              Checked="YoutubeCookiesCheckBox_OnChecked"
-                                              Unchecked="YoutubeCookiesCheckBox_OnUnchecked"/>
-                                    <TextBox x:Name="YoutubeCookiesTextBox"
-                                             MinHeight="28"
-                                             VerticalContentAlignment="Center"
-                                             Margin="0,0,0,4"
-                                             TextChanged="YoutubeCookiesTextBox_OnTextChanged"/>
-                                </StackPanel>
-
-                                <TextBlock Text="Playlist"
-                                           FontWeight="SemiBold"
-                                           Margin="0,16,0,6"
-                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
-                                <TextBlock TextWrapping="Wrap"
-                                           FontSize="11"
-                                           Margin="0,0,0,8"
-                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
-                                           Text="Applies when you cancel a YouTube search (Cancel) or cancel a playlist refresh from the playlist window. When off, the playlist is restored to how it was before that operation. Stop search still keeps partial results."/>
-                                <CheckBox x:Name="KeepIncompletePlaylistOnCancelCheckBox"
-                                          Content="Keep incomplete playlist on cancel"
-                                          Margin="0,0,0,8"
-                                          Foreground="{DynamicResource App.Theme.Foreground}"
-                                          Checked="KeepIncompletePlaylistOnCancelCheckBox_OnChecked"
-                                          Unchecked="KeepIncompletePlaylistOnCancelCheckBox_OnUnchecked"/>
-
-                                <TextBlock Text="Playlist export (M3U)"
-                                           FontWeight="SemiBold"
-                                           Margin="0,16,0,6"
-                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
-                                <TextBlock TextWrapping="Wrap"
-                                           FontSize="11"
-                                           Margin="0,0,0,8"
-                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
-                                           Text="M3U is widely compatible for local files and direct stream URLs. YouTube URLs are typically not playable in other players; you can still include them for reference."/>
-                                <CheckBox x:Name="ExportM3uIncludeYoutubeCheckBox"
-                                          Content="Include YouTube entries (as webpage URLs)"
-                                          Margin="0,0,0,8"
-                                          Foreground="{DynamicResource App.Theme.Foreground}"
-                                          Checked="ExportM3uIncludeYoutubeCheckBox_OnChecked"
-                                          Unchecked="ExportM3uIncludeYoutubeCheckBox_OnUnchecked"/>
-                                <CheckBox x:Name="ExportM3uPreferRelativePathsCheckBox"
-                                          Content="Prefer relative paths (when exporting to the same folder tree)"
-                                          Margin="0,0,0,8"
-                                          Foreground="{DynamicResource App.Theme.Foreground}"
-                                          Checked="ExportM3uPreferRelativePathsCheckBox_OnChecked"
-                                          Unchecked="ExportM3uPreferRelativePathsCheckBox_OnUnchecked"/>
-                                <CheckBox x:Name="ExportM3uIncludeLyllyMetadataCheckBox"
-                                          Content="Include LyllyPlayer rich metadata comments (#LYLLY:...)"
-                                          Margin="0,0,0,8"
-                                          Foreground="{DynamicResource App.Theme.Foreground}"
-                                          Checked="ExportM3uIncludeLyllyMetadataCheckBox_OnChecked"
-                                          Unchecked="ExportM3uIncludeLyllyMetadataCheckBox_OnUnchecked"/>
-
-                                <TextBlock Text="Window"
-                                           FontWeight="SemiBold"
-                                           Margin="0,16,0,6"
-                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
-                                <CheckBox x:Name="AlwaysOnTopPlaylistWindowCheckBox"
-                                          Content="Also keep Playlist window on top (when TOP is enabled)"
-                                          Margin="0,0,0,8"
-                                          Foreground="{DynamicResource App.Theme.Foreground}"
-                                          Checked="AlwaysOnTopPlaylistWindowCheckBox_OnChecked"
-                                          Unchecked="AlwaysOnTopPlaylistWindowCheckBox_OnUnchecked"/>
-                                <CheckBox x:Name="AlwaysOnTopOptionsWindowCheckBox"
-                                          Content="Also keep Options window on top (when TOP is enabled)"
-                                          Margin="0,0,0,8"
-                                          Foreground="{DynamicResource App.Theme.Foreground}"
-                                          Checked="AlwaysOnTopOptionsWindowCheckBox_OnChecked"
-                                          Unchecked="AlwaysOnTopOptionsWindowCheckBox_OnUnchecked"/>
-                                <CheckBox x:Name="AlwaysOnTopLyricsWindowCheckBox"
-                                          Content="Also keep Lyrics window on top (when TOP is enabled)"
-                                          Margin="0,0,0,8"
-                                          Foreground="{DynamicResource App.Theme.Foreground}"
-                                          Checked="AlwaysOnTopLyricsWindowCheckBox_OnChecked"
-                                          Unchecked="AlwaysOnTopLyricsWindowCheckBox_OnUnchecked"/>
-                                <CheckBox x:Name="CompactHidesAuxWindowsCheckBox"
-                                          Content="Compact mode hides Playlist and Options"
-                                          Margin="0,0,0,8"
-                                          Foreground="{DynamicResource App.Theme.Foreground}"
-                                          Checked="CompactHidesAuxWindowsCheckBox_OnChecked"
-                                          Unchecked="CompactHidesAuxWindowsCheckBox_OnUnchecked"/>
-
-                                <TextBlock Text="Compact layout"
-                                           FontWeight="SemiBold"
-                                           Margin="0,8,0,6"
-                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
-                                <TextBlock TextWrapping="Wrap"
-                                           FontSize="11"
-                                           Margin="0,0,0,8"
-                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
-                                           Text="Choose the layout used when Compact mode is enabled. Ultra compact stacks visualizer + PL on the first row, with transport + S + R + volume on the second row."/>
-                                <StackPanel x:Name="CompactLayoutPanel" Margin="0,0,0,8" Background="Transparent">
-                                    <RadioButton x:Name="CompactLayoutNormalRadio"
-                                                 GroupName="CompactLayout"
-                                                 Margin="0,0,0,4"
-                                                 Content="Normal compact"
-                                                 Checked="CompactLayoutNormalRadio_OnChecked"/>
-                                    <RadioButton x:Name="CompactLayoutUltraRadio"
-                                                 GroupName="CompactLayout"
-                                                 Content="Ultra compact"
-                                                 Checked="CompactLayoutUltraRadio_OnChecked"/>
-                                </StackPanel>
-
-                                <TextBlock Text="App icon"
-                                           FontWeight="SemiBold"
-                                           Margin="0,16,0,6"
-                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
-                                <TextBlock TextWrapping="Wrap"
-                                           FontSize="11"
-                                           Margin="0,0,0,8"
-                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
-                                           Text="Choose where the app icon appears: on the taskbar, in the notification area (system tray), or both."/>
-                                <StackPanel x:Name="AppIconVisibilityPanel" Margin="0,0,0,8" Background="Transparent">
-                                    <RadioButton x:Name="AppIconTaskbarAndTrayRadio"
-                                                 GroupName="AppIconVisibility"
-                                                 Margin="0,0,0,4"
-                                                 Content="Taskbar and notification area"
-                                                 Checked="AppIconTaskbarAndTrayRadio_OnChecked"/>
-                                    <RadioButton x:Name="AppIconTaskbarOnlyRadio"
-                                                 GroupName="AppIconVisibility"
-                                                 Margin="0,0,0,4"
-                                                 Content="Taskbar only"
-                                                 Checked="AppIconTaskbarOnlyRadio_OnChecked"/>
-                                    <RadioButton x:Name="AppIconTrayOnlyRadio"
-                                                 GroupName="AppIconVisibility"
-                                                 Content="Notification area only"
-                                                 Checked="AppIconTrayOnlyRadio_OnChecked"/>
-                                </StackPanel>
-
+                            <StackPanel Grid.Row="0" Background="Transparent">
                                 <TextBlock Text="Diagnostics"
                                            FontWeight="SemiBold"
                                            Margin="0,0,0,6"
@@ -857,19 +877,28 @@
                                     <TextBox x:Name="AppLogMaxMbTextBox"
                                              Width="72"
                                              Height="30"
-                                             VerticalContentAlignment="Center"
-                                             />
+                                             VerticalContentAlignment="Center"/>
                                 </StackPanel>
-                                <Button x:Name="OpenLogButton"
-                                        Content="Logs&#x2026;"
-                                        MinWidth="92"
-                                        Height="30"
-                                        HorizontalAlignment="Left"
-                                        Margin="0,0,0,0"
-                                        Click="OpenLogButton_OnClick"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <Button x:Name="OpenLogButton"
+                                            Content="Open in separate window…"
+                                            MinWidth="190"
+                                            Height="30"
+                                            Margin="0,0,8,0"
+                                            HorizontalAlignment="Left"
+                                            Click="OpenLogButton_OnClick"/>
+                                </StackPanel>
                             </StackPanel>
-                        </ScrollViewer>
+
+                            <Border Grid.Row="1"
+                                    CornerRadius="6"
+                                    Padding="10"
+                                    Background="{DynamicResource {x:Static SystemColors.ControlLightBrushKey}}">
+                                <controls:LogViewerControl x:Name="EmbeddedLogViewer"/>
+                            </Border>
+                        </Grid>
                     </TabItem>
+
                 </TabControl>
 
                 <Border Grid.Row="1"

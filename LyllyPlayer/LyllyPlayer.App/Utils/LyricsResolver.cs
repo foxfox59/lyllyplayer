@@ -304,6 +304,7 @@ public static class LyricsResolver
         {
             // Common filename-derived prefixes: "02 - Song", "02. Song", "1-02 - Song", "CD1-02 - Song"
             t = System.Text.RegularExpressions.Regex.Replace(t, @"^\s*\d{1,3}\s*[-._)\]]\s+", "", System.Text.RegularExpressions.RegexOptions.None);
+            // Dual-number prefixes: "1-02 - Song", "06-06 - Song" (allow optional whitespace before the separator after the 2nd number).
             t = System.Text.RegularExpressions.Regex.Replace(t, @"^\s*\d{1,3}\s*-\s*\d{1,3}\s*[-._]\s+", "", System.Text.RegularExpressions.RegexOptions.None);
             t = System.Text.RegularExpressions.Regex.Replace(t, @"^\s*(?:cd|disc)\s*\d+\s*[-._]\s*\d{1,3}\s*[-._]\s+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
@@ -318,6 +319,17 @@ public static class LyricsResolver
             return Array.Empty<string>();
         try
         {
+            // Collapse apostrophes inside words so "I've" -> "Ive" (prevents losing the leading letter as junk).
+            try
+            {
+                s = System.Text.RegularExpressions.Regex.Replace(
+                    s,
+                    @"(?<=\p{L})['’](?=\p{L})",
+                    "",
+                    System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            }
+            catch { /* ignore */ }
+
             // Preserve dotted acronyms (LRCLIB may differentiate "C.R.E.A.M" vs "CREAM").
             var extra = new List<string>(4);
             try

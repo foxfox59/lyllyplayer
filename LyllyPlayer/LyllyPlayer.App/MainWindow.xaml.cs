@@ -545,7 +545,7 @@ public partial class MainWindow : Window
     private string? _lastLocalPlaylistPath;
     private string _lastYoutubeUrl = "";
     private string _themeMode = "Auto";
-    private string _backgroundMode = "Default";
+    private string _backgroundMode = "Default (Lylly)";
     private string _customBackgroundImagePath = "";
     private string _backgroundColorMode = "From image";
     private string _customBackgroundColor = "";
@@ -772,7 +772,7 @@ public partial class MainWindow : Window
         _globalMediaKeysEnabled = _startupSettings.GlobalMediaKeysEnabled ?? true;
         _includeSubfoldersOnFolderLoad = _startupSettings.IncludeSubfoldersOnFolderLoad ?? false;
         _themeMode = SettingsStore.NormalizeThemeMode(_startupSettings.ThemeMode);
-        _backgroundMode = string.IsNullOrWhiteSpace(_startupSettings.BackgroundMode) ? "Default" : _startupSettings.BackgroundMode.Trim();
+        _backgroundMode = SettingsStore.NormalizeBackgroundMode(_startupSettings.BackgroundMode);
         _customBackgroundImagePath = _startupSettings.CustomBackgroundImagePath ?? "";
         _backgroundColorMode = SettingsStore.NormalizeBackgroundColorMode(_startupSettings.BackgroundColorMode);
         _customBackgroundColor = _startupSettings.CustomBackgroundColor ?? "";
@@ -2746,7 +2746,7 @@ public partial class MainWindow : Window
                 return TryComputeFileFingerprint(_customBackgroundImagePath);
             }
 
-            if (System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"] is System.Windows.Media.ImageBrush defBrush
+            if (System.Windows.Application.Current.Resources[GetDefaultBackgroundResourceKey(mode)] is System.Windows.Media.ImageBrush defBrush
                 && defBrush.ImageSource is System.Windows.Media.Imaging.BitmapSource srcDef)
                 return TryComputeBackgroundBitmapFingerprint(srcDef);
 
@@ -2775,7 +2775,7 @@ public partial class MainWindow : Window
                 return src is not null;
             }
 
-            if (System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"] is System.Windows.Media.ImageBrush defBrush
+            if (System.Windows.Application.Current.Resources[GetDefaultBackgroundResourceKey(mode)] is System.Windows.Media.ImageBrush defBrush
                 && defBrush.ImageSource is System.Windows.Media.Imaging.BitmapSource srcDef)
             {
                 src = srcDef;
@@ -2789,6 +2789,18 @@ public partial class MainWindow : Window
             src = null;
             return false;
         }
+    }
+
+    private static string GetDefaultBackgroundResourceKey(string? backgroundMode)
+    {
+        var m = string.IsNullOrWhiteSpace(backgroundMode) ? "Default (Lylly)" : backgroundMode.Trim();
+        return m switch
+        {
+            "Default (Meow Cat)" => "App.Brush.DefaultWindowBgImage.MeowCat",
+            "Default (Lylly)" => "App.Brush.DefaultWindowBgImage.Lylly",
+            "Default" => "App.Brush.DefaultWindowBgImage.Lylly",
+            _ => "App.Brush.DefaultWindowBgImage.Lylly",
+        };
     }
 
     private void TryUpdateUserDefinedMainCropInPlace()
@@ -4327,7 +4339,7 @@ public partial class MainWindow : Window
                 getBackgroundMode: () => _backgroundMode,
                 setBackgroundMode: (m) =>
                 {
-                    _backgroundMode = string.IsNullOrWhiteSpace(m) ? "Default" : m.Trim();
+                    _backgroundMode = SettingsStore.NormalizeBackgroundMode(m);
                     ApplyBackgroundFromSettings();
                     ApplyBackgroundColorsFromSettings();
                     RequestPersistSnapshot();
@@ -4572,6 +4584,7 @@ public partial class MainWindow : Window
         _optionsWindow.Closed += (_, _) => _optionsWindow = null;
         ApplyOptionsWindowScaledChromeSize(_optionsWindow);
         ApplyOptionsWindowSettings(latestSettings, _optionsWindow);
+        try { _optionsWindow.SetLogPopoutOpen(_logWindow is not null); } catch { /* ignore */ }
         _optionsWindow.Show();
         ApplyAlwaysOnTopFromSettings();
         // Restore snapped positioning relative to main window if previously snapped.
@@ -6387,6 +6400,7 @@ public partial class MainWindow : Window
         {
             if (_logWindow is not null)
             {
+                try { _optionsWindow?.SetLogPopoutOpen(true); } catch { /* ignore */ }
                 _logWindow.Activate();
                 if (_logWindow.WindowState == WindowState.Minimized)
                     _logWindow.WindowState = WindowState.Normal;
@@ -6400,7 +6414,12 @@ public partial class MainWindow : Window
 
         var w = new LogWindow { Owner = this };
         _logWindow = w;
-        w.Closed += (_, _) => { _logWindow = null; };
+        try { _optionsWindow?.SetLogPopoutOpen(true); } catch { /* ignore */ }
+        w.Closed += (_, _) =>
+        {
+            _logWindow = null;
+            try { _optionsWindow?.SetLogPopoutOpen(false); } catch { /* ignore */ }
+        };
         try { w.Title = $"{GetAppTitleBase()} — Log"; } catch { /* ignore */ }
         w.Show();
     }
@@ -8688,8 +8707,10 @@ public partial class MainWindow : Window
             }
             else
             {
-                // Default pack image — clone so Stretch/Tile can follow settings without mutating the frozen resource.
-                if (System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"] is System.Windows.Media.ImageBrush defBrush
+                // Bundled default pack image — clone so Stretch/Tile can follow settings without mutating the frozen resource.
+                var defaultKey = GetDefaultBackgroundResourceKey(mode);
+
+                if (System.Windows.Application.Current.Resources[defaultKey] is System.Windows.Media.ImageBrush defBrush
                     && defBrush.ImageSource is System.Windows.Media.Imaging.BitmapSource srcDef)
                 {
                     var imgMain = new System.Windows.Media.ImageBrush(srcDef);
@@ -8715,8 +8736,8 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    rawMain = System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"] as System.Windows.Media.ImageBrush;
-                    mainBrush = (System.Windows.Media.Brush)System.Windows.Application.Current.Resources["App.Brush.DefaultWindowBgImage"];
+                    rawMain = System.Windows.Application.Current.Resources[defaultKey] as System.Windows.Media.ImageBrush;
+                    mainBrush = (System.Windows.Media.Brush)System.Windows.Application.Current.Resources[defaultKey];
                     playlistBrush = mainBrush;
                     optionsLogBrush = mainBrush;
                     lyricsBrush = mainBrush;
@@ -9821,6 +9842,8 @@ public partial class MainWindow : Window
                 _playlistWindow.Title = $"{baseTitle} — Playlist";
             if (_optionsWindow is not null)
                 _optionsWindow.Title = $"{baseTitle} — Options";
+            if (_lyricsWindow is not null)
+                _lyricsWindow.Title = $"{baseTitle} — Lyrics";
         }
         catch { /* ignore */ }
     }
@@ -10769,7 +10792,7 @@ public partial class MainWindow : Window
         try
         {
             _themeMode = SettingsStore.NormalizeThemeMode(t.ThemeMode);
-            _backgroundMode = string.IsNullOrWhiteSpace(t.BackgroundMode) ? "Default" : t.BackgroundMode.Trim();
+            _backgroundMode = SettingsStore.NormalizeBackgroundMode(t.BackgroundMode);
             _customBackgroundImagePath = t.CustomBackgroundImagePath ?? "";
             _backgroundColorMode = SettingsStore.NormalizeBackgroundColorMode(t.BackgroundColorMode);
             _customBackgroundColor = t.CustomBackgroundColor ?? "";

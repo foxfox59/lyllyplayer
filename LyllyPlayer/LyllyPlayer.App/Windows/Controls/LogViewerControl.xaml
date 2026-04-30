@@ -1,0 +1,64 @@
+<UserControl x:Class="LyllyPlayer.Windows.Controls.LogViewerControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:LyllyPlayer.Windows.Controls"
+             Height="Auto"
+             Width="Auto">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,8">
+            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
+                <ToggleButton x:Name="PauseToggleButton"
+                              Content="Pause"
+                              MinWidth="90"
+                              Height="30"
+                              Margin="0,0,8,0"
+                              Click="PauseToggleButton_OnClick"/>
+                <Button x:Name="RefreshButton"
+                        Content="Refresh"
+                        MinWidth="90"
+                        Height="30"
+                        Margin="0,0,8,0"
+                        Click="RefreshButton_OnClick"/>
+                <Button x:Name="OpenFileButton"
+                        Content="Open file"
+                        MinWidth="90"
+                        Height="30"
+                        Click="OpenFileButton_OnClick"/>
+            </StackPanel>
+
+            <TextBlock x:Name="StateTextBlock"
+                       DockPanel.Dock="Right"
+                       VerticalAlignment="Center"
+                       Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                       Text=""
+                       TextTrimming="CharacterEllipsis"/>
+        </DockPanel>
+
+        <Grid Grid.Row="1">
+            <TextBox x:Name="LogTextBox"
+                     MinWidth="0"
+                     MaxWidth="100000"
+                     IsReadOnly="True"
+                     TextWrapping="NoWrap"
+                     VerticalScrollBarVisibility="Auto"
+                     HorizontalScrollBarVisibility="Auto"/>
+
+            <Border x:Name="SuspendedOverlay"
+                    Background="#AA000000"
+                    Visibility="Collapsed">
+                <TextBlock Text="Log is open in a separate window."
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Foreground="White"
+                           FontSize="13"
+                           FontWeight="SemiBold"/>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>
+
