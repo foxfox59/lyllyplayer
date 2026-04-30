@@ -10317,6 +10317,16 @@ public partial class MainWindow : Window
             return;
         }
 
+        void ClearResolvedIfStillCurrent(string videoId)
+        {
+            try
+            {
+                if (string.Equals(_lyricsResolvedVideoId, videoId, StringComparison.OrdinalIgnoreCase))
+                    _lyricsResolvedVideoId = null;
+            }
+            catch { /* ignore */ }
+        }
+
         // Already resolved for this track — no need to re-resolve
         if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
         {
@@ -10386,7 +10396,8 @@ public partial class MainWindow : Window
                     var artist = searchArtist ?? entry.Channel;
                     try
                     {
-                        var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, duration, CancellationToken.None);
+                        var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics, isDefinitiveMiss) =
+                            await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, duration, CancellationToken.None);
                         // Discard stale result if track changed while fetching — cache first
                         if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
                         {
@@ -10424,7 +10435,7 @@ public partial class MainWindow : Window
                             });
                             return;
                         }
-                        else
+                        else if (isDefinitiveMiss)
                         {
                             AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (localDur={duration?.ToString("F0") ?? "null"}s)");
                             LyricsCache.SetMiss(cacheKey);
@@ -10433,6 +10444,8 @@ public partial class MainWindow : Window
                     catch (Exception ex)
                     {
                         AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (localDur={duration?.ToString("F0") ?? "null"}s)");
+                        // Do not treat failures as "resolved" — allow retry later.
+                        ClearResolvedIfStillCurrent(entry.VideoId);
                     }
                     _lyricsWindow?.Refresh();
                 }
@@ -10503,7 +10516,8 @@ public partial class MainWindow : Window
                             var title = entry.Title ?? "";
                             try
                             {
-                                var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.Channel, entry.DurationSeconds, CancellationToken.None);
+                                var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics, isDefinitiveMiss) =
+                                    await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.Channel, entry.DurationSeconds, CancellationToken.None);
                                 // Discard stale result if track changed while fetching — cache first
                                 if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
                                 {
@@ -10543,7 +10557,7 @@ public partial class MainWindow : Window
                                     });
                                     return;
                                 }
-                                else
+                                else if (isDefinitiveMiss)
                                 {
                                     AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
                                     LyricsCache.SetMiss(cacheKey);
@@ -10552,6 +10566,8 @@ public partial class MainWindow : Window
                             catch (Exception ex)
                             {
                                 AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
+                                // Do not treat failures as "resolved" — allow retry later.
+                                ClearResolvedIfStillCurrent(entry.VideoId);
                             }
 
                             _lyricsWindow?.Refresh();
@@ -10560,6 +10576,8 @@ public partial class MainWindow : Window
                     catch (Exception ex)
                     {
                         AppLog.Exception(ex, $"TryResolveLyricsAsync: fetch failed for {entry.VideoId}");
+                        // Do not treat failures as "resolved" — allow retry later.
+                        ClearResolvedIfStillCurrent(entry.VideoId);
                     }
 
                     _lyricsWindow?.Refresh();
@@ -10661,13 +10679,14 @@ public partial class MainWindow : Window
                 var artist = syncArtist ?? entry.Channel;
                 var duration = syncDuration ?? entry.DurationSeconds;
 
-                var (lrcLrclib, _, _, _, _) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, duration, CancellationToken.None);
+                var (lrcLrclib, _, _, _, _, isDefinitiveMiss) =
+                    await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, duration, CancellationToken.None);
                 if (!string.IsNullOrWhiteSpace(lrcLrclib))
                 {
                     LyricsCache.Set(cacheKey, lrcLrclib);
                     AppLog.Info($"Preheat: cached lyrics for local file {entry.VideoId}");
                 }
-                else
+                else if (isDefinitiveMiss)
                 {
                     LyricsCache.SetMiss(cacheKey);
                 }
@@ -10686,13 +10705,14 @@ public partial class MainWindow : Window
                 {
                     // Fallback to LRCLIB
                     var title = entry.Title ?? "";
-                    var (lrcLrclib, _, _, _, _) = await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.Channel, entry.DurationSeconds, CancellationToken.None);
+                    var (lrcLrclib, _, _, _, _, isDefinitiveMiss) =
+                        await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.Channel, entry.DurationSeconds, CancellationToken.None);
                     if (!string.IsNullOrWhiteSpace(lrcLrclib))
                     {
                         LyricsCache.Set(cacheKey, lrcLrclib);
                         AppLog.Info($"Preheat: cached lyrics for {entry.VideoId} via LRCLIB");
                     }
-                    else
+                    else if (isDefinitiveMiss)
                     {
                         LyricsCache.SetMiss(cacheKey);
                     }

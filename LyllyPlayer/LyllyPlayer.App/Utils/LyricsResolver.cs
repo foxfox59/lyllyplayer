@@ -10,6 +10,7 @@ namespace LyllyPlayer.Utils;
 /// </summary>
 public static class LyricsResolver
 {
+    private const int LrclibTimeoutSeconds = 25;
     private const int FetchTimeoutMs = 15_000;
 
     /// <summary>Minimum score a candidate must reach to be considered a valid match.
@@ -119,44 +120,85 @@ public static class LyricsResolver
     ///   3. Track name substring match — tertiary, 0 to +60
     ///
     /// If no synced lyrics are found but the song was found, falls back to plain (non-synced) lyrics.
-    /// Returns a tuple of (LrcText, LrclibDurationSeconds, Artist, Title, IsPlainLyrics).
+    /// Returns a tuple of (LrcText, LrclibDurationSeconds, Artist, Title, IsPlainLyrics, IsDefinitiveMiss).
+    /// IsDefinitiveMiss is true only when LRCLIB was successfully queried but no acceptable lyrics were found.
+    /// Network/timeout/parse failures are surfaced as exceptions and must NOT be treated as misses by callers.
     /// </summary>
     /// <param name="trackName">Raw YouTube video title (will be cleaned before searching).</param>
     /// <param name="artist">YouTube channel name, used for artist cross-referencing (not for searching).</param>
     /// <param name="targetDurationSeconds">Expected duration of the YouTube video.</param>
     /// <param name="ct">Cancellation token.</param>
-    public static async Task<(string? LrcText, double? LrclibDurationSeconds, string? Artist, string? Title, bool IsPlainLyrics)> FetchLyricsFromLrclibAsync(
+    public static async Task<(string? LrcText, double? LrclibDurationSeconds, string? Artist, string? Title, bool IsPlainLyrics, bool IsDefinitiveMiss)> FetchLyricsFromLrclibAsync(
         string trackName,
         string? artist,
         double? targetDurationSeconds,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(trackName))
-            return (null, null, null, null, false);
+            return (null, null, null, null, false, false);
 
         var searchQuery = BuildLrclibSearchQuery(trackName, artist);
         if (string.IsNullOrWhiteSpace(searchQuery))
-            return (null, null, null, null, false);
+            return (null, null, null, null, false, false);
 
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(LrclibTimeoutSeconds) };
 
         // Single-query policy: do not issue a second LRCLIB request (reduces load / avoids double misses).
-        var candidates = await SearchAndScoreAsync(client, searchQuery, trackName, artist, targetDurationSeconds, ct);
+        // However, do one retry on timeout/transient IO to avoid poisoning UX under temporary LRCLIB slowness.
+        List<(double score, string lrc, double? duration, string? artistName, string? trackName)> candidates;
+        try
+        {
+            candidates = await SearchAndScoreAsync(client, searchQuery, trackName, artist, targetDurationSeconds, ct);
+        }
+        catch (Exception ex) when (IsTransientLrclibFailure(ex, ct))
+        {
+            AppLog.Warn($"LRCLIB request transient failure (will retry once): {ex.GetType().Name}: {ex.Message}");
+            candidates = await SearchAndScoreAsync(client, searchQuery, trackName, artist, targetDurationSeconds, ct);
+        }
 
         if (candidates.Count > 0)
         {
             // Pick the highest-scored synced candidate.
             candidates.Sort((a, b) => b.score.CompareTo(a.score));
             var best = candidates[0];
-            return (best.lrc, best.duration, best.artistName, best.trackName, false);
+            return (best.lrc, best.duration, best.artistName, best.trackName, false, false);
         }
 
         // No synced lyrics found — check plain lyrics (same single-query policy).
-        var plainFallback = await SearchPlainLyricsAsync(client, searchQuery, trackName, artist, ct);
+        (string? LrcText, double? Duration, string? Artist, string? Title, bool IsPlainLyrics)? plainFallback;
+        try
+        {
+            plainFallback = await SearchPlainLyricsAsync(client, searchQuery, trackName, artist, ct);
+        }
+        catch (Exception ex) when (IsTransientLrclibFailure(ex, ct))
+        {
+            AppLog.Warn($"LRCLIB plain-lyrics request transient failure (will retry once): {ex.GetType().Name}: {ex.Message}");
+            plainFallback = await SearchPlainLyricsAsync(client, searchQuery, trackName, artist, ct);
+        }
         if (plainFallback != null)
-            return plainFallback.Value;
+            return (plainFallback.Value.LrcText, plainFallback.Value.Duration, plainFallback.Value.Artist, plainFallback.Value.Title, true, false);
 
-        return (null, null, null, null, false);
+        // Successful query but no lyrics found.
+        return (null, null, null, null, false, true);
+    }
+
+    private static bool IsTransientLrclibFailure(Exception ex, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested)
+            return false;
+
+        // HttpClient timeouts commonly surface as TaskCanceledException / TimeoutException chains.
+        if (ex is TimeoutException)
+            return true;
+        if (ex is TaskCanceledException)
+            return true;
+
+        // Also treat IO-level aborts as transient.
+        if (ex is System.IO.IOException)
+            return true;
+        if (ex.InnerException is not null)
+            return IsTransientLrclibFailure(ex.InnerException, ct);
+        return false;
     }
 
     private static string BuildLrclibSearchQuery(string trackName, string? artist)
