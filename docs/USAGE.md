@@ -1,4 +1,4 @@
-# LyllyPlayer — usage guide (outdated - for v1.3.0)
+# LyllyPlayer — usage guide
 
 This document describes the **current** behavior of the Windows desktop app (main window, playlist window, options, and persistence). Use it as a checklist while you review the product; adjust wording or sections if you change the UI later.
 
@@ -13,7 +13,7 @@ LyllyPlayer does **not** ship **ffmpeg** or **yt-dlp**. Install them separately,
 
 **YouTube** features (load playlist by URL/ID, search, refresh) need **yt-dlp**. **ffmpeg** is used for media playback, optional **metadata when loading** local folders/M3U (via ffprobe), and related tooling.
 
-**Node.js** (when shown under **Options → Tools**) is **not** required for basic use: normal playback, local files, and typical YouTube playlists only need **yt-dlp** and **ffmpeg**. Node is for **Advanced** YouTube options (e.g. **cookies from your browser** so playback can follow your signed-in session). You can leave Node unset unless you need that.
+**Node.js** (when shown under **Options → Tools**) is **not** required for basic use: normal playback, local files, and typical YouTube playlists only need **yt-dlp** and **ffmpeg**. Node is for additional YouTube options (e.g. **cookies from your browser** so playback can follow your signed-in session). You can leave Node unset unless you need that.
 
 ---
 
@@ -55,38 +55,56 @@ Note from the implementation: the hook consumes those keys (other apps may not s
 | **Source** text box    | Read-only display of the current source (URL, path, or `Search: …`).                                                                                                                                                                                                                                                        |
 | **Youtube...**         | Opens the modeless **YouTube** window with tabs for **Search videos**, **Search playlists**, **Import playlist**, and **My playlists (best-effort)**. Import supports **Replace** or **Append** (and optional “Remove duplicates”). The app remembers your last Replace/Append choice.                                         |
 | **Load URL**           | Opens a dialog. Pasting a **YouTube** playlist or video URL loads via yt-dlp. A **direct HTTP(S) stream** URL (e.g. Icecast) is turned into a **single-item** playlist.                                                                                                                                                     |
-| **Load M3U**           | Pick an `.m3u` / `.m3u8` file. With **Read metadata on load** enabled, tags/duration are read with ffmpeg/ffprobe (slower).                                                                                                                                                                                                 |
-| **Load folder**        | Pick a folder of audio files. Supported extensions include: **.mp3, .wav, .flac, .m4a, .aac, .ogg, .opus, .wma, .aiff, .aif, .aifc**. Optional subfolders and metadata follow Options (see below).                                                                                                                          |
-| **Save playlist…**     | Saves the **current queue order as shown** to a **JSON** file (app’s own format), including the playlist name and (when applicable) **per‑item origin label + origin source** for compound playlists.                                                                                                                        |
-| **Load saved…**        | Loads a previously saved **JSON** playlist file.                                                                                                                                                                                                                                                                            |
+| **Load playlist…**     | Loads a playlist from file (**JSON**, **M3U**, **M3U8**). For M3U and folder-origin sources, optional metadata behavior follows Options (see **Options → Playlist**).                                                                                                                                                       |
+| **Local files…**       | Opens the local file picker modal to import from a **folder** and/or specific **files**. Supports **Replace** or **Append** and optional best-effort **Remove duplicates** (defaults are remembered).                                                                                                                        |
+| **Save playlist…**     | Saves the current playlist to **JSON** (app’s internal format) or **M3U/M3U8** (based on your Save dialog choice). M3U export options are under **Options → Playlist**.                                                                                                                                                    |
 | **Queue list**         | Shows tracks in **playlist order**. **Double-click** a row to jump playback to that track.                                                                                                                                                                                                                                  |
 | **Right-click → Open** | For **local files**, opens **File Explorer** with the file selected. For **URLs**, opens the link in the **default browser**.                                                                                                                                                                                               |
 
 
 ### Long-running loads (overlay)
 
-When loading or refreshing takes time, a **themed overlay** (same **Surface** / **Foreground** palette as the rest of the app) appears with **Cancel** (stops the operation and **restores the playlist** as it was before that action, unless **Options → Advanced → Keep incomplete playlist on cancel** is enabled — see below).
+When loading or refreshing takes time, a **themed overlay** (same **Surface** / **Foreground** palette as the rest of the app) appears with **Cancel** (stops the operation and **restores the playlist** as it was before that action, unless **Options → Playlist → Keep incomplete playlist on cancel** is enabled — see below).
 
 A **progress bar** under the overlay message reflects **metadata** loads (per-file ffprobe completion) and **YouTube search** (staged search batches). **YouTube playlist refresh** shows an **indeterminate** bar while yt-dlp runs.
 
-**Taking too long? [Skip metadata]** appears when **Read metadata on load** is on and you **Load folder**, **Load M3U**, or **Refresh** a **folder** or **M3U** source: it cancels the slow ffprobe pass and **reloads the same path** with metadata reading turned off for that operation only (you keep the new playlist; this does not change your Options toggle). The “no metadata” reload runs in the background so the UI stays responsive.
+**Taking too long? [Skip metadata]** appears when **Read metadata on load** is on and you load/refresh a **folder** or **M3U** source: it cancels the slow ffprobe pass and **reloads the same path** with metadata reading turned off for that operation only (you keep the new playlist; this does not change your Options toggle). The “no metadata” reload runs in the background so the UI stays responsive.
 
 ---
 
 ## Options window
 
-Tabs (left to right): **Tools**, **System**, **Audio**, **Theme**, **Search**, **Local**, **Advanced**. Changes in most tabs are held as a **draft** until you click **Apply**. **Cancel** closes without applying the draft.
+Tabs (left to right): **Tools**, **Playlist**, **System**, **Audio**, **Theme**, **Lyrics**, **Log**. Changes in most tabs are held as a **draft** until you click **Apply**. **Cancel** closes without applying the draft.
 
 ### Tools
 
 - **yt-dlp**, **ffmpeg**, and optional **Node.js** — each row shows the **effective** binary (resolved from your saved path or from `PATH`), a **source** line (**explicit path** vs **PATH**), **Browse…** to set an override, and **Use PATH** to clear the saved path and rely on auto-detection. A notice at the top lists anything that was resolved from `PATH`.
-- **Node.js** is optional: basic YouTube playback only needs yt-dlp and ffmpeg. Node unlocks **Options → Advanced** (EJS solvers and **cookies from browser**).
+- **Node.js** is optional: basic YouTube playback only needs yt-dlp and ffmpeg. Node unlocks additional YouTube options on this same tab (**EJS solvers** and **cookies from browser**).
+
+Under Tools you may also see:
+
+- **YouTube EJS solvers** — **Prefer from GitHub** (default; same as older app behavior) or **bundled only** (no `--remote-components ejs:github`).
+- **Use cookies from browser for YouTube** — when enabled, passes your text as the value for yt-dlp’s `--cookies-from-browser` (see `yt-dlp --help` for syntax). Requires a non-empty value when enabled.
+
+If you don’t care about those, you can ignore Node completely.
+
+### Playlist
+
+- **Cache MB** — upper bound used for cache behavior (YouTube stream cache, resolve cache, and related disk usage).  
+- **Playlist auto-refresh** — **Disabled**, or **1 / 5 / 30 minutes** for sources that support refresh.  
+- **Keep incomplete playlist on cancel** — when **on**, cancelling a **YouTube search** (Cancel) or a **playlist refresh** from the playlist window keeps whatever partial results had already arrived. When **off**, Cancel restores the playlist from before that operation (default).
+- **Playlist export (M3U)** — controls how **Save playlist…** behaves when you pick M3U/M3U8:
+  - Include YouTube entries (as webpage URLs)
+  - Prefer relative paths (for local files)
+  - Include LyllyPlayer rich comment metadata (`#LYLLY:...`)
+- **Search defaults** — default result count and minimum length for YouTube video search.
+- **Local import defaults** — include subfolders by default and whether to read metadata on load (can be slow).
 
 ### System
 
-- **Cache MB** — upper bound used for **YouTube / yt-dlp** cache behavior (see app settings model).  
-- **Playlist auto-refresh** — **Disabled**, or **1 / 5 / 30 minutes** for sources that support refresh (not local-only “search” playlists).  
 - **Enable global media keys** — see above.
+- **Window** behavior (aux “always on top”, compact behavior, compact layout).
+- **App icon** visibility (taskbar / notification area / both).
 
 ### Audio
 
@@ -95,38 +113,23 @@ Tabs (left to right): **Tools**, **System**, **Audio**, **Theme**, **Search**, *
 
 ### Theme
 
-Background image mode (**None** / **Default** / **Custom**), optional **custom image** path, **background colors** (default / derived from image / custom + color picker), **opacity**, **scrim**, **window title** mode (default / custom), **window border** thickness, **UI scale** (50%–200%). **Save theme…** exports theme-related settings. **Load theme…** imports them and applies immediately if the file is valid.
+Background image mode (**None** / **Default (Lylly)** / **Default (Meow Cat)** / **Custom**), optional **custom image** path, **background colors** (default / derived from image / custom + color picker), **opacity**, **scrim**, **window title** mode (default / custom), **window border** thickness, **UI scale** (50%–200%). **Save theme…** exports theme-related settings. **Load theme…** imports them and applies immediately if the file is valid.
 
 With **Background: None**, **From image** under background colors is disabled (no wallpaper to sample), and **Background scrim** is disabled. If your saved theme had **From image** with **None**, opening Options coerces colors to **Default**.
 
 If you pick the wrong file (e.g. a playlist JSON), **Load theme…** warns that the JSON does not look like a theme file (or contains no theme keys) instead of failing silently.
 
-### Search
+### Lyrics
 
-Default **result count** and default **minimum length** for YouTube video search.
+- **Display lyrics** enables lyric resolving and highlighting (Lyrics window + optional title bar line).
+- **Try to get lyrics for local files** enables LRCLIB lookups for local tracks too (best-effort).
 
-**Search is metadata-only:** results come from yt-dlp’s **flat** YouTube Music search (titles, ids, durations when the extractor provides them). The app does **not** run a full per-video extraction at search time, so a hit can still **fail at play** (format/CDN changes, signature/EJS issues, region, age, very long uploads, etc.). That is normal for any client that lists search hits quickly.
+Lyrics come from either yt-dlp (when available on the YouTube item) or LRCLIB (one query per track, cached on disk).
 
-### Local
+### Log
 
-- **Include sub-folders by default** — used when **loading a folder** (and for refresh of a folder source).  
-- **Read metadata on load (slow!)** — when enabled, **folder** and **M3U** loads (and local refresh) call ffprobe for tags/duration; large libraries can take a long time (use **Skip metadata** on the load overlay if needed).
-
-### Advanced
-
-- **YouTube EJS solvers** — **Prefer from GitHub** (default; same as older app behavior) or **bundled only** (no `--remote-components ejs:github`). This tab is **disabled until Node.js** is found (explicit path or on `PATH`).
-- **Use cookies from browser for YouTube** — when enabled, passes your text as the value for yt-dlp’s `--cookies-from-browser` (see `yt-dlp --help` for syntax). Requires a non-empty value when enabled.
-- **Keep incomplete playlist on cancel** — when **on**, cancelling a **YouTube search** (Cancel) or a **playlist refresh** from the playlist window **keeps** whatever results were already shown (search batches already applied, or unchanged playlist after a refresh that did not finish). When **off**, Cancel **restores** the playlist from before that operation (default). **Taking too long? [Stop search]** always keeps partial results when the search had produced at least one batch.
-- **Logs…** — opens the **Log** window (in-memory ring + file tail of `app.log`).
-- **App icon (taskbar / notification area)** — controls where the app is visible:
-  - **Taskbar only**
-  - **Taskbar and notification area**
-  - **Notification area only**
-
-When the notification area icon is enabled, you can **right-click** it for a menu with:
-- **Open**
-- Transport controls (**Previous**, **Play/Resume/Pause**, **Next**, **Stop**)
-- **Exit**
+- Shows the tail of `app.log` and lets you **Pause** (freeze view) for diagnostics.
+- **Open in separate window…** pops out the log window. While the popout is open, the embedded view suspends itself to avoid duplicate file tailing.
 
 ---
 

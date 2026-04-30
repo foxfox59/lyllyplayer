@@ -73,7 +73,7 @@ Ideas for later — **not** commitments and nothing to depend on for now:
 
 - Optimize memory usage (or change whole implementation away from WPF)
 - Improve window snapping (currently occasionally feels jittery)
-- Lyrics display? Not a very high priority, but it might be amusing
+- Improve lyrics quality / matching (best-effort)
 - Linux builds — desktop player on Linux (would require significant changes)
 - Android release — mobile variant (requested feature by testers, would require very significant changes)
 - I18N - currently only in English, add support for multiple languages and make sure themes don't break

@@ -1,5 +1,9 @@
 ### What's new, pussycat?
 
+- 1.6.2: slight Options changes
+  - Options window tabs reworked (Advanced/Search/Local clutter moved under Playlist + Tools)
+  - New Log tab in Options (embedded log tail + Pause + popout)
+  - Added another bundled default background option (Default (Meow Cat))
 - 1.6.0: lyrics fixes + QOL updates
   - Lyrics window can now be themed
   - Lyrics query has been optimized + caches lyrics better
@@ -20,15 +24,15 @@
 - 1.4.1: fixed a bug with compound playlist origins not saving properly on internal snapshot
 - 1.4.0: various quality of life updates
   - Playlist:
-	- Shuffle performance improved - no longer saves unnecessary collections
+    - Shuffle performance improved - no longer saves unnecessary collections
     - Song queue
     - Ability to mix local and streaming sources
     - Ability to append to current playlist instead of replacing it (with best effort duplicate removal option)
-	- Saving playlists as M3U(8)
+    - Saving playlists as M3U(8)
   - Certain YT fetching issues fixed
   - Stop button added
   - Feature forgotten from previous release notes: ability to toggle the app visibility between taskbar, notification area, or both
-	- Notification area has a context menu for playback
+    - Notification area has a context menu for playback
   - Known issues:
     - Playlist becomes slow (but not unusable) with large playlists - around ~15000 items for me, YMMV
 - 1.3.1: fixes a small bug with the playlist window getting stuck on the wrong display on multi-monitor setups
@@ -47,3 +51,4 @@
 - 1.2.1: fixes a rare issue that only happened when using DisplayFusion (apps were fighting for window focus). 
 - 1.2.0: introduces the **ultra-compact mode**, a simple **theme designer** and slight transparency fixes for the foreground + title text
 - 1.1.0: initial public release with no major bugs (fingers crossed)
+
