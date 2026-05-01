@@ -18,14 +18,18 @@
 
 ---
 
-A multi-function desktop audio player with minimal external requirements: **ffmpeg** for any audio output, and **yt-dlp** for Youtube functionality.
+A multi-function desktop audio player: **audio playback uses LibVLC** (native libraries ship with the Windows build via NuGet). **yt-dlp** is only needed for **YouTube** (playlists, search, resolve).  
 Supports login cookies from browser if you have **node.js**, but not required for playback in most cases.  
 Supports either pasting a direct Youtube playlist ID/URL or searching from Youtube.  
 
-Imports .m3u playlists. Generates playlists from supported local audio file folders (.mp3, .wav, .flac, .m4a, .aac, .ogg, .opus, .wma, .aiff, .aif, .aifc). Can save and load playlists for later use both in internal format and .M3U  
+Imports .m3u playlists. Generates playlists from supported local audio file folders (.mp3, .wav, .flac, .m4a, .aac, .ogg, .opus, .wma, .aiff, .aif, .aifc). Can save and load playlists for later use both in internal JSON format and .M3U / .M3U8. **Compound** playlists (append local + YouTube, etc.) keep per-item origin metadata in JSON exports.  
+**Song queue:** right-click tracks to **add to queue** and play through a short “up next” list without reordering the full playlist. **Clean invalid items** drops missing locals and unavailable YouTube rows in one action.  
+YouTube flows live in a dedicated **YouTube** window: search, **Open URL** (video/playlist or direct stream URL), import playlist, and **My playlists** (best-effort with cookies when configured).  
 Tested also with simple icecast/shoutcast streams either via .m3u playlist or direct URL.  
-Support for basic custom theming with a default, automatic, custom or Windows themed color tint. Can be switched between light/dark modes (although the feature is crude)  
-Simple visualizer: off, VU bars, or a frequency spectrum  
+Support for basic custom theming with a default, automatic, custom or Windows themed color tint. Can be switched between light/dark modes (although the feature is crude). Optional **Theme designer** and bundled default backgrounds (including **Meow Cat**).  
+**Compact** and **Ultra compact** main layouts; auxiliary **Playlist**, **Options**, and **Lyrics** windows can snap to the main window and restore after compact mode.  
+Simple visualizer: off, VU bars, or a frequency spectrum (in Ultra compact the strip can double as a seek surface).  
+**Lyrics** (best-effort): separate **Lyrics** window plus optional title-bar line; sources include yt-dlp metadata and LRCLIB.  
 
 **and so much more!** (not really that much, those were the main features :D)  
 
@@ -56,8 +60,8 @@ In case you find it useful and want to give a little something, feel free to, bu
 
 ### KISS
 
-- You really do need **ffmpeg** (and **yt-dlp** for any Youtube stuff). Get those yourself, I can't bundle them reliably and keep them up to date.
-  - node.js for Youtube cookies/login. Also use this at your own risk - don't want you to get banned (should not be, but you never know).
+- You need **yt-dlp** on `PATH` or configured under **Options → Tools** for any YouTube features (the app can also use a **bundled/internal** yt-dlp copy—see Options). **ffmpeg is not used** for playback anymore; do not rely on old guides that mention it.
+  - **node.js** for Youtube cookies/login. Also use this at your own risk - don't want you to get banned (should not be, but you never know).
 - Any updates and additional features will be **best effort and not guaranteed**, I am working on this on my free time and personal budget.
 - Bugs are definitely there. I am only one man against a thousand enemies.
 
@@ -86,9 +90,9 @@ I'll let the AI do its thing now. Hope you enjoy this little player. If you feel
 
 ---
 
-Desktop media player (currently) for **Windows 10 and later** (64-bit), built with **.NET 8** and **WPF**. It plays **YouTube playlists and searches** (via [yt-dlp](https://github.com/yt-dlp/yt-dlp)), **local folders** and **M3U/M3U8** playlists, optional **metadata** via **ffmpeg**, and saves/restores playlist state between sessions.
+Desktop media player (currently) for **Windows 10 and later** (64-bit), built with **.NET 8** and **WPF**. Playback is through **LibVLC**. It plays **YouTube playlists and searches** (via [yt-dlp](https://github.com/yt-dlp/yt-dlp)), **local folders** and **M3U/M3U8** playlists, optional **metadata when loading** local/M3U sources (duration via **LibVLC** parse, not ffmpeg), and saves/restores playlist state between sessions.
 
-External tools (**ffmpeg**, **yt-dlp**) are not bundled; install them separately and configure paths in the app or ensure they are on `PATH`.
+**yt-dlp** is not bundled in the “always works offline” sense—you install it or use the app’s **internal yt-dlp** option. **ffmpeg** is not required for this app.
 
 **End-user behavior** (windows, buttons, options, overlays, file locations) is documented in **[docs/USAGE.md](docs/USAGE.md)** — review and edit that file as the product evolves.
 
@@ -100,8 +104,8 @@ External tools (**ffmpeg**, **yt-dlp**) are not bundled; install them separately
 | OS            | Windows 10 / 11 (x64 for default portable build)                            |
 | Build         | [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)              |
 | Runtime (dev) | .NET 8 Desktop Runtime (included with SDK for `dotnet run`)                 |
-| Mandatory     | ffmpeg (for any audio playback)                                             |
-| Optional      | yt-dlp (for any Youtube functionality), node.js (for Youtube cookies/login) |
+| Bundled       | LibVLC native libs (via `VideoLAN.LibVLC.Windows` — used for decode/output)   |
+| Typical setup | yt-dlp (PATH or **Options → Tools**, or internal copy), optional **node.js** for YouTube cookies |
 
 
 ## License
@@ -113,12 +117,17 @@ This project is licensed under the **GNU General Public License v3.0 only** — 
 ```
 ├── LyllyPlayer/              # Visual Studio solution and WPF application
 │   ├── LyllyPlayer.sln
-│   └── LyllyPlayer.App/      # Main project (entry assembly LyllyPlayer.exe)
+│   ├── LyllyPlayer.App/      # Main project (entry assembly LyllyPlayer.exe)
+│   │   ├── Shell/            # AppShell composition root (services used across the UI)
+│   │   ├── Services/         # e.g. playlist file save/load (JSON + M3U)
+│   │   └── ShellServices/    # Window hosts, options draft loading, playlist window ops
+│   └── LyllyPlayer.Core/     # Shared models / logic where split out from the WPF project
 ├── scripts/                  # Packaging (portable ZIP)
 │   ├── publish-portable.ps1
 │   └── publish-artifacts.ps1
 ├── docs/
-│   ├── USAGE.md              # Feature / UI guide (for review)
+│   ├── USAGE.md              # End-user feature / UI guide (keep in sync with the app)
+│   ├── SCREENSHOTS.md        # Visual samples (may lag behind minor UI tweaks)
 │   ├── GITHUB.md             # Branch vs Releases, tags, Actions
 │   └── RELEASING.md          # Portable / self-contained builds
 ├── nuget.config              # NuGet feed configuration

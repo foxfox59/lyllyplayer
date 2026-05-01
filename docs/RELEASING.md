@@ -61,10 +61,10 @@ After editing `LyllyPlayer.App\Assets\icon-*.png`:
 powershell -File .\LyllyPlayer\tools\make-ico.ps1
 ```
 
-## External tools (not bundled; user installs separately)
+## External tools
 
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-- [ffmpeg](https://ffmpeg.org/)
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — required for YouTube features unless the user relies on the app’s **internal** yt-dlp option (see **Options → Tools**).
+- **ffmpeg** — **not** used by current LyllyPlayer builds (playback and local duration probing use **LibVLC**). Do not list ffmpeg as a dependency for end users.
 
 ## Older Windows versions
 

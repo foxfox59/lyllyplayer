@@ -76,7 +76,7 @@ public partial class PlaylistWindow : Window
     private volatile bool _busyShowsFolderMetadataSkip;
     /// <summary>When true, busy overlay offers "Stop search" (keep partial results if any).</summary>
     private volatile bool _busyShowsSearchStop;
-    /// <summary>0 = unset, 1 = cancel (rollback playlist), 2 = skip metadata then reload the same folder or M3U without ffprobe.</summary>
+    /// <summary>0 = unset, 1 = cancel (rollback playlist), 2 = skip metadata then reload the same folder or M3U without LibVLC metadata pass.</summary>
     private int _folderMetadataBusyUserChoice;
     /// <summary>0 = unset, 1 = Cancel (full rollback), 2 = Stop search (keep playlist if non-empty).</summary>
     private int _searchOverlayDismissKind;

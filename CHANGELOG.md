@@ -1,5 +1,6 @@
 ### What's new, pussycat?
 
+- Documentation: refreshed **README**, **docs/USAGE.md**, **docs/RELEASING.md**, and **docs/SCREENSHOTS.md** — **ffmpeg** removed as a user dependency (playback/metadata use **LibVLC**); **yt-dlp** / optional **Node** documented to match **Options → Tools**.
 - 1.6.2: slight Options changes
   - Options window tabs reworked (Advanced/Search/Local clutter moved under Playlist + Tools)
   - New Log tab in Options (embedded log tail + Pause + popout)

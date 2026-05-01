@@ -1,19 +1,24 @@
 # LyllyPlayer — usage guide
 
-This document describes the **current** behavior of the Windows desktop app (main window, playlist window, options, and persistence). Use it as a checklist while you review the product; adjust wording or sections if you change the UI later.
+This document describes the **current** behavior of the Windows desktop app (main window, playlist, YouTube modal, lyrics, options, and persistence). Update it whenever behavior or labels change.
 
 ---
 
 ## Requirements (external tools)
 
-LyllyPlayer does **not** ship **ffmpeg** or **yt-dlp**. Install them separately, then either:
+**Playback** does **not** use **ffmpeg**. The app decodes and outputs audio with **LibVLC** (Windows native libraries are pulled in via the project’s LibVLC packages).
 
-- Put them on your system `PATH`, or  
-- Set explicit paths under **Options → Tools** (browse buttons for **yt-dlp** and **ffmpeg**).
+**YouTube** features (load playlist by URL/ID, search, refresh) need **yt-dlp** on your system or the app’s **internal** yt-dlp (see **Options → Tools**). Configure it by:
 
-**YouTube** features (load playlist by URL/ID, search, refresh) need **yt-dlp**. **ffmpeg** is used for media playback, optional **metadata when loading** local folders/M3U (via ffprobe), and related tooling.
+- Putting **yt-dlp** on your system `PATH`, or  
+- Browsing to an executable under **Options → Tools**, or  
+- Using **Use internal** when available.
 
-**Node.js** (when shown under **Options → Tools**) is **not** required for basic use: normal playback, local files, and typical YouTube playlists only need **yt-dlp** and **ffmpeg**. Node is for additional YouTube options (e.g. **cookies from your browser** so playback can follow your signed-in session). You can leave Node unset unless you need that.
+There is **no ffmpeg field** in Options anymore; ignore older screenshots or third-party guides that mention it.
+
+**Node.js** (under **Options → Tools**) is **not** required for basic use: normal playback, local files, and typical YouTube playlists only need **yt-dlp** (or internal). Node is for advanced YouTube options (e.g. **cookies from your browser**). Leave Node unset unless you need that.
+
+When **Read metadata on load** is enabled for folders/M3U, the app probes **duration** (and related parse data) through **LibVLC**, not ffprobe.
 
 ---
 
@@ -22,20 +27,27 @@ LyllyPlayer does **not** ship **ffmpeg** or **yt-dlp**. Install them separately,
 
 | Control / area                 | What it does                                                                                                                                                                                                                                                                                                                                                                                   |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **options…**                   | Opens **Options** (see below).                                                                                                                                                                                                                                                                                                                                                                 |
-| **playlist…**                  | Opens the **Playlist** window if it is closed. If it is already open, closes it (window position is saved).                                                                                                                                                                                                                                                                                    |
+| **options…**                   | Opens **Options** if it is not open. If **Options** is already open, **hides** it (position/state are saved). Same toggle pattern as **playlist…**.                                                                                                                                                                                                                                            |
+| **playlist…**                  | Opens the **Playlist** window if it is not open. If it is already open, **hides** it (position/state are saved).                                                                                                                                                                                                                                                                               |
+| **lyrics…**                    | Opens the **Lyrics** window when lyrics are enabled in Options, or toggles visibility if the window already exists. In **Ultra compact** layout, a compact **lyrics** control also appears on the transport row.                                                                                                                                                                                |
 | **Playlist title** line        | Shows the playlist name. If the current playlist is **compound** (appended sources), it shows the **origin** for the **currently playing** item (best-effort). **Right-click** it to **Open origin** (browser for YouTube origins; File Explorer for local paths).                                                                                                                                                                                    |
 | **Now playing** line           | Shows status and title/short messages. Common statuses: `STOPPED`, `FETCHING` (resolving media), `BUFFERING` (decoder running, not yet audible), `PLAYING` (PCM reaching the output device), `PAUSED`. You may also see `PREMIUM`, `AGE`, `UNAVAILABLE`, `COOKIE`, `ERROR`, etc. When the app shows an informational or error message, it can temporarily replace the normal now-playing line. |
 | **Elapsed / duration**         | Current position and track length when known.                                                                                                                                                                                                                                                                                                                                                  |
-| **Seek slider**                | Drag to seek within the current track (when enabled).                                                                                                                                                                                                                                                                                                                                          |
+| **Seek slider**                | Drag to seek within the current track (when enabled). In **Ultra compact** mode, the visualizer strip can act as a seek surface (see CHANGELOG 1.6.0).                                                                                                                                                                                                                                         |
 | **VU meters / spectrum / off** | Lightweight level visualization. **Click** the visualizer area to **cycle**: **VU** → **spectrum** → **off** (same bar height; off keeps the empty slot so the layout does not jump). Spectrum is driven from the same PCM samples sent to the audio device (not the pre-buffer queue), so it tracks what you hear more closely.                                                               |
 | **<< / > / >>**                | **Previous** track, **play/pause** (or resume / start), **next** track.                                                                                                                                                                                                                                                                                                                        |
+| **■** (Stop)                   | Stops playback (transport row).                                                                                                                                                                                                                                                                                                                                                                |
 | **Shuffle OFF / Shuffle ON**   | Toggles shuffle for the **play order** (the playlist list stays in original order).                                                                                                                                                                                                                                                                                                            |
 | **Repeat: …**                  | Cycles **Repeat: None** → **Repeat: Single** → **Repeat: All** (loop queue) → back to **None**.                                                                                                                                                                                                                                                                                                |
 | **Vol** slider                 | Output volume.                                                                                                                                                                                                                                                                                                                                                                                 |
-| **[-]** (compact)              | Toggles **compact** layout: narrower main chrome (playlist/options row and some transport controls hidden); **playlist** and **options** windows close until you expand again. State is saved in `settings.json`.                                                                                                                                                                              |
-| **TOP** (always on top)        | Toggles **Always on top** for the **main window**. When enabled, the app keeps the **active** title bar colors even while unfocused (no “passive/inactive” title bar tint). This does **not** change auxiliary windows’ behavior; they still follow their own “also keep on top” settings.                                                                                                     |
+| **[-]** (compact)              | Toggles **compact** layout: narrower chrome and a denser transport area. **Compact layout** is either **Normal compact** or **Ultra compact** (see **Options → System**). When **Compact mode hides Playlist and Options** is enabled, entering compact **hides** the Playlist, Options, and Lyrics windows (if open); they can be restored when you leave compact, or reopened from the main window while compact (see below). State is saved in `settings.json`. |
+| **TOP** (always on top)        | Toggles **Always on top** for the **main window**. When enabled, the app keeps the **active** title bar colors even while unfocused (no “passive/inactive” title bar tint). Auxiliary windows can each opt in under **Options → System** (“Also keep … on top **when TOP is enabled**”).                                                                                                     |
 | **Title bar**                  | Drag to move the window. **[X]** closes the app.                                                                                                                                                                                                                                                                                                                                               |
+
+### Auxiliary windows (Playlist, Options, Lyrics)
+
+- **Snap / dock:** When you move Playlist, Options, or Lyrics near a main-window edge, they can **snap** with a small gap. While snapped, moving or resizing the main window **keeps the auxiliary window aligned** (edge and offset are persisted where applicable).
+- **Compact + “hide aux”:** On entering compact with the hide option on, auxiliary windows are hidden. **Playlist** can still be opened from the **PL** control shown in compact / ultra layouts; that counts as a user-opened playlist for the compact session so it is not immediately closed again by the same policy. **Lyrics** behaves similarly when opened via **lyrics…** while compact.
 
 
 ### Global media keys (optional)
@@ -52,23 +64,26 @@ Note from the implementation: the hook consumes those keys (other apps may not s
 | Control                | What it does                                                                                                                                                                                                                                                                                                                |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **↻ (Refresh)**        | Re-loads the **current playlist source** while trying to keep the current track. **Disabled** for sources that don’t support refresh (e.g. non‑YouTube HTTP stream URLs) and **disabled for compound playlists** (when multiple sources have been appended and the app cannot reliably refresh them all).                           |
-| **Source** text box    | Read-only display of the current source (URL, path, or `Search: …`).                                                                                                                                                                                                                                                        |
-| **Youtube...**         | Opens the modeless **YouTube** window with tabs for **Search videos**, **Search playlists**, **Import playlist**, and **My playlists (best-effort)**. Import supports **Replace** or **Append** (and optional “Remove duplicates”). The app remembers your last Replace/Append choice.                                         |
-| **Load URL**           | Opens a dialog. Pasting a **YouTube** playlist or video URL loads via yt-dlp. A **direct HTTP(S) stream** URL (e.g. Icecast) is turned into a **single-item** playlist.                                                                                                                                                     |
+| **Window title**       | Includes the current **source** after the second em dash (URL, path, or `Search: …`).                                                                                                                                                                                                                                                                        |
+| **Youtube...**         | Opens the modeless **YouTube** window. Tabs (left to right): **Search videos**, **Open URL**, **Search playlists**, **Import playlist**, **My playlists (best-effort)**. **Open URL**: paste a **YouTube** playlist or video URL (resolved via yt-dlp) or a **direct HTTP(S) stream** URL (e.g. Icecast) for a **single-item** playlist. **Import playlist** supports **Replace** or **Append** (and optional **Remove duplicates**). The app remembers your last Replace/Append choice. |
 | **Load playlist…**     | Loads a playlist from file (**JSON**, **M3U**, **M3U8**). For M3U and folder-origin sources, optional metadata behavior follows Options (see **Options → Playlist**).                                                                                                                                                       |
 | **Local files…**       | Opens the local file picker modal to import from a **folder** and/or specific **files**. Supports **Replace** or **Append** and optional best-effort **Remove duplicates** (defaults are remembered).                                                                                                                        |
-| **Save playlist…**     | Saves the current playlist to **JSON** (app’s internal format) or **M3U/M3U8** (based on your Save dialog choice). M3U export options are under **Options → Playlist**.                                                                                                                                                    |
-| **Queue list**         | Shows tracks in **playlist order**. **Double-click** a row to jump playback to that track.                                                                                                                                                                                                                                  |
-| **Right-click → Open** | For **local files**, opens **File Explorer** with the file selected. For **URLs**, opens the link in the **default browser**.                                                                                                                                                                                               |
+| **Save playlist…**     | Saves the current playlist to **JSON** (app’s internal format) or **M3U/M3U8** (based on your Save dialog choice). M3U export options are under **Options → Playlist**. Per-item origin metadata (compound playlists) is preserved in JSON; M3U export follows the Options toggles (including `#LYLLY:` comments when enabled).                                                                                                                                                    |
+| **Sort** row           | Pick **Ascending / Descending** (toggle), a **sort mode** (**Title** or **Name**, **Source**, **Duration**, or **None** depending on playlist type), then **Sort** to apply. Sorting **reorders the real playlist** (playback order), not just the view.                                                                                                                                       |
+| **Clean invalid items** | Removes **missing local files** and YouTube rows marked **unavailable**, **premium-gated**, or **age-restricted** (same criteria as greyed rows). **Queued** references to removed entries are dropped; the app tries to keep the current track when it still exists.                                                      |
+| **Queue** panel        | When the song **queue** is non-empty, a **Queue** list appears above the main list. **Double-click** a row to jump playback. **Right-click** context menu: **Open** / **Open file location** / **Open source** (label depends on item), **Add to queue**, **Remove from queue** (queue row only for remove).              |
+| **Playlist list**      | Full playlist in **playlist order**. **Double-click** a row to jump playback. **Right-click**: same pattern as the queue—**Open file location** for local files, **Open source** for URLs/YouTube, plus **Add to queue** / **Remove from queue** when applicable. Rows that are **queued** for “play next” show distinct styling. |
 
 
 ### Long-running loads (overlay)
 
 When loading or refreshing takes time, a **themed overlay** (same **Surface** / **Foreground** palette as the rest of the app) appears with **Cancel** (stops the operation and **restores the playlist** as it was before that action, unless **Options → Playlist → Keep incomplete playlist on cancel** is enabled — see below).
 
-A **progress bar** under the overlay message reflects **metadata** loads (per-file ffprobe completion) and **YouTube search** (staged search batches). **YouTube playlist refresh** shows an **indeterminate** bar while yt-dlp runs.
+A **progress bar** under the overlay message reflects **metadata** loads (per-file LibVLC parse / duration probes) and **YouTube search** (staged search batches). **YouTube playlist refresh** shows an **indeterminate** bar while yt-dlp runs.
 
-**Taking too long? [Skip metadata]** appears when **Read metadata on load** is on and you load/refresh a **folder** or **M3U** source: it cancels the slow ffprobe pass and **reloads the same path** with metadata reading turned off for that operation only (you keep the new playlist; this does not change your Options toggle). The “no metadata” reload runs in the background so the UI stays responsive.
+**Taking too long? [Skip metadata]** appears when **Read metadata on load** is on and you load/refresh a **folder** or **M3U** source: it cancels the slow metadata pass and **reloads the same path** with metadata reading turned off for that operation only (you keep the new playlist; this does not change your Options toggle). The “no metadata” reload runs in the background so the UI stays responsive.
+
+**Taking too long? [Stop search]** can appear during long **YouTube video search** batches; it stops the staged search and leaves whatever results were already merged (subject to **Keep incomplete playlist on cancel** under **Options → Playlist**).
 
 ---
 
@@ -78,8 +93,8 @@ Tabs (left to right): **Tools**, **Playlist**, **System**, **Audio**, **Theme**,
 
 ### Tools
 
-- **yt-dlp**, **ffmpeg**, and optional **Node.js** — each row shows the **effective** binary (resolved from your saved path or from `PATH`), a **source** line (**explicit path** vs **PATH**), **Browse…** to set an override, and **Use PATH** to clear the saved path and rely on auto-detection. A notice at the top lists anything that was resolved from `PATH`.
-- **Node.js** is optional: basic YouTube playback only needs yt-dlp and ffmpeg. Node unlocks additional YouTube options on this same tab (**EJS solvers** and **cookies from browser**).
+- **yt-dlp** — shows the **effective** binary (saved path, **internal** copy, or `PATH`), **Browse…**, **Use PATH**, and **Use internal** when supported. Optional **yt-dlp updates** expander (weekly check / check now) applies to the internal copy.
+- **Node.js** (optional) — same pattern (**Browse…**, **Use PATH**). Needed only for **cookies from browser** / advanced YouTube flows gated below. Basic YouTube playback only needs yt-dlp.
 
 Under Tools you may also see:
 
@@ -103,7 +118,10 @@ If you don’t care about those, you can ignore Node completely.
 ### System
 
 - **Enable global media keys** — see above.
-- **Window** behavior (aux “always on top”, compact behavior, compact layout).
+- **Window**
+  - **Also keep Playlist / Options / Lyrics on top** — only applies when main **TOP** is on; each auxiliary window can follow suit.
+  - **Compact mode hides Playlist and Options** — when enabled, switching the main window to **compact** hides those windows (and **Lyrics** if it was open). Windows that were open are restored when you leave compact unless you chose to keep them closed. You can still open **Playlist** or **Lyrics** from the main window while compact (see **Main window** above).
+  - **Compact layout** — **Normal compact** vs **Ultra compact** (denser two-row layout; playlist shortcut and lyrics control on the transport row).
 - **App icon** visibility (taskbar / notification area / both).
 
 ### Audio
@@ -125,6 +143,8 @@ If you pick the wrong file (e.g. a playlist JSON), **Load theme…** warns that 
 - **Try to get lyrics for local files** enables LRCLIB lookups for local tracks too (best-effort).
 
 Lyrics come from either yt-dlp (when available on the YouTube item) or LRCLIB (one query per track, cached on disk).
+
+The **Lyrics** window uses the same themed chrome as other auxiliary windows and persists size, position, snap state, and “open” preference like Playlist and Options.
 
 ### Log
 
@@ -151,10 +171,12 @@ Under `%AppData%\LyllyPlayer\` (i.e. `Environment.SpecialFolder.ApplicationData\
 ## Tips
 
 1. **First YouTube load:** ensure yt-dlp is found (Options → Tools, or PATH). The app may use **playlist-cache.json** after a successful resolve.
-2. **Refresh** after changing files on disk for **folder** or **M3U** playlists.
-3. **Repeat: Single** is useful for practicing one track; **Repeat: All** loops the whole queue.
-4. If **global media keys** conflict with another app, turn the option off under **Options → System**.
-5. **Playlist items** can show **[PREMIUM]** when YouTube reports Music Premium–only content; those rows are greyed like unavailable items.
+2. Use **Youtube… → Open URL** for quick paste loads; use **Import playlist** when you need Replace/Append and duplicate handling.
+3. **Refresh** after changing files on disk for **folder** or **M3U** playlists.
+4. **Repeat: Single** is useful for practicing one track; **Repeat: All** loops the whole queue.
+5. If **global media keys** conflict with another app, turn the option off under **Options → System**.
+6. **Playlist items** can show **[PREMIUM]** when YouTube reports Music Premium–only content; those rows are greyed like unavailable items. **Clean invalid items** removes them (and broken locals) in one step.
+7. Use **Add to queue** (right-click) to build a **Queue** panel of “play next” items without reordering the whole playlist.
 
 ---
 
@@ -164,3 +186,9 @@ Under `%AppData%\LyllyPlayer\` (i.e. `Environment.SpecialFolder.ApplicationData\
 - **YouTube “Search”** playlists cannot use the same **Refresh** behavior as a normal playlist URL.
 
 If you find a mismatch between this guide and the app, update **this file** or the code so they stay aligned.
+
+---
+
+## Contributor note (code organization)
+
+Playback and timers still live largely in the WPF layer, but playlist **file** I/O (internal JSON + M3U export) is implemented in **`PlaylistFileService`** and composed on **`AppShell`** (`PlaylistFiles`) so the same logic can be reused from other hosts later. The playlist window receives backend operations through **`PlaylistWindowOps`** rather than a long list of unrelated delegates.

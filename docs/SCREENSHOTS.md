@@ -1,4 +1,6 @@
-# LyllyPlayer screenshots (1.2.0 - slightly outdated)
+# LyllyPlayer screenshots
+
+These images are from around **v1.2.0** and **remain useful** for layout and theming, but labels and small controls may differ in newer builds (e.g. **lyrics…**, **Stop**, YouTube **Open URL** tab, playlist **Sort** / **Clean invalid items**, **Ultra compact**). For **accurate, current behavior**, use **[USAGE.md](USAGE.md)**.
 
 ## Default view, no settings changed, 100% UI scale
 
