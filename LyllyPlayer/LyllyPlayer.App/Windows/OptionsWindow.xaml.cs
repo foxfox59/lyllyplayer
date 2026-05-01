@@ -690,7 +690,20 @@ public partial class OptionsWindow : Window
         var n = ToolPathResolver.Resolve(string.IsNullOrWhiteSpace(_draft.NodeJsPath) ? null : _draft.NodeJsPath, "node");
 
         YtDlpPathTextBox.Text = y.DisplayText;
-        YtDlpSourceTextBlock.Text = SourceSubtitle(y.Source);
+        try
+        {
+            var managed = ToolPaths.GetManagedYtDlpPath();
+            if (y.IsFound &&
+                !string.IsNullOrWhiteSpace(managed) &&
+                string.Equals(Path.GetFullPath(y.EffectiveFileName), Path.GetFullPath(managed), StringComparison.OrdinalIgnoreCase))
+                YtDlpSourceTextBlock.Text = "Source: internal (downloaded)";
+            else
+                YtDlpSourceTextBlock.Text = SourceSubtitle(y.Source);
+        }
+        catch
+        {
+            YtDlpSourceTextBlock.Text = SourceSubtitle(y.Source);
+        }
         try
         {
             FfmpegPathTextBox.Text = "(not used — LibVLC)";
@@ -899,6 +912,28 @@ public partial class OptionsWindow : Window
 
         _draft.YtDlpPath = dlg.FileName;
         RefreshUi();
+    }
+
+    private void YtDlpUseInternalButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var managed = ToolPaths.GetManagedYtDlpPath();
+            if (!File.Exists(managed))
+            {
+                System.Windows.MessageBox.Show(
+                    this,
+                    "Internal yt-dlp was not found yet.\n\nUse Browse… to select your own yt-dlp binary, or download yt-dlp from the main app prompt first.",
+                    "Options",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            _draft.YtDlpPath = managed;
+            RefreshUi();
+        }
+        catch { /* ignore */ }
     }
 
     private void FfmpegBrowseButton_OnClick(object sender, RoutedEventArgs e)

@@ -14,6 +14,7 @@ using System.Threading.Tasks;
 using System.Text.Json;
 using System.Runtime.InteropServices;
 using System.Drawing;
+using System.Net.Http;
 using LyllyPlayer.Models;
 using LyllyPlayer.Services;
 using LyllyPlayer.ShellServices;
@@ -1214,7 +1215,7 @@ public partial class MainWindow : Window
                     if (_isFreshSettingsInstall)
                     {
                         ApplyFirstRunMainWindowPlacement();
-                        ShowFirstRunExternalToolsNotice();
+                        _ = ShowFirstRunExternalToolsNoticeAsync();
                     }
                 }
                 catch { /* ignore */ }
@@ -5950,22 +5951,17 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Warns on first launch that yt-dlp should be installed or configured (Options / PATH).</summary>
-    private void ShowFirstRunExternalToolsNotice()
+    /// <summary>
+    /// On first launch, offer to download yt-dlp if missing. Users can always choose their own binary instead.
+    /// </summary>
+    private async Task ShowFirstRunExternalToolsNoticeAsync()
     {
         if (!_isFreshSettingsInstall)
             return;
         try
         {
-            System.Windows.MessageBox.Show(
-                this,
-                "STOP!\n\n" +
-                "The player requires yt-dlp for YouTube search and playback. " +
-                "Make sure it is downloaded and on your PATH, or set explicitly under Options.\n\n" +
-                "Playback uses LibVLC (no separate FFmpeg install).",
-                GetAppTitleBase(),
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
+            // Only prompt if yt-dlp isn't already available (PATH/custom/managed).
+            _ = await EnsureYtDlpReadyAsync().ConfigureAwait(true);
         }
         catch
         {
@@ -6539,7 +6535,7 @@ public partial class MainWindow : Window
                 }
             }
 
-            if (!EnsureYtDlpReady())
+            if (!await EnsureYtDlpReadyAsync().ConfigureAwait(true))
                 return;
 
             YtDlpClient.PlaylistResolveResult resolved;
@@ -7355,7 +7351,7 @@ public partial class MainWindow : Window
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!EnsureYtDlpReady())
+            if (!await EnsureYtDlpReadyAsync(cancellationToken).ConfigureAwait(true))
                 return;
 
             YtDlpClient.PlaylistResolveResult resolved;
@@ -7422,16 +7418,122 @@ public partial class MainWindow : Window
         }
     }
 
-    private bool EnsureYtDlpReady()
+    private static async Task<bool> TryDownloadYtDlpAsync(string destExePath, CancellationToken ct)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(destExePath);
+            if (!string.IsNullOrWhiteSpace(dir))
+                Directory.CreateDirectory(dir);
+
+            var tmp = destExePath + ".tmp";
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* ignore */ }
+
+            // Official latest download URL (no GitHub API required).
+            const string url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
+
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+
+            await using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                await resp.Content.CopyToAsync(fs, ct).ConfigureAwait(false);
+            }
+
+            // Best-effort replace (keep old as .bak).
+            try
+            {
+                var bak = destExePath + ".bak";
+                try { if (File.Exists(bak)) File.Delete(bak); } catch { /* ignore */ }
+                if (File.Exists(destExePath))
+                {
+                    try { File.Move(destExePath, bak, overwrite: true); } catch { /* ignore */ }
+                }
+                File.Move(tmp, destExePath, overwrite: true);
+            }
+            catch
+            {
+                // If replace fails (e.g. file locked), keep the downloaded file around for manual recovery.
+                try
+                {
+                    var alt = Path.Combine(dir ?? "", "yt-dlp.new.exe");
+                    File.Move(tmp, alt, overwrite: true);
+                }
+                catch { /* ignore */ }
+                return false;
+            }
+
+            return File.Exists(destExePath);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task<bool> EnsureYtDlpReadyAsync(CancellationToken cancellationToken = default)
     {
         ApplyResolvedToolPaths();
         var r = ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp");
         if (r.IsFound)
             return true;
 
-        SetStatusMessage("ERROR", "yt-dlp not found. Click yt-dlp… to set it.");
-        AppLog.Error("yt-dlp not found on PATH and no valid configured path.");
-        return false;
+        // If not on PATH, try our managed per-user tool location.
+        var managed = ToolPaths.GetManagedYtDlpPath();
+        try
+        {
+            if (File.Exists(managed))
+            {
+                _savedYtDlpPath = managed;
+                ApplyResolvedToolPaths();
+                ApplyYtdlpPlaybackOptions();
+                SaveSettingsSnapshot();
+                return ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp").IsFound;
+            }
+        }
+        catch { /* ignore */ }
+
+        try
+        {
+            var msg =
+                "yt-dlp was not found on PATH and no custom path is configured.\n\n" +
+                "You can download yt-dlp now (recommended), or use your own yt-dlp binary by selecting it (even if it's not on PATH).\n\n" +
+                "Download yt-dlp now?";
+
+            var choice = System.Windows.MessageBox.Show(
+                this,
+                msg,
+                GetAppTitleBase(),
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+
+            if (choice == MessageBoxResult.No)
+                return PromptForYtDlpPath();
+            if (choice != MessageBoxResult.Yes)
+                return false;
+
+            SetStatusMessage("INFO", "Downloading yt-dlp…");
+            var ok = await TryDownloadYtDlpAsync(managed, cancellationToken).ConfigureAwait(true);
+            if (!ok)
+            {
+                SetStatusMessage("ERROR", "yt-dlp download failed. Set it under Options → Tools.");
+                return false;
+            }
+
+            _savedYtDlpPath = managed;
+            ApplyResolvedToolPaths();
+            ApplyYtdlpPlaybackOptions();
+            SaveSettingsSnapshot();
+            SetStatusMessage("INFO", "yt-dlp downloaded.");
+            return ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp").IsFound;
+        }
+        catch
+        {
+            SetStatusMessage("ERROR", "yt-dlp not found. Set it under Options → Tools.");
+            AppLog.Error("yt-dlp not found on PATH and no valid configured path.");
+            return false;
+        }
     }
 
     private bool PromptForYtDlpPath()

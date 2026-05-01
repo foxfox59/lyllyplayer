@@ -171,8 +171,11 @@
                                         <TextBlock x:Name="YtDlpSourceTextBlock" FontSize="11" Margin="2,2,0,0"
                                                    Foreground="{DynamicResource App.Theme.Foreground}"/>
                                     </StackPanel>
-                                    <Button Grid.Row="1" Grid.Column="2" x:Name="YtDlpBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="YtDlpBrowseButton_OnClick"/>
-                                    <Button Grid.Row="1" Grid.Column="3" x:Name="YtDlpUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="YtDlpUsePathButton_OnClick"/>
+                                    <StackPanel Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,10" VerticalAlignment="Top">
+                                        <Button x:Name="YtDlpUseInternalButton" Content="Use internal" MinWidth="96" Height="30" Margin="0,0,8,0" Click="YtDlpUseInternalButton_OnClick"/>
+                                        <Button x:Name="YtDlpBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,0" Click="YtDlpBrowseButton_OnClick"/>
+                                        <Button x:Name="YtDlpUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Click="YtDlpUsePathButton_OnClick"/>
+                                    </StackPanel>
 
                                     <TextBlock Grid.Row="2" Grid.Column="0" Text="ffmpeg:" VerticalAlignment="Top" Margin="0,6,8,0" Visibility="Collapsed"/>
                                     <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,8,10" Visibility="Collapsed">
