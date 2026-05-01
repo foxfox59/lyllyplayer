@@ -90,10 +90,7 @@ public partial class PlaylistWindow : Window
     /// <summary>0 = unset, 1 = Cancel (full rollback), 2 = Stop search (keep playlist if non-empty).</summary>
     private int _searchOverlayDismissKind;
 
-    private bool _chromeDragging;
-    private System.Windows.Point _chromeDragStartScreen;
-    private double _chromeDragStartLeft;
-    private double _chromeDragStartTop;
+    // Chrome dragging uses Window.DragMove() now so WM_MOVING-based snapping can engage.
 
     private ObservableCollection<QueueItem>? _queueSource;
     private CollectionViewSource? _queueViewSource;
@@ -340,60 +337,18 @@ public partial class PlaylistWindow : Window
 
         try
         {
-            _chromeDragging = true;
-            _chromeDragStartLeft = Left;
-            _chromeDragStartTop = Top;
-            _chromeDragStartScreen = PointToScreen(e.GetPosition(this));
-
-            CaptureMouse();
-            MouseMove -= ChromeDrag_MouseMove;
-            MouseLeftButtonUp -= ChromeDrag_MouseLeftButtonUp;
-            MouseMove += ChromeDrag_MouseMove;
-            MouseLeftButtonUp += ChromeDrag_MouseLeftButtonUp;
-
+            // Use OS-driven window dragging so Win32 WM_MOVING-based snapping can engage.
+            // (This window previously moved itself by setting Left/Top, which bypassed WM_MOVING.)
+            DragMove();
             e.Handled = true;
         }
         catch
         {
-            _chromeDragging = false;
+            // ignore
         }
     }
 
-    private void ChromeDrag_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
-    {
-        if (!_chromeDragging)
-            return;
-        if (e.LeftButton != MouseButtonState.Pressed)
-        {
-            EndChromeDrag();
-            return;
-        }
-
-        try
-        {
-            var cur = PointToScreen(e.GetPosition(this));
-            var dx = cur.X - _chromeDragStartScreen.X;
-            var dy = cur.Y - _chromeDragStartScreen.Y;
-            Left = _chromeDragStartLeft + dx;
-            Top = _chromeDragStartTop + dy;
-        }
-        catch
-        {
-            EndChromeDrag();
-        }
-    }
-
-    private void ChromeDrag_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => EndChromeDrag();
-
-    private void EndChromeDrag()
-    {
-        if (!_chromeDragging)
-            return;
-        _chromeDragging = false;
-        try { ReleaseMouseCapture(); } catch { /* ignore */ }
-        MouseMove -= ChromeDrag_MouseMove;
-        MouseLeftButtonUp -= ChromeDrag_MouseLeftButtonUp;
-    }
+    // Legacy manual drag handlers removed (DragMove is used instead).
 
     public void SetItemsSource(ObservableCollection<QueueItem> queueItems, ObservableCollection<QueueItem> playlistItems)
     {

@@ -653,9 +653,9 @@ public partial class MainWindow : Window
     private DispatcherTimer? _chromeDragStartDelayTimer;
     private bool _chromeDragPendingMoveListener;
     private System.Windows.Point _chromePendingDragWindowPoint;
-    private System.Windows.Point _chromeDragStartScreen;
-    private double _chromeDragStartLeft;
-    private double _chromeDragStartTop;
+    // Legacy manual drag state removed (DragMove is used instead).
+
+    private DispatcherTimer? _snapRestoreDebounceTimer;
 
     /// <summary>Minimal main layout: no options/playlist row; hide shuffle/repeat and playlist title in the card.</summary>
     private bool _mainWindowCompact;
@@ -869,6 +869,9 @@ public partial class MainWindow : Window
         _ffmpegPath = fInit.EffectiveFileName;
 
         InitializeComponent();
+
+        // Universal gapless snapping between LyllyPlayer windows.
+        try { WindowSnapService.Register(this); } catch { /* ignore */ }
 
         _appLogLevel = AppLog.NormalizeLevelString(_startupSettings.AppLogLevel);
         try { AppLog.SetLevel(_appLogLevel); } catch { /* ignore */ }
@@ -1307,8 +1310,6 @@ public partial class MainWindow : Window
                         {
                             try
                             {
-                                if (_playlistSnapped && _playlistSnapEdge != PlaylistSnapEdge.None)
-                                    SyncPlaylistWindowToMain();
                                 if (_optionsSnapped && _optionsSnapEdge != OptionsSnapEdge.None)
                                     SyncOptionsWindowToMain();
                                 RequestPersistSnapshot();
@@ -1316,6 +1317,33 @@ public partial class MainWindow : Window
                             catch { /* ignore */ }
                         }), DispatcherPriority.ContextIdle);
                     }
+                }
+                catch { /* ignore */ }
+
+                // After all windows have opened and applied their persisted bounds, restore latch relations
+                // for the snap service so clusters behave correctly immediately on startup.
+                try
+                {
+                    // Startup can trigger a flurry of Location/Size changes while windows are still settling.
+                    // Delay the snap-state restore so we only scan once after things are stable (reduces jitter/CPU spikes).
+                    _snapRestoreDebounceTimer?.Stop();
+                    _snapRestoreDebounceTimer = new DispatcherTimer(DispatcherPriority.Background)
+                    {
+                        Interval = TimeSpan.FromMilliseconds(650)
+                    };
+                    _snapRestoreDebounceTimer.Tick += (_, _) =>
+                    {
+                        try
+                        {
+                            if (WindowSnapService.AnyWindowDragging)
+                                return; // keep waiting until the user isn't dragging
+                        }
+                        catch { /* ignore */ }
+
+                        try { _snapRestoreDebounceTimer?.Stop(); } catch { /* ignore */ }
+                        try { WindowSnapService.RestoreLatchedRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+                    };
+                    _snapRestoreDebounceTimer.Start();
                 }
                 catch { /* ignore */ }
             }), DispatcherPriority.ContextIdle);
@@ -1842,8 +1870,6 @@ public partial class MainWindow : Window
 
             try
             {
-                if (_playlistSnapped && _playlistSnapEdge != PlaylistSnapEdge.None)
-                    SyncPlaylistWindowToMain();
                 if (_optionsSnapped && _optionsSnapEdge != OptionsSnapEdge.None)
                     SyncOptionsWindowToMain();
             }
@@ -3138,59 +3164,21 @@ public partial class MainWindow : Window
         CancelChromeDragStartTimer();
         try
         {
+            // Use OS-driven window dragging so WM_MOVING-based snapping + cluster-follow can engage.
             _chromeDragging = true;
-            _chromeDragStartLeft = Left;
-            _chromeDragStartTop = Top;
-            _chromeDragStartScreen = screenPoint;
-
-            CaptureMouse();
-            MouseMove -= ChromeDrag_MouseMove;
-            MouseLeftButtonUp -= ChromeDrag_MouseLeftButtonUp;
-            MouseMove += ChromeDrag_MouseMove;
-            MouseLeftButtonUp += ChromeDrag_MouseLeftButtonUp;
+            DragMove();
         }
         catch
+        {
+            // ignore
+        }
+        finally
         {
             _chromeDragging = false;
         }
     }
 
-    private void ChromeDrag_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
-    {
-        if (!_chromeDragging)
-            return;
-        if (e.LeftButton != MouseButtonState.Pressed)
-        {
-            EndChromeDrag();
-            return;
-        }
-
-        try
-        {
-            var cur = PointToScreen(e.GetPosition(this));
-            var dx = cur.X - _chromeDragStartScreen.X;
-            var dy = cur.Y - _chromeDragStartScreen.Y;
-            Left = _chromeDragStartLeft + dx;
-            Top = _chromeDragStartTop + dy;
-        }
-        catch
-        {
-            EndChromeDrag();
-        }
-    }
-
-    private void ChromeDrag_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => EndChromeDrag();
-
-    private void EndChromeDrag()
-    {
-        if (!_chromeDragging)
-            return;
-        _chromeDragging = false;
-        CancelChromeDragStartTimer();
-        try { ReleaseMouseCapture(); } catch { /* ignore */ }
-        MouseMove -= ChromeDrag_MouseMove;
-        MouseLeftButtonUp -= ChromeDrag_MouseLeftButtonUp;
-    }
+    // Legacy manual drag handlers removed (DragMove is used instead).
 
     private void InitializeGlobalMediaKeys()
     {
@@ -3605,7 +3593,8 @@ public partial class MainWindow : Window
                 if (_syncingWindowMove || _restoringAuxFromMinimize) return;
                 if (_playlistWindow is not null)
                     CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
-                UpdateSnapStateFromPlaylistPosition();
+                // Legacy "dock to main" snapping fights the new snap service.
+                // Let WM_MOVING-based snapping control interactive positioning.
                 RequestPersistSnapshot();
             };
             _playlistWindow.SizeChanged += (_, _) =>
@@ -3613,11 +3602,7 @@ public partial class MainWindow : Window
                 if (_syncingWindowMove || _restoringAuxFromMinimize) return;
                 if (_playlistWindow is not null)
                     CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
-                // If snapped, keep it docked to the edge while resizing playlist window.
-                if (_playlistSnapped)
-                    SyncPlaylistWindowToMain();
-                else
-                    UpdateSnapStateFromPlaylistPosition();
+                // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
                 RequestPersistSnapshot();
             };
             _playlistWindow.Closed += (_, _) =>
@@ -3627,6 +3612,7 @@ public partial class MainWindow : Window
                 // If user closes Playlist, clear the compact "pin open" override.
                 _compactUserOpenedPlaylistWindow = false;
             };
+            try { WindowSnapService.Register(_playlistWindow); } catch { /* ignore */ }
             _playlistWindow.SetItemsSource(_queueItems, _playlistItems);
             UpdateRefreshEnabled();
             try { _playlistWindow.ApplyPersistedPlaylistFilter(latestSettings.PlaylistWindowFilter); } catch { /* ignore */ }
@@ -3649,31 +3635,13 @@ public partial class MainWindow : Window
             }
             catch { /* ignore */ }
             ApplyAlwaysOnTopFromSettings();
-            // Restore snapped positioning relative to main window if previously snapped.
+            // Legacy "dock to main" snap restore disabled: WM_MOVING snap service is the single source of truth.
             try
             {
-                _playlistSnapped = latestSettings.PlaylistWindowSnapped ?? false;
-                _playlistSnapEdge = Enum.TryParse<PlaylistSnapEdge>(latestSettings.PlaylistWindowSnapEdge, ignoreCase: true, out var e) ? e : PlaylistSnapEdge.None;
-                _playlistDockYOffset = latestSettings.PlaylistWindowDockYOffset ?? _playlistDockYOffset;
-                _playlistDockXOffset = latestSettings.PlaylistWindowDockXOffset ?? _playlistDockXOffset;
-                if (_playlistSnapped && _playlistSnapEdge != PlaylistSnapEdge.None)
-                    SyncPlaylistWindowToMain();
+                _playlistSnapped = false;
+                _playlistSnapEdge = PlaylistSnapEdge.None;
             }
             catch { /* ignore */ }
-            // Critical: compute snap state immediately so moving the main window right after opening
-            // keeps the playlist window docked.
-            UpdateSnapStateFromPlaylistPosition();
-            if (_playlistSnapped)
-                SyncPlaylistWindowToMain();
-            // Applying WindowState/position is more reliable after showing.
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                if (_playlistWindow is null) return;
-                // IMPORTANT: don't re-apply saved bounds after showing.
-                // That can race with snapping if the user moves the main window immediately.
-                UpdateSnapStateFromPlaylistPosition();
-                if (_playlistSnapped) SyncPlaylistWindowToMain();
-            }), DispatcherPriority.Background);
 
             // NOTE: We intentionally avoid delayed re-application of bounds here.
             // It caused snapping to break by moving the window back to its persisted position.
@@ -3840,7 +3808,7 @@ public partial class MainWindow : Window
                 if (_syncingWindowMove || _restoringAuxFromMinimize) return;
                 if (_lyricsWindow is not null)
                     CaptureWindowBounds(_lyricsWindow, out var lastLyricsBounds, out var lastLyricsState);
-                UpdateSnapStateFromLyricsPosition();
+                // Legacy "dock to main" snapping fights the new snap service.
                 RequestPersistSnapshot();
             };
             _lyricsWindow.SizeChanged += (_, _) =>
@@ -3848,10 +3816,7 @@ public partial class MainWindow : Window
                 if (_syncingWindowMove || _restoringAuxFromMinimize) return;
                 if (_lyricsWindow is not null)
                     CaptureWindowBounds(_lyricsWindow, out var lastLyricsBounds, out var lastLyricsState);
-                if (_lyricsSnapped)
-                    SyncLyricsWindowToMain();
-                else
-                    UpdateSnapStateFromLyricsPosition();
+                // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
                 RequestPersistSnapshot();
             };
             _lyricsWindow.Closed += (_, _) =>
@@ -3861,6 +3826,7 @@ public partial class MainWindow : Window
                 // Force a refresh on close (even when paused) so the title bar switches immediately.
                 try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
             };
+            try { WindowSnapService.Register(_lyricsWindow); } catch { /* ignore */ }
 
             ApplyLyricsWindowSettings(latestSettings, _lyricsWindow);
             _lyricsWindow.MinWidth = 400.0 * UiScale;
@@ -3880,26 +3846,13 @@ public partial class MainWindow : Window
             }), DispatcherPriority.Background);
 
             ApplyAlwaysOnTopFromSettings();
-            // Restore snapped positioning relative to main window if previously snapped.
+            // Legacy "dock to main" snap restore disabled: WM_MOVING snap service is the single source of truth.
             try
             {
-                _lyricsSnapped = latestSettings.LyricsWindowSnapped ?? false;
-                _lyricsSnapEdge = Enum.TryParse<LyricsSnapEdge>(latestSettings.LyricsWindowSnapEdge, ignoreCase: true, out var e) ? e : LyricsSnapEdge.None;
-                _lyricsDockYOffset = latestSettings.LyricsWindowDockYOffset ?? _lyricsDockYOffset;
-                _lyricsDockXOffset = latestSettings.LyricsWindowDockXOffset ?? _lyricsDockXOffset;
-                if (_lyricsSnapped && _lyricsSnapEdge != LyricsSnapEdge.None)
-                    SyncLyricsWindowToMain();
+                _lyricsSnapped = false;
+                _lyricsSnapEdge = LyricsSnapEdge.None;
             }
             catch { /* ignore */ }
-            UpdateSnapStateFromLyricsPosition();
-            if (_lyricsSnapped)
-                SyncLyricsWindowToMain();
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                if (_lyricsWindow is null) return;
-                UpdateSnapStateFromLyricsPosition();
-                if (_lyricsSnapped) SyncLyricsWindowToMain();
-            }), DispatcherPriority.Background);
         }
         catch (Exception ex)
         {
@@ -4901,7 +4854,7 @@ public partial class MainWindow : Window
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
             if (_optionsWindow is not null)
                 CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
-            UpdateSnapStateFromOptionsPosition();
+            // Legacy "dock to main" snapping fights the new snap service.
             RequestPersistSnapshot();
         };
         _optionsWindow.SizeChanged += (_, _) =>
@@ -4909,31 +4862,23 @@ public partial class MainWindow : Window
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
             if (_optionsWindow is not null)
                 CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
-            if (_optionsSnapped)
-                SyncOptionsWindowToMain();
-            // IMPORTANT: don't auto-snap on size changes (UI scale / theme / layout). Snapping should be
-            // user-driven via moving the window near an edge (LocationChanged path).
+            // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
             RequestPersistSnapshot();
         };
         _optionsWindow.Closed += (_, _) => _optionsWindow = null;
+        try { WindowSnapService.Register(_optionsWindow); } catch { /* ignore */ }
         ApplyOptionsWindowScaledChromeSize(_optionsWindow);
         ApplyOptionsWindowSettings(latestSettings, _optionsWindow);
         try { _optionsWindow.SetLogPopoutOpen(_logWindow is not null); } catch { /* ignore */ }
         _optionsWindow.Show();
         ApplyAlwaysOnTopFromSettings();
-        // Restore snapped positioning relative to main window if previously snapped.
+        // Legacy "dock to main" snap restore disabled: WM_MOVING snap service is the single source of truth.
         try
         {
-            _optionsSnapped = latestSettings.OptionsWindowSnapped ?? false;
-            _optionsSnapEdge = Enum.TryParse<OptionsSnapEdge>(latestSettings.OptionsWindowSnapEdge, ignoreCase: true, out var e) ? e : OptionsSnapEdge.None;
-            _optionsDockYOffset = latestSettings.OptionsWindowDockYOffset ?? _optionsDockYOffset;
-            _optionsDockXOffset = latestSettings.OptionsWindowDockXOffset ?? _optionsDockXOffset;
-            if (_optionsSnapped && _optionsSnapEdge != OptionsSnapEdge.None)
-                SyncOptionsWindowToMain();
+            _optionsSnapped = false;
+            _optionsSnapEdge = OptionsSnapEdge.None;
         }
         catch { /* ignore */ }
-        // Do not auto-detect snap state here. If the window was snapped previously, we already synced above.
-        // If it wasn't, opening it near an edge should not force it to become snapped.
 
         // NOTE: avoid delayed bounds re-apply; it races with snapping.
     }
@@ -5211,12 +5156,7 @@ public partial class MainWindow : Window
         }
         catch { /* ignore */ }
 
-        if (_playlistSnapped)
-            SyncPlaylistWindowToMain();
-        if (_optionsSnapped)
-            SyncOptionsWindowToMain();
-        if (_lyricsSnapped)
-            SyncLyricsWindowToMain();
+        // Legacy "dock to main" snapping disabled (new snap service is interactive-only).
 
         // If a compact-mode toggle is in-flight, apply the UserDefined crop after the resize + aux-window sync.
         if (_userDefinedMainCropRefreshAfterSizePending && ShouldApplyUserDefinedBackgroundForMain())
@@ -6573,7 +6513,7 @@ public partial class MainWindow : Window
                 // Startup restore: building the full playlist UI can take noticeable time for large lists and
                 // blocks the dispatcher, which makes the seek bar / lyrics look "stuck" even while audio plays.
                 // Defer the heavy UI rebuild until after the first render pass.
-                Dispatcher.BeginInvoke(new Action(() =>
+                await Dispatcher.BeginInvoke(new Action(() =>
                 {
                     try
                     {
@@ -6881,6 +6821,7 @@ public partial class MainWindow : Window
 
         var w = new LogWindow { Owner = this };
         _logWindow = w;
+        try { WindowSnapService.Register(w); } catch { /* ignore */ }
         try { _optionsWindow?.SetLogPopoutOpen(true); } catch { /* ignore */ }
         w.Closed += (_, _) =>
         {
@@ -9937,8 +9878,7 @@ public partial class MainWindow : Window
 
         try
         {
-            if (_playlistSnapped) SyncPlaylistWindowToMain();
-            if (_optionsSnapped) SyncOptionsWindowToMain();
+            // Legacy "dock to main" snapping disabled.
         }
         catch { /* ignore */ }
 
