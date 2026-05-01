@@ -570,6 +570,7 @@ public partial class MainWindow : Window
 
     private DispatcherTimer? _snapRestoreDebounceTimer;
     private DispatcherTimer? _auxSnapSyncDebounceTimer;
+    private int _auxSnapSyncRequestId;
 
     /// <summary>Minimal main layout: no options/playlist row; hide shuffle/repeat and playlist title in the card.</summary>
     private bool _mainWindowCompact;
@@ -1816,6 +1817,9 @@ public partial class MainWindow : Window
             try { ApplyMainWindowTitleFromSettings(GetAppTitleBase()); } catch { /* ignore */ }
         }), DispatcherPriority.ContextIdle);
 
+        // Compact/Ultra changes height via SizeToContent; ensure bottom-snapped aux windows follow the *final* height.
+        try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
+
         // UserDefined wallpaper uses different crops for Default/Compact/Ultra; updating Viewbox immediately
         // can happen before SizeToContent commits the new height, causing a visible 2-step. Defer to render.
         if (!deferFullLeaveCompactUserDefinedBg)
@@ -2064,7 +2068,7 @@ public partial class MainWindow : Window
             if (_playlistWindow is not null && !_compactUserOpenedPlaylistWindow)
             {
                 try { WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState); } catch { /* ignore */ }
-                try { _playlistWindow.Close(); } catch { /* ignore */ }
+                try { _playlistWindow.Hide(); } catch { /* ignore */ }
             }
         }
         catch { /* ignore */ }
@@ -3170,7 +3174,14 @@ public partial class MainWindow : Window
 
                 // Capture before closing (the Closing event also captures, but don't rely on field state).
                 WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
-                _playlistWindow.Close();
+                if (_playlistWindow.IsVisible)
+                {
+                    _playlistWindow.Hide();
+                }
+                else
+                {
+                    EnsurePlaylistWindowOpen();
+                }
             }
             catch { /* ignore */ }
             try { SaveSettingsSnapshot(); } catch { /* ignore */ }
@@ -3185,7 +3196,23 @@ public partial class MainWindow : Window
         try
         {
             if (_playlistWindow is not null)
+            {
+                // Window is warm-reused (Hide/Show). If it exists but is hidden, show it again.
+                try
+                {
+                    if (!_playlistWindow.IsVisible)
+                    {
+                        _playlistWindow.Show();
+                        _playlistWindow.Activate();
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+                        }), DispatcherPriority.Background);
+                    }
+                }
+                catch { /* ignore */ }
                 return;
+            }
 
             // Always restore playlist window bounds from the latest saved settings.
             // (_startupSettings is a startup snapshot and won't reflect changes made during this run.)
@@ -5071,13 +5098,17 @@ public partial class MainWindow : Window
                 catch { /* ignore */ }
 
                 _auxSnapSyncDebounceTimer?.Stop();
-                _auxSnapSyncDebounceTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+                var req = Interlocked.Increment(ref _auxSnapSyncRequestId);
+                _auxSnapSyncDebounceTimer = new DispatcherTimer(DispatcherPriority.ContextIdle, Dispatcher)
                 {
-                    Interval = TimeSpan.FromMilliseconds(40),
+                    // Wait for SizeToContent/layout to settle (Compact/Ultra height changes).
+                    Interval = TimeSpan.FromMilliseconds(160),
                 };
                 _auxSnapSyncDebounceTimer.Tick += (_, _) =>
                 {
                     try { _auxSnapSyncDebounceTimer?.Stop(); } catch { /* ignore */ }
+                    if (req != _auxSnapSyncRequestId)
+                        return;
                     try
                     {
                         if (WindowSnapService.AnyWindowDragging)
@@ -5103,6 +5134,23 @@ public partial class MainWindow : Window
         }
 
         // If not snapped, do nothing. Snapping is only initiated by moving the secondary window near the main window.
+    }
+
+    private void QueueAuxSnapSyncAfterLayout()
+    {
+        // Fire a couple of times to catch WPF's two-pass SizeToContent + layout settling.
+        var req = Interlocked.Increment(ref _auxSnapSyncRequestId);
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (req != _auxSnapSyncRequestId) return;
+            try { OnMainWindowMovedOrSized(); } catch { /* ignore */ }
+        }), DispatcherPriority.Render);
+
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (req != _auxSnapSyncRequestId) return;
+            try { OnMainWindowMovedOrSized(); } catch { /* ignore */ }
+        }), DispatcherPriority.ContextIdle);
     }
 
     /// <summary>
@@ -7013,10 +7061,22 @@ public partial class MainWindow : Window
         {
             if (_playlistWindow is not null)
             {
-                _compactUserOpenedPlaylistWindow = false;
-                if (_mainWindowCompact && _compactModeHidesAuxWindows)
-                    _playlistWindowWasOpenBeforeCompact = false;
-                try { _playlistWindow.Close(); } catch { /* ignore */ }
+                if (_playlistWindow.IsVisible)
+                {
+                    _compactUserOpenedPlaylistWindow = false;
+                    if (_mainWindowCompact && _compactModeHidesAuxWindows)
+                        _playlistWindowWasOpenBeforeCompact = false;
+                    try { _playlistWindow.Hide(); } catch { /* ignore */ }
+                }
+                else
+                {
+                    if (_mainWindowCompact && _compactModeHidesAuxWindows)
+                    {
+                        _compactUserOpenedPlaylistWindow = true;
+                        _playlistWindowWasOpenBeforeCompact = true;
+                    }
+                    EnsurePlaylistWindowOpen();
+                }
                 return;
             }
             if (_mainWindowCompact && _compactModeHidesAuxWindows)
@@ -12235,9 +12295,15 @@ public partial class MainWindow : Window
 
                     // Keep persisted dock offsets consistent even when Main size changes while aux is closed.
                     if (edge == OptionsSnapEdge.Bottom)
+                    {
                         _optionsDockXOffset = desiredLeft - mainLeft;
+                        _optionsDockYOffset = 0;
+                    }
                     else
+                    {
                         _optionsDockYOffset = desiredTop - mainTop;
+                        _optionsDockXOffset = 0;
+                    }
 
                     w.WindowStartupLocation = WindowStartupLocation.Manual;
                     w.Left = desiredLeft;
@@ -12296,6 +12362,14 @@ public partial class MainWindow : Window
 
             _playlistDockYOffset = s.PlaylistWindowDockYOffset ?? 0;
             _playlistDockXOffset = s.PlaylistWindowDockXOffset ?? 0;
+            // Only one offset is meaningful for a snap edge; clear the other to avoid stale restores.
+            if (_playlistSnapped)
+            {
+                if (_playlistSnapEdge is PlaylistSnapEdge.Left or PlaylistSnapEdge.Right)
+                    _playlistDockXOffset = 0;
+                else if (_playlistSnapEdge is PlaylistSnapEdge.Bottom or PlaylistSnapEdge.Top)
+                    _playlistDockYOffset = 0;
+            }
 
             if (s.PlaylistWindowLeft is double pl && s.PlaylistWindowTop is double pt &&
                 s.PlaylistWindowWidth is double pw && pw > 50 && pw < 10000 &&
@@ -12320,6 +12394,13 @@ public partial class MainWindow : Window
 
             _optionsDockYOffset = s.OptionsWindowDockYOffset ?? 0;
             _optionsDockXOffset = s.OptionsWindowDockXOffset ?? 0;
+            if (_optionsSnapped)
+            {
+                if (_optionsSnapEdge is OptionsSnapEdge.Left or OptionsSnapEdge.Right)
+                    _optionsDockXOffset = 0;
+                else if (_optionsSnapEdge is OptionsSnapEdge.Bottom)
+                    _optionsDockYOffset = 0;
+            }
 
             if (s.OptionsWindowLeft is double ol && s.OptionsWindowTop is double ot &&
                 s.OptionsWindowWidth is double ow && ow > 50 && ow < 10000 &&
@@ -12330,6 +12411,37 @@ public partial class MainWindow : Window
                     Enum.TryParse<WindowState>(s.OptionsWindowState, out var ows) &&
                     ows != WindowState.Minimized)
                     _lastOptionsWindowState = ows;
+            }
+
+            _lyricsSnapped = s.LyricsWindowSnapped ?? false;
+            _lyricsSnapEdge = Enum.TryParse<LyricsSnapEdge>(s.LyricsWindowSnapEdge, ignoreCase: true, out var le)
+                ? le
+                : LyricsSnapEdge.None;
+            if (!_lyricsSnapped || _lyricsSnapEdge == LyricsSnapEdge.None)
+            {
+                _lyricsSnapped = false;
+                _lyricsSnapEdge = LyricsSnapEdge.None;
+            }
+
+            _lyricsDockYOffset = s.LyricsWindowDockYOffset ?? 0;
+            _lyricsDockXOffset = s.LyricsWindowDockXOffset ?? 0;
+            if (_lyricsSnapped)
+            {
+                if (_lyricsSnapEdge is LyricsSnapEdge.Left or LyricsSnapEdge.Right)
+                    _lyricsDockXOffset = 0;
+                else if (_lyricsSnapEdge is LyricsSnapEdge.Bottom or LyricsSnapEdge.Top)
+                    _lyricsDockYOffset = 0;
+            }
+
+            if (s.LyricsWindowLeft is double ll && s.LyricsWindowTop is double lt &&
+                s.LyricsWindowWidth is double lw && lw > 50 && lw < 10000 &&
+                s.LyricsWindowHeight is double lh && lh > 50 && lh < 10000)
+            {
+                _lastLyricsBounds = new Rect(ll, lt, lw, lh);
+                if (!string.IsNullOrWhiteSpace(s.LyricsWindowState) &&
+                    Enum.TryParse<WindowState>(s.LyricsWindowState, out var lws) &&
+                    lws != WindowState.Minimized)
+                    _lastLyricsWindowState = lws;
             }
         }
         catch
@@ -12412,9 +12524,15 @@ public partial class MainWindow : Window
                     };
 
                     if (edge is PlaylistSnapEdge.Bottom or PlaylistSnapEdge.Top)
+                    {
                         _playlistDockXOffset = desiredLeft - mainLeft;
+                        _playlistDockYOffset = 0;
+                    }
                     else
+                    {
                         _playlistDockYOffset = desiredTop - mainTop;
+                        _playlistDockXOffset = 0;
+                    }
 
                     w.WindowStartupLocation = WindowStartupLocation.Manual;
                     w.Left = desiredLeft;
@@ -12493,9 +12611,15 @@ public partial class MainWindow : Window
                     };
 
                     if (edge is LyricsSnapEdge.Bottom or LyricsSnapEdge.Top)
+                    {
                         _lyricsDockXOffset = desiredLeft - mainLeft;
+                        _lyricsDockYOffset = 0;
+                    }
                     else
+                    {
                         _lyricsDockYOffset = desiredTop - mainTop;
+                        _lyricsDockXOffset = 0;
+                    }
 
                     w.WindowStartupLocation = WindowStartupLocation.Manual;
                     w.Left = desiredLeft;

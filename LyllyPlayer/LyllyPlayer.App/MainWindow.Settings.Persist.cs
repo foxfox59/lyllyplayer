@@ -97,6 +97,28 @@ public partial class MainWindow
 
         var lastYtUrlMem = PlaylistSourcePathHeuristics.SanitizePersistedLastYoutubeUrl(_lastYoutubeUrl);
 
+        // Snap persistence: keep only the offset that matters for the snapped edge.
+        var playlistDockX = _playlistSnapped && _playlistSnapEdge is PlaylistSnapEdge.Bottom or PlaylistSnapEdge.Top
+            ? (FiniteOrNull(_playlistDockXOffset) ?? 0)
+            : 0;
+        var playlistDockY = _playlistSnapped && _playlistSnapEdge is PlaylistSnapEdge.Left or PlaylistSnapEdge.Right
+            ? (FiniteOrNull(_playlistDockYOffset) ?? 0)
+            : 0;
+
+        var optionsDockX = _optionsSnapped && _optionsSnapEdge is OptionsSnapEdge.Bottom
+            ? (FiniteOrNull(_optionsDockXOffset) ?? 0)
+            : 0;
+        var optionsDockY = _optionsSnapped && _optionsSnapEdge is OptionsSnapEdge.Left or OptionsSnapEdge.Right
+            ? (FiniteOrNull(_optionsDockYOffset) ?? 0)
+            : 0;
+
+        var lyricsDockX = _lyricsSnapped && _lyricsSnapEdge is LyricsSnapEdge.Bottom or LyricsSnapEdge.Top
+            ? (FiniteOrNull(_lyricsDockXOffset) ?? 0)
+            : 0;
+        var lyricsDockY = _lyricsSnapped && _lyricsSnapEdge is LyricsSnapEdge.Left or LyricsSnapEdge.Right
+            ? (FiniteOrNull(_lyricsDockYOffset) ?? 0)
+            : 0;
+
         _settingsService.Save(new AppSettings(
             YtDlpPath: _savedYtDlpPath,
             FfmpegPath: _savedFfmpegPath,
@@ -145,19 +167,19 @@ public partial class MainWindow
             OptionsWindowOpen: (_optionsWindow is not null) || (_mainWindowCompact && _optionsWindowWasOpenBeforeCompact),
             PlaylistWindowSnapped: _playlistSnapped,
             PlaylistWindowSnapEdge: _playlistSnapEdge.ToString(),
-            PlaylistWindowDockYOffset: FiniteOrNull(_playlistDockYOffset) ?? 0,
-            PlaylistWindowDockXOffset: FiniteOrNull(_playlistDockXOffset) ?? 0,
+            PlaylistWindowDockYOffset: playlistDockY,
+            PlaylistWindowDockXOffset: playlistDockX,
             PlaylistWindowBoundsUiScalePercent: _uiScalePercent,
             OptionsWindowSnapped: _optionsSnapped,
             OptionsWindowSnapEdge: _optionsSnapEdge.ToString(),
-            OptionsWindowDockYOffset: FiniteOrNull(_optionsDockYOffset) ?? 0,
-            OptionsWindowDockXOffset: FiniteOrNull(_optionsDockXOffset) ?? 0,
+            OptionsWindowDockYOffset: optionsDockY,
+            OptionsWindowDockXOffset: optionsDockX,
             OptionsWindowBottomAlignToPlaylist: false,
             OptionsWindowSelectedTab: _optionsSelectedTab,
             LyricsWindowSnapped: _lyricsSnapped,
             LyricsWindowSnapEdge: _lyricsSnapEdge.ToString(),
-            LyricsWindowDockYOffset: FiniteOrNull(_lyricsDockYOffset) ?? 0,
-            LyricsWindowDockXOffset: FiniteOrNull(_lyricsDockXOffset) ?? 0,
+            LyricsWindowDockYOffset: lyricsDockY,
+            LyricsWindowDockXOffset: lyricsDockX,
             LyricsWindowLeft: FiniteOrNull(saveLBounds.Left) ?? cur.LyricsWindowLeft,
             LyricsWindowTop: FiniteOrNull(saveLBounds.Top) ?? cur.LyricsWindowTop,
             LyricsWindowWidth: FiniteOrNull(saveLBounds.Width) ?? cur.LyricsWindowWidth,

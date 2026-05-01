@@ -308,7 +308,9 @@ public partial class PlaylistWindow : Window
 
     private void ChromeCloseButton_OnClick(object sender, RoutedEventArgs e)
     {
-        try { Close(); } catch { /* ignore */ }
+        // Hiding instead of closing keeps the visual tree + bindings warm for large playlists.
+        // MainWindow owns persistence on close/hide.
+        try { Hide(); } catch { /* ignore */ }
     }
 
     private void ChromeBar_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
