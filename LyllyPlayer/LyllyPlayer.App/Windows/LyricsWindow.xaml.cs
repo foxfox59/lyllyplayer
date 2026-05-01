@@ -43,6 +43,16 @@ public partial class LyricsWindow : Window
             Refresh();
         };
         Closing += (_, _) => ModalWindowPlacementStore.Persist(this, "LyricsWindow");
+        // Warm-reuse (Hide): persist placement when visibility drops, same as Closing for real Close.
+        IsVisibleChanged += (_, _) =>
+        {
+            try
+            {
+                if (!IsVisible)
+                    ModalWindowPlacementStore.Persist(this, "LyricsWindow");
+            }
+            catch { /* ignore */ }
+        };
     }
 
     /// <summary>
@@ -165,12 +175,12 @@ public partial class LyricsWindow : Window
 
     private void ChromeCloseButton_OnClick(object sender, RoutedEventArgs e)
     {
-        try { Close(); } catch { /* ignore */ }
+        try { Hide(); } catch { /* ignore */ }
     }
 
     private void CloseButton_OnClick(object sender, RoutedEventArgs e)
     {
-        try { Close(); } catch { /* ignore */ }
+        try { Hide(); } catch { /* ignore */ }
     }
 
     private void CopyButton_OnClick(object sender, RoutedEventArgs e)

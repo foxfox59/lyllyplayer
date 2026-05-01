@@ -438,6 +438,9 @@ public partial class MainWindow : Window
     private OptionsWindow? _optionsWindow;
     private LogWindow? _logWindow;
     private LyricsWindow? _lyricsWindow;
+    private readonly AuxWindowController<PlaylistWindow> _playlistAuxCtl = new();
+    private readonly AuxWindowController<OptionsWindow> _optionsAuxCtl = new();
+    private readonly AuxWindowController<LyricsWindow> _lyricsAuxCtl = new();
     private string _nowPlayingStatus = "STOPPED";
     private PlaylistEntry? _nowPlayingEntry;
     private string? _suppressAutoScrollVideoId;
@@ -571,6 +574,7 @@ public partial class MainWindow : Window
     private DispatcherTimer? _snapRestoreDebounceTimer;
     private DispatcherTimer? _auxSnapSyncDebounceTimer;
     private int _auxSnapSyncRequestId;
+    private int _auxSnapSyncFrameQueued;
 
     /// <summary>Minimal main layout: no options/playlist row; hide shuffle/repeat and playlist title in the card.</summary>
     private bool _mainWindowCompact;
@@ -1256,6 +1260,11 @@ public partial class MainWindow : Window
                     _snapRestoreDebounceTimer.Start();
                 }
                 catch { /* ignore */ }
+
+                // Ensure the "snap to window edge" sync runs after startup layout settles.
+                // Without this, the persisted edge-based offsets can be computed against pre-render bounds
+                // and only correct themselves after the user nudges the main window.
+                try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
             }), DispatcherPriority.ContextIdle);
         };
 
@@ -1334,6 +1343,9 @@ public partial class MainWindow : Window
                 return;
             }
             try { ApplyAppIconVisibilityFromSettings(); } catch { /* ignore */ }
+
+            // Kick one more layout-aware sync after the first render so edge snapping is correct immediately.
+            try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
         };
         // If main is already active, Activated won't fire again. Also, chrome interactions often mark events
         // as handled. Use AddHandler(..., handledEventsToo:true) so clicks anywhere (including title bar)
@@ -2038,9 +2050,9 @@ public partial class MainWindow : Window
         {
             if (_compactModeHidesAuxWindows)
             {
-                _playlistWindowWasOpenBeforeCompact = (_playlistWindow is not null) || _playlistWindowWasOpenBeforeCompact;
-                _optionsWindowWasOpenBeforeCompact = (_optionsWindow is not null) || _optionsWindowWasOpenBeforeCompact;
-                _lyricsWindowWasOpenBeforeCompact = (_lyricsWindow is not null) || _lyricsWindowWasOpenBeforeCompact;
+                _playlistWindowWasOpenBeforeCompact = (_playlistWindow is not null && _playlistWindow.IsVisible) || _playlistWindowWasOpenBeforeCompact;
+                _optionsWindowWasOpenBeforeCompact = (_optionsWindow is not null && _optionsWindow.IsVisible) || _optionsWindowWasOpenBeforeCompact;
+                _lyricsWindowWasOpenBeforeCompact = (_lyricsWindow is not null && _lyricsWindow.IsVisible) || _lyricsWindowWasOpenBeforeCompact;
                 CloseAuxiliaryWindowsForCompact();
             }
         }
@@ -2058,7 +2070,7 @@ public partial class MainWindow : Window
             if (_optionsWindow is not null)
             {
                 try { WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState); } catch { /* ignore */ }
-                try { _optionsWindow.Close(); } catch { /* ignore */ }
+                try { _optionsWindow.Hide(); } catch { /* ignore */ }
             }
         }
         catch { /* ignore */ }
@@ -2078,7 +2090,7 @@ public partial class MainWindow : Window
             if (_lyricsWindow is not null && !_compactUserOpenedLyricsWindow)
             {
                 try { WindowCoordinator.CaptureWindowBounds(_lyricsWindow, out var _unusedLyricsBounds, out var _unusedLyricsState); } catch { /* ignore */ }
-                try { _lyricsWindow.Close(); } catch { /* ignore */ }
+                try { _lyricsWindow.Hide(); } catch { /* ignore */ }
             }
         }
         catch { /* ignore */ }
@@ -3202,12 +3214,14 @@ public partial class MainWindow : Window
                 {
                     if (!_playlistWindow.IsVisible)
                     {
-                        _playlistWindow.Show();
-                        _playlistWindow.Activate();
-                        Dispatcher.BeginInvoke(new Action(() =>
+                        _playlistAuxCtl.ShowWarm(() =>
                         {
-                            try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                        }), DispatcherPriority.Background);
+                            try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+                            }), DispatcherPriority.Background);
+                        });
                     }
                 }
                 catch { /* ignore */ }
@@ -3544,13 +3558,26 @@ public partial class MainWindow : Window
                 // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
                 RequestPersistSnapshot();
             };
+            _playlistWindow.IsVisibleChanged += (_, _) =>
+            {
+                if (_isShuttingDown || _syncingWindowMove || _restoringAuxFromMinimize)
+                    return;
+                if (_playlistWindow is not null && !_playlistWindow.IsVisible)
+                {
+                    try { WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState); } catch { /* ignore */ }
+                    try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+                    try { SaveSettingsSnapshot(); } catch { /* ignore */ }
+                }
+            };
             _playlistWindow.Closed += (_, _) =>
             {
                 _playlistWindow = null;
+                _playlistAuxCtl.Clear();
                 _playlistWindowOuterAtUiScalePercent = null;
                 // If user closes Playlist, clear the compact "pin open" override.
                 _compactUserOpenedPlaylistWindow = false;
             };
+            _playlistAuxCtl.Register(_playlistWindow);
             try { WindowCoordinator.RegisterSnapping(_playlistWindow); } catch { /* ignore */ }
             _playlistWindow.SetItemsSource(_queueItems, _playlistItems);
             UpdateRefreshEnabled();
@@ -3675,10 +3702,26 @@ public partial class MainWindow : Window
         {
             if (_lyricsWindow is not null)
             {
-                _compactUserOpenedLyricsWindow = false;
                 if (_mainWindowCompact && _compactModeHidesAuxWindows)
                     _lyricsWindowWasOpenBeforeCompact = false;
-                try { _lyricsWindow.Close(); } catch { /* ignore */ }
+                try
+                {
+                    WindowCoordinator.CaptureWindowBounds(_lyricsWindow, out _lastLyricsBounds, out _lastLyricsWindowState);
+                    if (_lyricsWindow.IsVisible)
+                    {
+                        _compactUserOpenedLyricsWindow = false;
+                        _lyricsWindow.Hide();
+                    }
+                    else
+                    {
+                        if (_mainWindowCompact && _compactModeHidesAuxWindows)
+                            _lyricsWindowWasOpenBeforeCompact = true;
+                        _compactUserOpenedLyricsWindow = true;
+                        EnsureLyricsWindowOpen();
+                    }
+                }
+                catch { /* ignore */ }
+                try { SaveSettingsSnapshot(); } catch { /* ignore */ }
                 return;
             }
             if (_mainWindowCompact && _compactModeHidesAuxWindows)
@@ -3701,7 +3744,20 @@ public partial class MainWindow : Window
         try
         {
             if (_lyricsWindow is not null)
+            {
+                if (!_lyricsWindow.IsVisible)
+                {
+                    _lyricsAuxCtl.ShowWarm(() =>
+                    {
+                        try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+                        }), DispatcherPriority.Background);
+                    });
+                }
                 return;
+            }
 
             var latestSettings = _settingsService.LoadLatest();
 
@@ -3749,13 +3805,27 @@ public partial class MainWindow : Window
                 // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
                 RequestPersistSnapshot();
             };
+            _lyricsWindow.IsVisibleChanged += (_, _) =>
+            {
+                if (_isShuttingDown || _syncingWindowMove || _restoringAuxFromMinimize)
+                    return;
+                if (_lyricsWindow is not null && !_lyricsWindow.IsVisible)
+                {
+                    try { WindowCoordinator.CaptureWindowBounds(_lyricsWindow, out _lastLyricsBounds, out _lastLyricsWindowState); } catch { /* ignore */ }
+                    try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+                    try { SaveSettingsSnapshot(); } catch { /* ignore */ }
+                    try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
+                }
+            };
             _lyricsWindow.Closed += (_, _) =>
             {
                 _lyricsWindow = null;
+                _lyricsAuxCtl.Clear();
                 // Ultra-compact title bar shows lyric line only when the lyrics window is closed.
                 // Force a refresh on close (even when paused) so the title bar switches immediately.
                 try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
             };
+            _lyricsAuxCtl.Register(_lyricsWindow);
             try { WindowCoordinator.RegisterSnapping(_lyricsWindow); } catch { /* ignore */ }
 
             ApplyLyricsWindowSettings(latestSettings, _lyricsWindow);
@@ -3767,6 +3837,7 @@ public partial class MainWindow : Window
             {
                 try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             }), DispatcherPriority.Background);
+            try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
             // Ultra-compact title bar shows lyric line only when the lyrics window is closed.
             // Force a refresh on open so the title switches immediately (even if the lyric line hasn't changed yet).
             try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
@@ -3785,6 +3856,7 @@ public partial class MainWindow : Window
         {
             AppLog.Exception(ex, "Open lyrics window failed");
             try { _lyricsWindow = null; } catch { /* ignore */ }
+            try { _lyricsAuxCtl.Clear(); } catch { /* ignore */ }
         }
     }
 
@@ -4427,7 +4499,10 @@ public partial class MainWindow : Window
                     _optionsWindowWasOpenBeforeCompact = false;
 
                 WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
-                _optionsWindow.Close();
+                if (_optionsWindow.IsVisible)
+                    _optionsWindow.Hide();
+                else
+                    EnsureOptionsWindowOpen();
             }
             catch { /* ignore */ }
             try { SaveSettingsSnapshot(); } catch { /* ignore */ }
@@ -4442,7 +4517,20 @@ public partial class MainWindow : Window
     private void EnsureOptionsWindowOpen()
     {
         if (_optionsWindow is not null)
+        {
+            if (!_optionsWindow.IsVisible)
+            {
+                _optionsAuxCtl.ShowWarm(() =>
+                {
+                    try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+                    }), DispatcherPriority.Background);
+                });
+            }
             return;
+        }
 
         var latestSettings = _settingsService.LoadLatest();
         AppLog.Info($"Options bounds (open) settings: L={latestSettings.OptionsWindowLeft} T={latestSettings.OptionsWindowTop} W={latestSettings.OptionsWindowWidth} H={latestSettings.OptionsWindowHeight} State={latestSettings.OptionsWindowState}");
@@ -4795,7 +4883,23 @@ public partial class MainWindow : Window
             // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
             RequestPersistSnapshot();
         };
-        _optionsWindow.Closed += (_, _) => _optionsWindow = null;
+        _optionsWindow.IsVisibleChanged += (_, _) =>
+        {
+            if (_isShuttingDown || _syncingWindowMove || _restoringAuxFromMinimize)
+                return;
+            if (_optionsWindow is not null && !_optionsWindow.IsVisible)
+            {
+                try { WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState); } catch { /* ignore */ }
+                try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+                try { SaveSettingsSnapshot(); } catch { /* ignore */ }
+            }
+        };
+        _optionsWindow.Closed += (_, _) =>
+        {
+            _optionsWindow = null;
+            _optionsAuxCtl.Clear();
+        };
+        _optionsAuxCtl.Register(_optionsWindow);
         try { WindowCoordinator.RegisterSnapping(_optionsWindow); } catch { /* ignore */ }
         ApplyOptionsWindowScaledChromeSize(_optionsWindow);
         ApplyOptionsWindowSettings(latestSettings, _optionsWindow);
@@ -4805,6 +4909,7 @@ public partial class MainWindow : Window
         {
             try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
         }), DispatcherPriority.Background);
+        try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
         ApplyAlwaysOnTopFromSettings();
         // NOTE: avoid delayed bounds re-apply; it races with snapping.
     }
@@ -5097,6 +5202,36 @@ public partial class MainWindow : Window
                 }
                 catch { /* ignore */ }
 
+                // Phase 1 (smooth): sync on the next render tick so aux moves "with" the main resize/move.
+                // Coalesce bursts (dragging/resizing) into at most one render callback per frame.
+                var reqFrame = Interlocked.Increment(ref _auxSnapSyncRequestId);
+                if (Interlocked.Exchange(ref _auxSnapSyncFrameQueued, 1) == 0)
+                {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        try
+                        {
+                            if (reqFrame != _auxSnapSyncRequestId)
+                                return;
+                            try
+                            {
+                                if (WindowSnapService.AnyWindowDragging)
+                                    return;
+                            }
+                            catch { /* ignore */ }
+
+                            try { if (_playlistSnapped) SyncPlaylistWindowToMain(); } catch { /* ignore */ }
+                            try { if (_optionsSnapped) SyncOptionsWindowToMain(); } catch { /* ignore */ }
+                            try { if (_lyricsSnapped) SyncLyricsWindowToMain(); } catch { /* ignore */ }
+                        }
+                        catch { /* ignore */ }
+                        finally
+                        {
+                            try { Interlocked.Exchange(ref _auxSnapSyncFrameQueued, 0); } catch { /* ignore */ }
+                        }
+                    }), DispatcherPriority.Render);
+                }
+
                 _auxSnapSyncDebounceTimer?.Stop();
                 var req = Interlocked.Increment(ref _auxSnapSyncRequestId);
                 _auxSnapSyncDebounceTimer = new DispatcherTimer(DispatcherPriority.ContextIdle, Dispatcher)
@@ -5151,19 +5286,6 @@ public partial class MainWindow : Window
             if (req != _auxSnapSyncRequestId) return;
             try { OnMainWindowMovedOrSized(); } catch { /* ignore */ }
         }), DispatcherPriority.ContextIdle);
-    }
-
-    /// <summary>
-    /// Bottom-snapped Options is wider than the main window; keep its horizontal span over the main chrome only
-    /// so it does not extend under a right-docked playlist on first launch and when the main window is narrow.
-    /// </summary>
-    private static double ClampOptionsBottomSnapLeft(double mainLeft, double mainRight, double optionsOuterWidth, double dockX)
-    {
-        var mainW = Math.Max(0, mainRight - mainLeft);
-        var inner = mainLeft + dockX;
-        if (optionsOuterWidth <= mainW + 1e-6)
-            return Math.Clamp(inner, mainLeft, mainRight - optionsOuterWidth);
-        return mainRight - optionsOuterWidth;
     }
 
     private void SyncLyricsWindowToMain()
@@ -5401,7 +5523,7 @@ public partial class MainWindow : Window
             };
 
             if (_optionsSnapEdge == OptionsSnapEdge.Bottom)
-                desiredLeft = ClampOptionsBottomSnapLeft(mainLeft, mainRight, ow.Width, _optionsDockXOffset);
+                desiredLeft = AuxWindowSnapHelper.ClampOptionsBottomSnapLeft(mainLeft, mainRight, ow.Width, _optionsDockXOffset);
 
             _optionsWindow.Left = SnapRound(desiredLeft);
             _optionsWindow.Top = SnapRound(desiredTop);
@@ -5523,7 +5645,7 @@ public partial class MainWindow : Window
                 _optionsSnapped = true;
                 _optionsSnapEdge = OptionsSnapEdge.Bottom;
                 _optionsDockXOffset = owLeft - mainLeft;
-                var bottomLeft = ClampOptionsBottomSnapLeft(mainLeft, mainRight, ow.Width, _optionsDockXOffset);
+                var bottomLeft = AuxWindowSnapHelper.ClampOptionsBottomSnapLeft(mainLeft, mainRight, ow.Width, _optionsDockXOffset);
                 _optionsDockXOffset = bottomLeft - mainLeft;
                 SnapOptionsToEdge(bottomLeft, desiredBottomTop);
                 return;
@@ -5959,9 +6081,6 @@ public partial class MainWindow : Window
         return new Rect(w.Left, w.Top, width, height);
     }
 
-    private static double Overlap1D(double a0, double a1, double b0, double b1)
-        => Math.Max(0, Math.Min(a1, b1) - Math.Max(a0, b0));
-
     private void UpdatePlaylistSnapStateFromCurrentPositionsBestEffort()
     {
         try
@@ -5971,40 +6090,17 @@ public partial class MainWindow : Window
 
             var main = GetOuterBounds(this);
             var aux = GetOuterBounds(_playlistWindow);
-            var mainRight = main.Left + main.Width;
-            var mainBottom = main.Top + main.Height;
-            var auxRight = aux.Left + aux.Width;
-            var auxBottom = aux.Top + aux.Height;
+            var r = AuxWindowSnapHelper.InferPersistedSnap(
+                main, aux,
+                SnapGapPx, SnapPersistAdjacencyPx, SnapPersistMinOverlapPx,
+                AuxSnapWindowKind.Playlist);
 
-            var vOverlap = Overlap1D(main.Top, mainBottom, aux.Top, auxBottom);
-            var hOverlap = Overlap1D(main.Left, mainRight, aux.Left, auxRight);
-
-            if (Math.Abs(aux.Left - (mainRight + SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
+            if (r.Snapped && Enum.TryParse<PlaylistSnapEdge>(r.Edge, ignoreCase: true, out var edge) && edge != PlaylistSnapEdge.None)
             {
                 _playlistSnapped = true;
-                _playlistSnapEdge = PlaylistSnapEdge.Right;
-                _playlistDockYOffset = aux.Top - main.Top;
-                return;
-            }
-            if (Math.Abs(auxRight - (main.Left - SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
-            {
-                _playlistSnapped = true;
-                _playlistSnapEdge = PlaylistSnapEdge.Left;
-                _playlistDockYOffset = aux.Top - main.Top;
-                return;
-            }
-            if (Math.Abs(aux.Top - (mainBottom + SnapGapPx)) <= SnapPersistAdjacencyPx && hOverlap >= SnapPersistMinOverlapPx)
-            {
-                _playlistSnapped = true;
-                _playlistSnapEdge = PlaylistSnapEdge.Bottom;
-                _playlistDockXOffset = aux.Left - main.Left;
-                return;
-            }
-            if (Math.Abs(auxBottom - (main.Top - SnapGapPx)) <= SnapPersistAdjacencyPx && hOverlap >= SnapPersistMinOverlapPx)
-            {
-                _playlistSnapped = true;
-                _playlistSnapEdge = PlaylistSnapEdge.Top;
-                _playlistDockXOffset = aux.Left - main.Left;
+                _playlistSnapEdge = edge;
+                _playlistDockXOffset = r.DockXOffset;
+                _playlistDockYOffset = r.DockYOffset;
                 return;
             }
 
@@ -6023,40 +6119,17 @@ public partial class MainWindow : Window
 
             var main = GetOuterBounds(this);
             var aux = GetOuterBounds(_lyricsWindow);
-            var mainRight = main.Left + main.Width;
-            var mainBottom = main.Top + main.Height;
-            var auxRight = aux.Left + aux.Width;
-            var auxBottom = aux.Top + aux.Height;
+            var r = AuxWindowSnapHelper.InferPersistedSnap(
+                main, aux,
+                SnapGapPx, SnapPersistAdjacencyPx, SnapPersistMinOverlapPx,
+                AuxSnapWindowKind.Lyrics);
 
-            var vOverlap = Overlap1D(main.Top, mainBottom, aux.Top, auxBottom);
-            var hOverlap = Overlap1D(main.Left, mainRight, aux.Left, auxRight);
-
-            if (Math.Abs(aux.Left - (mainRight + SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
+            if (r.Snapped && Enum.TryParse<LyricsSnapEdge>(r.Edge, ignoreCase: true, out var edge) && edge != LyricsSnapEdge.None)
             {
                 _lyricsSnapped = true;
-                _lyricsSnapEdge = LyricsSnapEdge.Right;
-                _lyricsDockYOffset = aux.Top - main.Top;
-                return;
-            }
-            if (Math.Abs(auxRight - (main.Left - SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
-            {
-                _lyricsSnapped = true;
-                _lyricsSnapEdge = LyricsSnapEdge.Left;
-                _lyricsDockYOffset = aux.Top - main.Top;
-                return;
-            }
-            if (Math.Abs(aux.Top - (mainBottom + SnapGapPx)) <= SnapPersistAdjacencyPx && hOverlap >= SnapPersistMinOverlapPx)
-            {
-                _lyricsSnapped = true;
-                _lyricsSnapEdge = LyricsSnapEdge.Bottom;
-                _lyricsDockXOffset = aux.Left - main.Left;
-                return;
-            }
-            if (Math.Abs(auxBottom - (main.Top - SnapGapPx)) <= SnapPersistAdjacencyPx && hOverlap >= SnapPersistMinOverlapPx)
-            {
-                _lyricsSnapped = true;
-                _lyricsSnapEdge = LyricsSnapEdge.Top;
-                _lyricsDockXOffset = aux.Left - main.Left;
+                _lyricsSnapEdge = edge;
+                _lyricsDockXOffset = r.DockXOffset;
+                _lyricsDockYOffset = r.DockYOffset;
                 return;
             }
 
@@ -6075,32 +6148,17 @@ public partial class MainWindow : Window
 
             var main = GetOuterBounds(this);
             var aux = GetOuterBounds(_optionsWindow);
-            var mainRight = main.Left + main.Width;
-            var mainBottom = main.Top + main.Height;
-            var auxRight = aux.Left + aux.Width;
+            var r = AuxWindowSnapHelper.InferPersistedSnap(
+                main, aux,
+                SnapGapPx, SnapPersistAdjacencyPx, SnapPersistMinOverlapPx,
+                AuxSnapWindowKind.Options);
 
-            var vOverlap = Overlap1D(main.Top, mainBottom, aux.Top, aux.Top + aux.Height);
-            var hOverlap = Overlap1D(main.Left, mainRight, aux.Left, auxRight);
-
-            if (Math.Abs(aux.Left - (mainRight + SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
+            if (r.Snapped && Enum.TryParse<OptionsSnapEdge>(r.Edge, ignoreCase: true, out var edge) && edge != OptionsSnapEdge.None)
             {
                 _optionsSnapped = true;
-                _optionsSnapEdge = OptionsSnapEdge.Right;
-                _optionsDockYOffset = aux.Top - main.Top;
-                return;
-            }
-            if (Math.Abs(auxRight - (main.Left - SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
-            {
-                _optionsSnapped = true;
-                _optionsSnapEdge = OptionsSnapEdge.Left;
-                _optionsDockYOffset = aux.Top - main.Top;
-                return;
-            }
-            if (Math.Abs(aux.Top - (mainBottom + SnapGapPx)) <= SnapPersistAdjacencyPx && hOverlap >= SnapPersistMinOverlapPx)
-            {
-                _optionsSnapped = true;
-                _optionsSnapEdge = OptionsSnapEdge.Bottom;
-                _optionsDockXOffset = aux.Left - main.Left;
+                _optionsSnapEdge = edge;
+                _optionsDockXOffset = r.DockXOffset;
+                _optionsDockYOffset = r.DockYOffset;
                 return;
             }
 
@@ -8165,7 +8223,7 @@ public partial class MainWindow : Window
         if (NowPlayingStatusRun is not null)
         {
             // Don't show lyric line/status when lyrics window is open — it already displays lyrics.
-            if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
+            if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && (_lyricsWindow is null || !_lyricsWindow.IsVisible))
             {
                 NowPlayingStatusRun.Text = $"[>]";
             }
@@ -8184,7 +8242,7 @@ public partial class MainWindow : Window
         {
             // Check for lyrics override (Normal/Compact modes show current lyric line).
             // Only show lyric lines in main window when lyrics window is NOT open — it already displays them.
-            if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
+            if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && (_lyricsWindow is null || !_lyricsWindow.IsVisible))
             {
                 var lyricLine = _lyricsService.Manager.GetCurrentLine(_engine.CurrentPositionSeconds);
                 if (!string.IsNullOrEmpty(lyricLine))
@@ -8195,8 +8253,8 @@ public partial class MainWindow : Window
             else
             {
                 // Lyrics window is open — highlight the current line there instead of the title.
-                if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying)
-                    _lyricsWindow?.RefreshCurrentLine();
+                if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && _lyricsWindow is { IsVisible: true })
+                    _lyricsWindow.RefreshCurrentLine();
 
                 title = $"{_nowPlayingEntry.Title}{(string.IsNullOrWhiteSpace(_nowPlayingEntry.Channel) ? "" : $" \u2014 {_nowPlayingEntry.Channel}")}";
             }
@@ -8296,7 +8354,7 @@ public partial class MainWindow : Window
             var cur = _nowPlayingEntry;
 
             // Check if lyrics are active (enabled + loaded + playing).
-            bool lyricsActive = _lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null;
+            bool lyricsActive = _lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && (_lyricsWindow is null || !_lyricsWindow.IsVisible);
 
             // Resolve the origin label: per-video origin > base origin > playlist title.
             string? origin = cur is not null &&
@@ -10092,7 +10150,7 @@ public partial class MainWindow : Window
             {
                 // Lyrics override for Ultra-Compact mode.
                 // Only show lyric lines in main window when lyrics window is NOT open — it already displays them.
-                if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
+                if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && (_lyricsWindow is null || !_lyricsWindow.IsVisible))
                 {
                     var lyricLine = _lyricsService.Manager.GetCurrentLine(_engine.CurrentPositionSeconds);
                     if (!string.IsNullOrEmpty(lyricLine))
@@ -10275,7 +10333,7 @@ public partial class MainWindow : Window
         // Ultra-Compact: update title bar when lyrics window is NOT open; otherwise only highlight in Lyrics window
         if (_mainWindowCompact && string.Equals(_compactModeLayout, "Ultra", StringComparison.OrdinalIgnoreCase))
         {
-            if (_lyricsWindow is null)
+            if (_lyricsWindow is null || !_lyricsWindow.IsVisible)
             {
                 try { Title = $"{lyricLine}"; } catch { /* ignore */ }
             }
@@ -12272,43 +12330,26 @@ public partial class MainWindow : Window
                     edge != OptionsSnapEdge.None)
                 {
                     var main = GetOuterBounds(this);
-                    var mainLeft = main.Left;
-                    var mainTop = main.Top;
-                    var mainRight = mainLeft + main.Width;
-                    var mainBottom = mainTop + main.Height;
-
                     var dockX = settings.OptionsWindowDockXOffset ?? 0;
                     var dockY = settings.OptionsWindowDockYOffset ?? 0;
-
-                    var desiredLeft = edge switch
+                    if (AuxWindowSnapHelper.TryApplySnapPlacement(
+                        AuxSnapWindowKind.Options,
+                        snapped: true,
+                        edge.ToString(),
+                        dockX,
+                        dockY,
+                        main,
+                        w,
+                        SnapGapPx,
+                        out var outDx,
+                        out var outDy))
                     {
-                        OptionsSnapEdge.Right => mainRight + SnapGapPx,
-                        OptionsSnapEdge.Left => mainLeft - w.Width - SnapGapPx,
-                        OptionsSnapEdge.Bottom => ClampOptionsBottomSnapLeft(mainLeft, mainRight, w.Width, dockX),
-                        _ => mainLeft + dockX
-                    };
-                    var desiredTop = edge switch
-                    {
-                        OptionsSnapEdge.Bottom => mainBottom + SnapGapPx,
-                        _ => mainTop + dockY
-                    };
-
-                    // Keep persisted dock offsets consistent even when Main size changes while aux is closed.
-                    if (edge == OptionsSnapEdge.Bottom)
-                    {
-                        _optionsDockXOffset = desiredLeft - mainLeft;
-                        _optionsDockYOffset = 0;
+                        _optionsSnapped = true;
+                        _optionsSnapEdge = edge;
+                        _optionsDockXOffset = outDx;
+                        _optionsDockYOffset = outDy;
+                        placedBySnap = true;
                     }
-                    else
-                    {
-                        _optionsDockYOffset = desiredTop - mainTop;
-                        _optionsDockXOffset = 0;
-                    }
-
-                    w.WindowStartupLocation = WindowStartupLocation.Manual;
-                    w.Left = desiredLeft;
-                    w.Top = desiredTop;
-                    placedBySnap = true;
                 }
             }
             catch { /* ignore */ }
@@ -12501,43 +12542,26 @@ public partial class MainWindow : Window
                     edge != PlaylistSnapEdge.None)
                 {
                     var main = GetOuterBounds(this);
-                    var mainLeft = main.Left;
-                    var mainTop = main.Top;
-                    var mainRight = mainLeft + main.Width;
-                    var mainBottom = mainTop + main.Height;
-
                     var dockX = settings.PlaylistWindowDockXOffset ?? 0;
                     var dockY = settings.PlaylistWindowDockYOffset ?? 0;
-
-                    var desiredLeft = edge switch
+                    if (AuxWindowSnapHelper.TryApplySnapPlacement(
+                        AuxSnapWindowKind.Playlist,
+                        snapped: true,
+                        edge.ToString(),
+                        dockX,
+                        dockY,
+                        main,
+                        w,
+                        SnapGapPx,
+                        out var outDx,
+                        out var outDy))
                     {
-                        PlaylistSnapEdge.Right => mainRight + SnapGapPx,
-                        PlaylistSnapEdge.Left => mainLeft - w.Width - SnapGapPx,
-                        PlaylistSnapEdge.Bottom or PlaylistSnapEdge.Top => mainLeft + dockX,
-                        _ => mainLeft + dockX
-                    };
-                    var desiredTop = edge switch
-                    {
-                        PlaylistSnapEdge.Bottom => mainBottom + SnapGapPx,
-                        PlaylistSnapEdge.Top => mainTop - w.Height - SnapGapPx,
-                        _ => mainTop + dockY
-                    };
-
-                    if (edge is PlaylistSnapEdge.Bottom or PlaylistSnapEdge.Top)
-                    {
-                        _playlistDockXOffset = desiredLeft - mainLeft;
-                        _playlistDockYOffset = 0;
+                        _playlistSnapped = true;
+                        _playlistSnapEdge = edge;
+                        _playlistDockXOffset = outDx;
+                        _playlistDockYOffset = outDy;
+                        placedBySnap = true;
                     }
-                    else
-                    {
-                        _playlistDockYOffset = desiredTop - mainTop;
-                        _playlistDockXOffset = 0;
-                    }
-
-                    w.WindowStartupLocation = WindowStartupLocation.Manual;
-                    w.Left = desiredLeft;
-                    w.Top = desiredTop;
-                    placedBySnap = true;
                 }
             }
             catch { /* ignore */ }
@@ -12588,43 +12612,26 @@ public partial class MainWindow : Window
                     edge != LyricsSnapEdge.None)
                 {
                     var main = GetOuterBounds(this);
-                    var mainLeft = main.Left;
-                    var mainTop = main.Top;
-                    var mainRight = mainLeft + main.Width;
-                    var mainBottom = mainTop + main.Height;
-
                     var dockX = settings.LyricsWindowDockXOffset ?? 0;
                     var dockY = settings.LyricsWindowDockYOffset ?? 0;
-
-                    var desiredLeft = edge switch
+                    if (AuxWindowSnapHelper.TryApplySnapPlacement(
+                        AuxSnapWindowKind.Lyrics,
+                        snapped: true,
+                        edge.ToString(),
+                        dockX,
+                        dockY,
+                        main,
+                        w,
+                        SnapGapPx,
+                        out var outDx,
+                        out var outDy))
                     {
-                        LyricsSnapEdge.Right => mainRight + SnapGapPx,
-                        LyricsSnapEdge.Left => mainLeft - w.Width - SnapGapPx,
-                        LyricsSnapEdge.Bottom or LyricsSnapEdge.Top => mainLeft + dockX,
-                        _ => mainLeft + dockX
-                    };
-                    var desiredTop = edge switch
-                    {
-                        LyricsSnapEdge.Bottom => mainBottom + SnapGapPx,
-                        LyricsSnapEdge.Top => mainTop - w.Height - SnapGapPx,
-                        _ => mainTop + dockY
-                    };
-
-                    if (edge is LyricsSnapEdge.Bottom or LyricsSnapEdge.Top)
-                    {
-                        _lyricsDockXOffset = desiredLeft - mainLeft;
-                        _lyricsDockYOffset = 0;
+                        _lyricsSnapped = true;
+                        _lyricsSnapEdge = edge;
+                        _lyricsDockXOffset = outDx;
+                        _lyricsDockYOffset = outDy;
+                        placedBySnap = true;
                     }
-                    else
-                    {
-                        _lyricsDockYOffset = desiredTop - mainTop;
-                        _lyricsDockXOffset = 0;
-                    }
-
-                    w.WindowStartupLocation = WindowStartupLocation.Manual;
-                    w.Left = desiredLeft;
-                    w.Top = desiredTop;
-                    placedBySnap = true;
                 }
             }
             catch { /* ignore */ }

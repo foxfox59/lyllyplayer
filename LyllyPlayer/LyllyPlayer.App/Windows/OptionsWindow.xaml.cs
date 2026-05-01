@@ -2186,18 +2186,18 @@ public partial class OptionsWindow : Window
     {
         if (TryApplyDraft())
         {
-            try { Close(); } catch { /* ignore */ }
+            try { Hide(); } catch { /* ignore */ }
         }
     }
 
     private void CancelButton_OnClick(object sender, RoutedEventArgs e)
     {
-        try { Close(); } catch { /* ignore */ }
+        try { Hide(); } catch { /* ignore */ }
     }
 
     private void ChromeCloseButton_OnClick(object sender, RoutedEventArgs e)
     {
-        try { Close(); } catch { }
+        try { Hide(); } catch { }
     }
 
     private void ChromeBar_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
