@@ -16,5 +16,7 @@ public sealed class AppShell
     public SettingsService Settings { get; } = new();
 
     public LyricsService Lyrics { get; } = new();
+
+    public PlaylistFileService PlaylistFiles { get; } = new();
 }
 

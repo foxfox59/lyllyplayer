@@ -369,6 +369,7 @@ public partial class MainWindow : Window
     private PlaylistService _playlistCore => _shell.Playlist;
     private PlayOrderService _playOrder => _shell.PlayOrder;
     private SettingsService _settingsService => _shell.Settings;
+    private PlaylistFileService _playlistFiles => _shell.PlaylistFiles;
 
     private LyricsService _lyricsService => _shell.Lyrics;
     /// <summary>Stack of previously played track VideoIds for "Previous" button navigation.</summary>
@@ -4068,7 +4069,7 @@ public partial class MainWindow : Window
     private void SyncPlaylistWindowToMain()
     {
         if (_playlistWindow is null) return;
-        if (!_playlistSnapped) return;
+        if (!_playlistSnapped && _playlistSnapEdge == PlaylistSnapEdge.None) return;
         if (_playlistSnapEdge == PlaylistSnapEdge.None)
         {
             _playlistSnapped = false;
@@ -4363,7 +4364,7 @@ public partial class MainWindow : Window
         // especially when SizeToContent changes height (Compact/Ultra).
         try
         {
-            if (_playlistSnapped || _optionsSnapped || _lyricsSnapped)
+            if (_playlistWindow is not null || _optionsWindow is not null || _lyricsWindow is not null)
             {
                 try
                 {
@@ -4390,7 +4391,11 @@ public partial class MainWindow : Window
                             }
                             catch { /* ignore */ }
 
-                            // Legacy sync-to-main removed; WindowSnapService handles interactive latching + cluster move.
+                            // Programmatic Main moves/resizes (Compact/Ultra SizeToContent, restore, etc.) still need
+                            // edge-relative re-application for already-snapped aux windows.
+                            try { SyncPlaylistWindowToMain(); } catch { /* ignore */ }
+                            try { SyncOptionsWindowToMain(); } catch { /* ignore */ }
+                            try { SyncLyricsWindowToMain(); } catch { /* ignore */ }
                         }
                         catch { /* ignore */ }
                         finally
@@ -4419,7 +4424,10 @@ public partial class MainWindow : Window
                     }
                     catch { /* ignore */ }
 
-                    // Legacy sync-to-main removed; WindowSnapService handles interactive latching + cluster move.
+                    // Apply once more after layout settles (SizeToContent two-pass).
+                    try { SyncPlaylistWindowToMain(); } catch { /* ignore */ }
+                    try { SyncOptionsWindowToMain(); } catch { /* ignore */ }
+                    try { SyncLyricsWindowToMain(); } catch { /* ignore */ }
                     try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
                 };
                 _auxSnapSyncDebounceTimer.Start();
@@ -4457,7 +4465,7 @@ public partial class MainWindow : Window
     private void SyncLyricsWindowToMain()
     {
         if (_lyricsWindow is null) return;
-        if (!_lyricsSnapped) return;
+        if (!_lyricsSnapped && _lyricsSnapEdge == LyricsSnapEdge.None) return;
         if (_lyricsSnapEdge == LyricsSnapEdge.None)
         {
             _lyricsSnapped = false;
@@ -4659,7 +4667,7 @@ public partial class MainWindow : Window
     private void SyncOptionsWindowToMain()
     {
         if (_optionsWindow is null) return;
-        if (!_optionsSnapped) return;
+        if (!_optionsSnapped && _optionsSnapEdge == OptionsSnapEdge.None) return;
         if (_optionsSnapEdge == OptionsSnapEdge.None)
         {
             _optionsSnapped = false;

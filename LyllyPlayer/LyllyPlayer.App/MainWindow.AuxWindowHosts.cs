@@ -72,59 +72,39 @@ public partial class MainWindow
             AppLog.Exception(ex, "Playlist bounds raw-json read failed");
         }
 
-        var w = new PlaylistWindow(
-            loadUrlAsync: async (src) => await LoadUrlAsync(src, CancellationToken.None).ConfigureAwait(true),
-            getSearchDefaults: () => (_searchDefaultCount, _searchMinLengthSeconds),
-            setSearchDefaults: (count, minLenSeconds) =>
+        var w = new PlaylistWindow(new PlaylistWindowOps(
+            LoadUrlAsync: async (src) => await LoadUrlAsync(src, CancellationToken.None).ConfigureAwait(true),
+            GetSearchDefaults: () => (_searchDefaultCount, _searchMinLengthSeconds),
+            SetSearchDefaults: (count, minLenSeconds) =>
             {
                 _searchDefaultCount = Math.Clamp(count, 1, 200);
                 _searchMinLengthSeconds = Math.Clamp(minLenSeconds, 0, 3600);
                 RequestPersistSnapshot();
             },
-            openYoutubeModalAsync: async (owner, ct) => await OpenYoutubeModalAsync(owner, ct).ConfigureAwait(true),
-            openLocalFilesModalAsync: async (owner, ct) => await OpenLocalFilesModalAsync(owner, ct).ConfigureAwait(true),
-            applySortAsync: async (spec, ct) => await ApplyPlaylistSortAsync(spec, ct).ConfigureAwait(true),
-            getIsYoutubeSource: () => IsYoutubeLikeSource(_lastPlaylistSourceType),
-            savePlaylistToFileAsync: async (path, displayName) =>
+            OpenYoutubeModalAsync: async (owner, ct) => await OpenYoutubeModalAsync(owner, ct).ConfigureAwait(true),
+            OpenLocalFilesModalAsync: async (owner, ct) => await OpenLocalFilesModalAsync(owner, ct).ConfigureAwait(true),
+            ApplySortAsync: async (spec, ct) => await ApplyPlaylistSortAsync(spec, ct).ConfigureAwait(true),
+            GetIsYoutubeSource: () => IsYoutubeLikeSource(_lastPlaylistSourceType),
+            SavePlaylistToFileAsync: async (path, displayName) =>
             {
                 try
                 {
                     var name = string.IsNullOrWhiteSpace(displayName) ? (_playlistTitle ?? "Playlist") : displayName.Trim();
-                    var ext = (Path.GetExtension(path) ?? "").Trim().ToLowerInvariant();
-                    if (ext is ".m3u" or ".m3u8")
-                    {
-                        var origin = _playlistCore.OriginByVideoId.ToDictionary(
-                            k => k.Key,
-                            v => new LyllyPlayer.Models.SavedPlaylistOrigin(v.Value.Label, v.Value.Source),
-                            StringComparer.OrdinalIgnoreCase);
-                        LyllyPlayer.Utils.M3uPlaylistFile.Save(
-                            path,
-                            name,
-                            _playlistCore.Entries,
-                            new LyllyPlayer.Utils.M3uPlaylistFile.ExportOptions(
-                                IncludeYoutube: _exportM3uIncludeYoutube,
-                                PreferRelativePaths: _exportM3uPreferRelativePaths,
-                                IncludeLyllyMetadata: _exportM3uIncludeLyllyMetadata
-                            ),
-                            originInfoByVideoId: origin);
-                        ShowInfoToast($"Saved M3U: {Path.GetFileName(path)}");
-                    }
-                    else
-                    {
-                        var srcType = _lastPlaylistSourceType.ToString();
-                        var src = _playlistSourceText ?? "";
-                        var pl = SavedPlaylistFile.FromEntries(
-                            name,
-                            srcType,
-                            src,
-                            _playlistCore.Entries,
-                            originInfoByVideoId: _playlistCore.OriginByVideoId.ToDictionary(
-                                k => k.Key,
-                                v => new LyllyPlayer.Models.SavedPlaylistOrigin(v.Value.Label, v.Value.Source),
-                                StringComparer.OrdinalIgnoreCase));
-                        SavedPlaylistFile.Save(path, pl);
-                        ShowInfoToast($"Saved playlist: {Path.GetFileName(path)}");
-                    }
+                    var origin = PlaylistFileService.BuildOriginInfoByVideoId(_playlistCore.OriginByVideoId);
+                    var outcome = _playlistFiles.SavePlaylist(
+                        path: path,
+                        playlistName: name,
+                        sourceType: _lastPlaylistSourceType.ToString(),
+                        source: _playlistSourceText ?? "",
+                        entries: _playlistCore.Entries,
+                        originInfoByVideoId: origin,
+                        exportM3uIncludeYoutube: _exportM3uIncludeYoutube,
+                        exportM3uPreferRelativePaths: _exportM3uPreferRelativePaths,
+                        exportM3uIncludeLyllyMetadata: _exportM3uIncludeLyllyMetadata);
+
+                    ShowInfoToast(outcome.Format == PlaylistSaveFormat.M3U
+                        ? $"Saved M3U: {outcome.FileName}"
+                        : $"Saved playlist: {outcome.FileName}");
                 }
                 catch (Exception ex)
                 {
@@ -133,11 +113,11 @@ public partial class MainWindow
                 }
                 await Task.CompletedTask;
             },
-            loadPlaylistFromFileAsync: async (path) =>
+            LoadPlaylistFromFileAsync: async (path) =>
             {
                 try
                 {
-                    var result = SavedPlaylistFile.TryLoadPlaylist(path);
+                    var result = _playlistFiles.LoadSavedPlaylist(path);
                     if (!result.Success)
                     {
                         System.Windows.MessageBox.Show(
@@ -177,7 +157,7 @@ public partial class MainWindow
                     SetStatusMessage("ERROR", "Load saved playlist failed.");
                 }
             },
-            loadEntriesAsync: async (entries, title, sourceKey, ct) =>
+            LoadEntriesAsync: async (entries, title, sourceKey, ct) =>
             {
                 // Infer type from source key; persisted separately.
                 _lastPlaylistSourceType =
@@ -188,7 +168,7 @@ public partial class MainWindow
                 _lastLocalPlaylistPath = sourceKey;
                 await LoadPlaylistFromEntriesAsync(entries, title, sourceKey, isStartupAutoLoad: false, ct);
             },
-            refreshAsync: async (ct) =>
+            RefreshAsync: async (ct) =>
             {
                 try
                 {
@@ -200,35 +180,35 @@ public partial class MainWindow
                 catch { /* ignore */ }
                 await RefreshCurrentSourceAsync(preserveCurrentIfPossible: true, ct);
             },
-            cleanInvalidItemsAsync: async (ct) => await CleanInvalidPlaylistItemsAsync(ct).ConfigureAwait(true),
-            capturePlaylistForCancelRestore: BeginCancelPlaylistSnapshot,
-            commitPlaylistCancelRestore: CommitCancelPlaylistSnapshot,
-            rollbackPlaylistCancelRestore: RollbackCancelPlaylistSnapshot,
-            sourceChanged: (src) => _playlistSourceText = src,
-            getSource: () => _playlistSourceText,
-            getLastYoutubeUrl: () => _lastYoutubeUrl,
-            setLastYoutubeUrl: (url) =>
+            CleanInvalidItemsAsync: async (ct) => await CleanInvalidPlaylistItemsAsync(ct).ConfigureAwait(true),
+            CapturePlaylistForCancelRestore: BeginCancelPlaylistSnapshot,
+            CommitPlaylistCancelRestore: CommitCancelPlaylistSnapshot,
+            RollbackPlaylistCancelRestore: RollbackCancelPlaylistSnapshot,
+            SourceChanged: (src) => _playlistSourceText = src,
+            GetSource: () => _playlistSourceText,
+            GetLastYoutubeUrl: () => _lastYoutubeUrl,
+            SetLastYoutubeUrl: (url) =>
             {
                 var t = PlaylistSourcePathHeuristics.SanitizePersistedLastYoutubeUrl(url);
                 if (!string.IsNullOrEmpty(t))
                     _lastYoutubeUrl = t;
             },
-            getFfmpegPath: () => _savedFfmpegPath ?? "",
-            getIncludeSubfoldersOnFolderLoad: () => _includeSubfoldersOnFolderLoad,
-            getReadMetadataOnLoad: () => _readMetadataOnLoad,
-            getKeepIncompletePlaylistOnCancel: () => _keepIncompletePlaylistOnCancel,
-            getRefreshOffersMetadataSkip: () =>
+            GetFfmpegPath: () => _savedFfmpegPath ?? "",
+            GetIncludeSubfoldersOnFolderLoad: () => _includeSubfoldersOnFolderLoad,
+            GetReadMetadataOnLoad: () => _readMetadataOnLoad,
+            GetKeepIncompletePlaylistOnCancel: () => _keepIncompletePlaylistOnCancel,
+            GetRefreshOffersMetadataSkip: () =>
                 _readMetadataOnLoad &&
                 (_lastPlaylistSourceType == PlaylistSourceType.Folder ||
                  _lastPlaylistSourceType == PlaylistSourceType.M3U),
-            refreshLocalWithoutMetadataAsync: async (ct) =>
+            RefreshLocalWithoutMetadataAsync: async (ct) =>
             {
                 await RefreshCurrentSourceAsync(
                     preserveCurrentIfPossible: true,
                     cancellationToken: ct,
                     forceLocalNoMetadata: true).ConfigureAwait(true);
             },
-            selectedVideoIdChanged: (videoId) =>
+            SelectedVideoIdChanged: (videoId) =>
             {
                 if (_engine.PlayOrder.Count == 0) return;
                 var playIdx = FindPlayOrderIndexByVideoId(videoId);
@@ -239,7 +219,7 @@ public partial class MainWindow
                 }
                 _engine.SetQueue(_engine.PlayOrder, startIndex: playIdx, raiseNowPlayingChanged: false);
             },
-            doubleClickPlayAsync: (videoId) =>
+            DoubleClickPlayAsync: (videoId) =>
             {
                 try
                 {
@@ -324,7 +304,7 @@ public partial class MainWindow
                 }
                 return Task.CompletedTask;
             },
-            addToQueueAsync: (entry) =>
+            AddToQueueAsync: (entry) =>
             {
                 try
                 {
@@ -335,7 +315,7 @@ public partial class MainWindow
                 catch { /* ignore */ }
                 return Task.CompletedTask;
             },
-            removeQueuedInstanceAsync: (id) =>
+            RemoveQueuedInstanceAsync: (id) =>
             {
                 try
                 {
@@ -348,7 +328,7 @@ public partial class MainWindow
                 catch { /* ignore */ }
                 return Task.CompletedTask;
             }
-        )
+        ))
         {
             Owner = null,
         };
