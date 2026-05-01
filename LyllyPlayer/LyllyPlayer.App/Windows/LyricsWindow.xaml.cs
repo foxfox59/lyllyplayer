@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Threading;
 using LyllyPlayer.Utils;
 using LyllyPlayer.ShellServices;
@@ -153,52 +152,10 @@ public partial class LyricsWindow : Window
     {
         try
         {
-            if (selectedIndex < 0 || selectedIndex >= LyricsListBox.Items.Count)
-                return;
-
-            // Ensure container exists (non-virtualizing list should have it after ScrollIntoView, but be defensive).
-            if (LyricsListBox.ItemContainerGenerator.ContainerFromIndex(selectedIndex) is not ListBoxItem item)
-                return;
-
-            var sv = FindScrollViewer(LyricsListBox);
-            if (sv is null)
-                return;
-
-            // Desired: keep highlighted line near the top with some padding.
-            const double topPaddingPx = 18;
-
-            // Compute the item’s Y within the scroll viewer, then convert to an absolute scroll offset target.
-            var pt = item.TransformToAncestor(sv).Transform(new System.Windows.Point(0, 0));
-            var itemTopYInViewport = pt.Y;
-            var currentOffset = sv.VerticalOffset;
-            var itemTopYInContent = currentOffset + itemTopYInViewport;
-            var desiredOffset = itemTopYInContent - topPaddingPx;
-
-            // Clamp to valid scroll range.
-            desiredOffset = Math.Max(0, Math.Min(desiredOffset, sv.ScrollableHeight));
-            sv.ScrollToVerticalOffset(desiredOffset);
+            // Lyrics should be pinned near the top (not centered).
+            ListBoxCentering.ScrollIndexNearTop(LyricsListBox, selectedIndex, topPaddingPx: 18);
         }
         catch { /* ignore */ }
-    }
-
-    private static ScrollViewer? FindScrollViewer(DependencyObject root)
-    {
-        try
-        {
-            if (root is ScrollViewer sv)
-                return sv;
-
-            var n = VisualTreeHelper.GetChildrenCount(root);
-            for (var i = 0; i < n; i++)
-            {
-                var child = VisualTreeHelper.GetChild(root, i);
-                var found = FindScrollViewer(child);
-                if (found is not null)
-                    return found;
-            }
-        }
-        catch { /* ignore */ }
-        return null;
     }
 
     private void ChromeBar_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)

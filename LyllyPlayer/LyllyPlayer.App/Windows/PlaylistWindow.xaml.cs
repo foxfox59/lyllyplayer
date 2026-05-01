@@ -822,20 +822,8 @@ public partial class PlaylistWindow : Window
 
             var s = "";
             try { s = (_getSource() ?? "").Trim(); } catch { s = ""; }
-            var safe = string.IsNullOrWhiteSpace(s) ? "playlist" : MakeSafeFileName(s);
-            if (safe.Length > 80) safe = safe.Substring(0, 80);
-
-            var dlg = new Microsoft.Win32.SaveFileDialog
-            {
-                Title = "Save playlist",
-                Filter = "Playlist JSON (*.json)|*.json|M3U playlist (*.m3u;*.m3u8)|*.m3u;*.m3u8|All files (*.*)|*.*",
-                AddExtension = true,
-                DefaultExt = ".json",
-                FileName = $"{safe}.json",
-                OverwritePrompt = true
-            };
-
-            if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
+            var path = PlaylistFileDialogs.PickPlaylistToSave(GetDialogOwnerWindow(), s);
+            if (string.IsNullOrWhiteSpace(path))
                 return;
 
             Interlocked.Increment(ref _busyCount);
@@ -845,7 +833,7 @@ public partial class PlaylistWindow : Window
             {
                 // Persist playlist title (not the source URL/path). The MainWindow delegate will use its current
                 // playlist title when displayName is empty.
-                await _savePlaylistToFileAsync(dlg.FileName, "");
+                await _savePlaylistToFileAsync(path, "");
             }
             finally
             {
@@ -867,19 +855,7 @@ public partial class PlaylistWindow : Window
             if (_busyCount > 0)
                 return;
 
-            var dlg = new Microsoft.Win32.OpenFileDialog
-            {
-                Title = "Load playlist",
-                Filter = "Playlists (*.json;*.m3u;*.m3u8)|*.json;*.m3u;*.m3u8|Playlist JSON (*.json)|*.json|M3U playlist (*.m3u;*.m3u8)|*.m3u;*.m3u8|All files (*.*)|*.*",
-                CheckFileExists = true,
-                CheckPathExists = true,
-                Multiselect = false
-            };
-
-            if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
-                return;
-
-            var path = dlg.FileName;
+            var path = PlaylistFileDialogs.PickPlaylistToLoad(GetDialogOwnerWindow());
             if (string.IsNullOrWhiteSpace(path))
                 return;
 
@@ -908,21 +884,6 @@ public partial class PlaylistWindow : Window
         {
             // ignore
         }
-    }
-
-    private static string MakeSafeFileName(string input)
-    {
-        var s = (input ?? "").Trim();
-        if (string.IsNullOrWhiteSpace(s))
-            return "playlist";
-        foreach (var c in Path.GetInvalidFileNameChars())
-            s = s.Replace(c, '_');
-        s = s.Replace(':', '_');
-        s = s.Replace('/', '_').Replace('\\', '_');
-        s = s.Replace('\n', ' ').Replace('\r', ' ').Replace('\t', ' ');
-        while (s.Contains("  "))
-            s = s.Replace("  ", " ");
-        return s.Trim();
     }
 
     private async Task LoadM3uFromPathAsync(string path)
@@ -1307,143 +1268,13 @@ public partial class PlaylistWindow : Window
 
     // (Moved to OpenMenuItem_OnClick)
 
-    private void CenterListBoxOnQueueItem(System.Windows.Controls.ListBox listBox, QueueItem item, int requestId, int attempt = 0)
-    {
-        void Work()
-        {
-            //  System.Windows.MessageBox.Show($"CenterListBoxOnQueueItem.Work\n" +
-            //     $"requestId: {requestId}\n" +
-            //     $"_centerRequestId: {_centerRequestId}\n" +
-            //     $"item.VideoId: {item.VideoId}\n" +
-            //     $"Match: {(requestId == _centerRequestId ? "YES" : "NO")}");
-            if (requestId != _centerRequestId)
-            {
-                EndSuppressQueueListUntilInitialScroll();
-                return;
-            }
-
-            listBox.ApplyTemplate();
-            var scrollViewer = FindListBoxScrollViewer(listBox);
-            if (scrollViewer is null || scrollViewer.ViewportHeight <= 0)
-            {
-                if (attempt < 3)
-                {
-                    EndSuppressQueueListUntilInitialScroll();
-                    listBox.Dispatcher.BeginInvoke(
-                        new Action(() => CenterListBoxOnQueueItem(listBox, item, requestId, attempt + 1)),
-                        DispatcherPriority.Render);
-                }
-                return;
-            }
-
-            // ScrollIntoView forces the container to be generated, then we defer the
-            // centering math until AFTER layout settles so p.Y is the correct post-scroll position.
-            listBox.ScrollIntoView(item);
-            listBox.UpdateLayout();
-
-            var sv = scrollViewer; // capture for callback
-            listBox.Dispatcher.BeginInvoke(
-                new Action(() => PerformCentering(listBox, item, requestId, sv, attempt)),
-                DispatcherPriority.Render);
-        }
-
-        if (listBox.Dispatcher.CheckAccess() && attempt == 0)
-            Work();
-        else if (!listBox.Dispatcher.CheckAccess())
-            listBox.Dispatcher.BeginInvoke(Work, DispatcherPriority.ContextIdle);
-        else
-            listBox.Dispatcher.BeginInvoke(Work, DispatcherPriority.Loaded);
-
-        // ── Phase 2: centering calculation (runs on Loaded priority after ScrollIntoView settles) ──
-        void PerformCentering(System.Windows.Controls.ListBox lb, QueueItem it, int rid, ScrollViewer sv, int att)
-        {
-            if (rid != _centerRequestId)
-            {
-                // System.Windows.MessageBox.Show($"ABORTED: rid={rid}, _centerRequestId={_centerRequestId}");
-                EndSuppressQueueListUntilInitialScroll();
-                return;
-            }
-
-            lb.ApplyTemplate();
-
-            // BUG FIX: use ContainerFromItem directly (reference pattern) instead of
-            // the fragile two-step "find index by iterating Items then ContainerFromIndex"
-            var container = lb.ItemContainerGenerator.ContainerFromItem(it) as FrameworkElement;
-            if (container is null)
-            {
-                // The item was consumed (e.g. first queue item played and removed).
-                // Scroll to whatever is now first in the queue so the user sees what's next.
-                if (lb == QueuedListBox && lb.Items.Count > 0)
-                {
-                    var firstItem = lb.Items[0];
-                    if (firstItem is QueueItem firstQueueItem)
-                    {
-                        lb.SelectedItem = firstQueueItem;
-                        lb.ScrollIntoView(firstQueueItem);
-                        lb.UpdateLayout();
-                        // Defer centering for the new item too — use Loaded
-                        lb.Dispatcher.BeginInvoke(
-                            new Action(() => PerformCentering(lb, firstQueueItem, rid, sv, att)),
-                            DispatcherPriority.Loaded);
-                    }
-                }
-                EndSuppressQueueListUntilInitialScroll();
-                return;
-            }
-
-            // Center the item in the visible viewport
-            int index = lb.Items.IndexOf(it);
-            if (index < 0) 
-            {
-                // Item not found (shouldn't happen if logic is correct, but safe fallback)
-                EndSuppressQueueListUntilInitialScroll();
-                return;
-            }
-
-            // 2. Calculate the average height of an item
-            // sv.ExtentHeight is the total scrollable height.
-            // lb.Items.Count is the number of items.
-            double totalItems = lb.Items.Count;
-            if (totalItems <= 0) return;
-
-            double itemHeight = sv.ExtentHeight / totalItems;
-
-            // 3. Calculate the target scroll offset to center that specific index
-            // Formula: (Index * AvgHeight) + (HalfItemHeight) - (HalfViewportHeight)
-            double target = (index * itemHeight) + (itemHeight / 2.0) - (sv.ViewportHeight / 2.0);
-
-            // 4. Clamp the target to the valid range
-            double maxOffset = Math.Max(0, sv.ExtentHeight - sv.ViewportHeight);
-            target = Math.Max(0, Math.Min(target, maxOffset));
-
-            // 5. Scroll
-            sv.ScrollToVerticalOffset(target);
-
-            EndSuppressQueueListUntilInitialScroll();
-        }
-    }
-
-    private static ScrollViewer? FindListBoxScrollViewer(System.Windows.Controls.ListBox listBox)
-    {
-        if (listBox.Template?.FindName("PART_ScrollViewer", listBox) is ScrollViewer templated)
-            return templated;
-        return FindDescendant<ScrollViewer>(listBox);
-    }
-
-    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
-    {
-        if (root is T t)
-            return t;
-
-        var count = VisualTreeHelper.GetChildrenCount(root);
-        for (var i = 0; i < count; i++)
-        {
-            var child = VisualTreeHelper.GetChild(root, i);
-            var found = FindDescendant<T>(child);
-            if (found is not null) return found;
-        }
-        return null;
-    }
+    private void CenterListBoxOnQueueItem(System.Windows.Controls.ListBox listBox, QueueItem item, int requestId)
+        => ListBoxCentering.CenterOnItem(
+            listBox,
+            item,
+            requestId,
+            getLatestRequestId: () => _centerRequestId,
+            onFinished: EndSuppressQueueListUntilInitialScroll);
 
     public void RefreshQueueView()
     {
