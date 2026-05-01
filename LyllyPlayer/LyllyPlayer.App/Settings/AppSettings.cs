@@ -2,6 +2,7 @@ namespace LyllyPlayer.Settings;
 
 public sealed record AppSettings(
     string? YtDlpPath,
+    bool? InternalYtDlpUpdateCheckEnabled,
     string? FfmpegPath,
     string? LastPlaylistUrl,
     string? LastPlaylistSourceType,

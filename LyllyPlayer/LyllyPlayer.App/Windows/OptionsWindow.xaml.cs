@@ -35,6 +35,9 @@ public partial class OptionsWindow : Window
 
     private readonly Func<string> _getYtDlpPath;
     private readonly Action<string> _setYtDlpPath;
+    private readonly Func<bool> _getInternalYtDlpUpdateCheckEnabled;
+    private readonly Action<bool> _setInternalYtDlpUpdateCheckEnabled;
+    private readonly Func<Task>? _checkInternalYtDlpNowAsync;
     private readonly Func<string> _getFfmpegPath;
     private readonly Action<string> _setFfmpegPath;
     private readonly Func<string> _getNodeJsPath;
@@ -141,6 +144,9 @@ public partial class OptionsWindow : Window
     public OptionsWindow(
         Func<string> getYtDlpPath,
         Action<string> setYtDlpPath,
+        Func<bool> getInternalYtDlpUpdateCheckEnabled,
+        Action<bool> setInternalYtDlpUpdateCheckEnabled,
+        Func<Task>? checkInternalYtDlpNowAsync,
         Func<string> getFfmpegPath,
         Action<string> setFfmpegPath,
         Func<string> getNodeJsPath,
@@ -243,6 +249,9 @@ public partial class OptionsWindow : Window
     {
         _getYtDlpPath = getYtDlpPath;
         _setYtDlpPath = setYtDlpPath;
+        _getInternalYtDlpUpdateCheckEnabled = getInternalYtDlpUpdateCheckEnabled;
+        _setInternalYtDlpUpdateCheckEnabled = setInternalYtDlpUpdateCheckEnabled;
+        _checkInternalYtDlpNowAsync = checkInternalYtDlpNowAsync;
         _getFfmpegPath = getFfmpegPath;
         _setFfmpegPath = setFfmpegPath;
         _getNodeJsPath = getNodeJsPath;
@@ -389,6 +398,7 @@ public partial class OptionsWindow : Window
     {
         _draft = OptionsDraftLoader.LoadFromCurrent(
             _getYtDlpPath,
+            _getInternalYtDlpUpdateCheckEnabled,
             _getFfmpegPath,
             _getNodeJsPath,
             _getYtdlpEjsComponentSource,
@@ -467,6 +477,7 @@ public partial class OptionsWindow : Window
         RefreshToolsResolution();
         CacheMaxMbTextBox.Text = Math.Clamp(_draft.CacheMaxMb, 16, 102400).ToString();
         try { GlobalMediaKeysCheckBox.IsChecked = _draft.GlobalMediaKeysEnabled; } catch { /* ignore */ }
+        try { InternalYtDlpUpdateCheckCheckBox.IsChecked = _draft.InternalYtDlpUpdateCheckEnabled; } catch { /* ignore */ }
         try
         {
             PlaylistAutoRefreshComboBox.ClearValue(UIElement.IsEnabledProperty);
@@ -932,6 +943,31 @@ public partial class OptionsWindow : Window
 
             _draft.YtDlpPath = managed;
             RefreshUi();
+        }
+        catch { /* ignore */ }
+    }
+
+    private void InternalYtDlpUpdateCheckCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.InternalYtDlpUpdateCheckEnabled = true;
+    }
+
+    private void InternalYtDlpUpdateCheckCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.InternalYtDlpUpdateCheckEnabled = false;
+    }
+
+    private async void InternalYtDlpCheckNowButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_checkInternalYtDlpNowAsync is null)
+                return;
+            await _checkInternalYtDlpNowAsync().ConfigureAwait(true);
         }
         catch { /* ignore */ }
     }
@@ -2140,6 +2176,7 @@ public partial class OptionsWindow : Window
         catch { /* ignore */ }
 
         try { _setYtDlpPath(_draft.YtDlpPath ?? ""); } catch { /* ignore */ }
+        try { _setInternalYtDlpUpdateCheckEnabled(_draft.InternalYtDlpUpdateCheckEnabled); } catch { /* ignore */ }
         try { _setFfmpegPath(_draft.FfmpegPath ?? ""); } catch { /* ignore */ }
         try { _setNodeJsPath(_draft.NodeJsPath ?? ""); } catch { /* ignore */ }
         try { _setYtdlpEjsComponentSource(_draft.YtdlpEjsComponentSource ?? "github"); } catch { /* ignore */ }

@@ -15,6 +15,7 @@ using System.Text.Json;
 using System.Runtime.InteropServices;
 using System.Drawing;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using LyllyPlayer.Models;
 using LyllyPlayer.Services;
 using LyllyPlayer.ShellServices;
@@ -353,6 +354,7 @@ public partial class MainWindow : Window
     private string? _savedFfmpegPath;
     /// <summary>Optional explicit node.exe path; Advanced features need a resolved Node.</summary>
     private string? _savedNodePath;
+    private bool _internalYtDlpUpdateCheckEnabled;
     private string _ytdlpEjsComponentSource = "github";
     private bool _youtubeCookiesFromBrowserEnabled;
     private string _youtubeCookiesFromBrowser = "";
@@ -769,6 +771,7 @@ public partial class MainWindow : Window
         _savedYtDlpPath = NormalizeToolSave(_startupSettings.YtDlpPath);
         _savedFfmpegPath = NormalizeToolSave(_startupSettings.FfmpegPath);
         _savedNodePath = NormalizeToolSave(_startupSettings.NodeJsPath);
+        _internalYtDlpUpdateCheckEnabled = _startupSettings.InternalYtDlpUpdateCheckEnabled ?? false;
         _ytdlpEjsComponentSource = string.IsNullOrWhiteSpace(_startupSettings.YtdlpEjsComponentSource)
             ? "github"
             : _startupSettings.YtdlpEjsComponentSource.Trim();
@@ -4651,6 +4654,13 @@ public partial class MainWindow : Window
                     ApplyYtdlpPlaybackOptions();
                     RequestPersistSnapshot();
                 },
+                getInternalYtDlpUpdateCheckEnabled: () => _internalYtDlpUpdateCheckEnabled,
+                setInternalYtDlpUpdateCheckEnabled: (v) =>
+                {
+                    _internalYtDlpUpdateCheckEnabled = v;
+                    RequestPersistSnapshot();
+                },
+                checkInternalYtDlpNowAsync: async () => await CheckInternalYtDlpNowAsync().ConfigureAwait(true),
                 getLyricsEnabled: () => _lyricsEnabled,
                 setLyricsEnabled: (v) =>
                 {
@@ -7533,6 +7543,116 @@ public partial class MainWindow : Window
             SetStatusMessage("ERROR", "yt-dlp not found. Set it under Options → Tools.");
             AppLog.Error("yt-dlp not found on PATH and no valid configured path.");
             return false;
+        }
+    }
+
+    private static bool TryParseYtDlpVersion(string? s, out (int y, int m, int d) v)
+    {
+        v = default;
+        var t = (s ?? "").Trim();
+        // yt-dlp versions look like 2026.03.17
+        var parts = t.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 3)
+            return false;
+        if (!int.TryParse(parts[0], out var yy)) return false;
+        if (!int.TryParse(parts[1], out var mm)) return false;
+        if (!int.TryParse(parts[2], out var dd)) return false;
+        v = (yy, mm, dd);
+        return true;
+    }
+
+    private static async Task<string?> TryGetYtDlpVersionAsync(string exePath, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = exePath,
+                Arguments = "--version",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            using var p = Process.Start(psi);
+            if (p is null) return null;
+            var stdout = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            try { await p.WaitForExitAsync(ct).ConfigureAwait(false); } catch { /* ignore */ }
+            return (stdout ?? "").Trim();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task CheckInternalYtDlpNowAsync()
+    {
+        try
+        {
+            var managed = ToolPaths.GetManagedYtDlpPath();
+            if (!File.Exists(managed))
+            {
+                System.Windows.MessageBox.Show(this, "Internal yt-dlp is not downloaded yet.", GetAppTitleBase(),
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            ShowInfoToast("Checking yt-dlp updates…", ms: 1200);
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+            http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("LyllyPlayer", "1.0"));
+
+            // Installed version
+            var installedStr = await TryGetYtDlpVersionAsync(managed, CancellationToken.None).ConfigureAwait(true);
+            _ = TryParseYtDlpVersion(installedStr, out var installed);
+
+            // Latest release tag
+            using var resp = await http.GetAsync("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest").ConfigureAwait(true);
+            resp.EnsureSuccessStatusCode();
+            var json = await resp.Content.ReadAsStringAsync().ConfigureAwait(true);
+            using var doc = JsonDocument.Parse(json);
+            var tag = doc.RootElement.TryGetProperty("tag_name", out var tn) ? (tn.GetString() ?? "") : "";
+            if (!TryParseYtDlpVersion(tag, out var latest))
+            {
+                SetStatusMessage("ERROR", "yt-dlp update check failed.");
+                return;
+            }
+
+            var isNewer = latest.CompareTo(installed) > 0;
+            if (!isNewer)
+            {
+                ShowInfoToast($"yt-dlp is up to date ({installedStr}).", ms: 1600);
+                System.Windows.MessageBox.Show(this, $"Internal yt-dlp is up to date.\n\nInstalled: {installedStr}\nLatest: {tag}",
+                    GetAppTitleBase(), MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var choice = System.Windows.MessageBox.Show(
+                this,
+                $"An internal yt-dlp update is available.\n\nInstalled: {installedStr}\nLatest: {tag}\n\nUpdate now?",
+                GetAppTitleBase(),
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (choice != MessageBoxResult.Yes)
+            {
+                ShowInfoToast("yt-dlp update available.", ms: 2500);
+                return;
+            }
+
+            var ok = await TryDownloadYtDlpAsync(managed, CancellationToken.None).ConfigureAwait(true);
+            if (!ok)
+            {
+                SetStatusMessage("ERROR", "yt-dlp update failed.");
+                return;
+            }
+
+            var newVer = await TryGetYtDlpVersionAsync(managed, CancellationToken.None).ConfigureAwait(true);
+            ShowInfoToast($"yt-dlp updated ({newVer}).", ms: 2500);
+        }
+        catch
+        {
+            SetStatusMessage("ERROR", "yt-dlp update check failed.");
         }
     }
 

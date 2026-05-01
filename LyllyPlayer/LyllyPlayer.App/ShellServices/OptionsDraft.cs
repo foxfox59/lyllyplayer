@@ -6,6 +6,7 @@ namespace LyllyPlayer.ShellServices;
 public sealed class OptionsDraft
 {
     public string YtDlpPath = "";
+    public bool InternalYtDlpUpdateCheckEnabled;
     public string FfmpegPath = "";
     public string NodeJsPath = "";
     public string YtdlpEjsComponentSource = "github";

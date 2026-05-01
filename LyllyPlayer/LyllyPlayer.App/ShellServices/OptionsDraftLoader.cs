@@ -8,6 +8,7 @@ public static class OptionsDraftLoader
 {
     public static OptionsDraft LoadFromCurrent(
         Func<string> getYtDlpPath,
+        Func<bool> getInternalYtDlpUpdateCheckEnabled,
         Func<string> getFfmpegPath,
         Func<string> getNodeJsPath,
         Func<string> getYtdlpEjsComponentSource,
@@ -59,6 +60,7 @@ public static class OptionsDraftLoader
         var d = new OptionsDraft();
 
         try { d.YtDlpPath = getYtDlpPath() ?? ""; } catch { d.YtDlpPath = ""; }
+        try { d.InternalYtDlpUpdateCheckEnabled = getInternalYtDlpUpdateCheckEnabled(); } catch { d.InternalYtDlpUpdateCheckEnabled = false; }
         try { d.FfmpegPath = getFfmpegPath() ?? ""; } catch { d.FfmpegPath = ""; }
         try { d.NodeJsPath = getNodeJsPath() ?? ""; } catch { d.NodeJsPath = ""; }
         try

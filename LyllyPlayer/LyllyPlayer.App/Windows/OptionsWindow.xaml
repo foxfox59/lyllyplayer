@@ -150,6 +150,7 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
@@ -177,25 +178,49 @@
                                         <Button x:Name="YtDlpUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Click="YtDlpUsePathButton_OnClick"/>
                                     </StackPanel>
 
-                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="ffmpeg:" VerticalAlignment="Top" Margin="0,6,8,0" Visibility="Collapsed"/>
-                                    <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,8,10" Visibility="Collapsed">
+                                    <Expander Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3"
+                                              Margin="0,0,0,10"
+                                              Background="Transparent">
+                                        <Expander.Header>
+                                            <TextBlock Text="yt-dlp updates"
+                                                       Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                                       FontSize="11"/>
+                                        </Expander.Header>
+                                        <StackPanel Margin="0,6,0,0">
+                                            <CheckBox x:Name="InternalYtDlpUpdateCheckCheckBox"
+                                                      Content="Check internal yt-dlp updates (weekly)"
+                                                      Margin="0,0,0,8"
+                                                      Foreground="{DynamicResource App.Theme.Foreground}"
+                                                      Checked="InternalYtDlpUpdateCheckCheckBox_OnChecked"
+                                                      Unchecked="InternalYtDlpUpdateCheckCheckBox_OnUnchecked"/>
+                                            <Button x:Name="InternalYtDlpCheckNowButton"
+                                                    Content="Check now"
+                                                    MinWidth="96"
+                                                    Height="28"
+                                                    HorizontalAlignment="Left"
+                                                    Click="InternalYtDlpCheckNowButton_OnClick"/>
+                                        </StackPanel>
+                                    </Expander>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="ffmpeg:" VerticalAlignment="Top" Margin="0,6,8,0" Visibility="Collapsed"/>
+                                    <StackPanel Grid.Row="3" Grid.Column="1" Margin="0,0,8,10" Visibility="Collapsed">
                                         <TextBox x:Name="FfmpegPathTextBox" Height="30" IsReadOnly="True"/>
                                         <TextBlock x:Name="FfmpegSourceTextBlock" FontSize="11" Margin="2,2,0,0"
                                                    Foreground="{DynamicResource App.Theme.Foreground}"/>
                                     </StackPanel>
-                                    <Button Grid.Row="2" Grid.Column="2" x:Name="FfmpegBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="FfmpegBrowseButton_OnClick" Visibility="Collapsed"/>
-                                    <Button Grid.Row="2" Grid.Column="3" x:Name="FfmpegUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="FfmpegUsePathButton_OnClick" Visibility="Collapsed"/>
+                                    <Button Grid.Row="3" Grid.Column="2" x:Name="FfmpegBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="FfmpegBrowseButton_OnClick" Visibility="Collapsed"/>
+                                    <Button Grid.Row="3" Grid.Column="3" x:Name="FfmpegUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="FfmpegUsePathButton_OnClick" Visibility="Collapsed"/>
 
-                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Node.js:" VerticalAlignment="Top" Margin="0,6,8,0"/>
-                                    <StackPanel Grid.Row="3" Grid.Column="1" Margin="0,0,8,10">
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Node.js:" VerticalAlignment="Top" Margin="0,6,8,0"/>
+                                    <StackPanel Grid.Row="4" Grid.Column="1" Margin="0,0,8,10">
                                         <TextBox x:Name="NodePathTextBox" Height="30" IsReadOnly="True"/>
                                         <TextBlock x:Name="NodeSourceTextBlock" FontSize="11" Margin="2,2,0,0"
                                                    Foreground="{DynamicResource App.Theme.Foreground}"/>
                                     </StackPanel>
-                                    <Button Grid.Row="3" Grid.Column="2" x:Name="NodeBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="NodeBrowseButton_OnClick"/>
-                                    <Button Grid.Row="3" Grid.Column="3" x:Name="NodeUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="NodeUsePathButton_OnClick"/>
+                                    <Button Grid.Row="4" Grid.Column="2" x:Name="NodeBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,10" VerticalAlignment="Top" Click="NodeBrowseButton_OnClick"/>
+                                    <Button Grid.Row="4" Grid.Column="3" x:Name="NodeUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Margin="0,0,0,10" VerticalAlignment="Top" Click="NodeUsePathButton_OnClick"/>
 
-                                    <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4"
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="4"
                                                TextWrapping="Wrap"
                                                FontSize="11"
                                                Foreground="{DynamicResource App.Theme.Foreground}"
