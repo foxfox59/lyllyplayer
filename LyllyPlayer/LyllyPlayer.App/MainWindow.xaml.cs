@@ -15,6 +15,9 @@ using System.Text.Json;
 using System.Runtime.InteropServices;
 using System.Drawing;
 using LyllyPlayer.Models;
+using LyllyPlayer.Services;
+using LyllyPlayer.ShellServices;
+using LyllyPlayer.Shell;
 using LyllyPlayer.Utils;
 using LyllyPlayer.Player;
 using LyllyPlayer.Settings;
@@ -297,7 +300,7 @@ public partial class MainWindow : Window
         {
             return new PlaylistRestoreSnapshot
             {
-                Original = w._originalEntries.ToList(),
+                Original = w._playlistCore.Entries.ToList(),
                 // Current = w._currentEntries.ToList(),
                 PlaylistSourceText = w._playlistSourceText ?? "",
                 LastLocalPlaylistPath = w._lastLocalPlaylistPath,
@@ -311,7 +314,7 @@ public partial class MainWindow : Window
 
         public void Restore(MainWindow w)
         {
-            w._originalEntries = Original.ToList();
+            w._playlistCore.ReplaceEntries(Original);
             // w._currentEntries = Current.ToList();
             w._playlistSourceText = PlaylistSourceText;
             w._lastLocalPlaylistPath = LastLocalPlaylistPath;
@@ -323,15 +326,15 @@ public partial class MainWindow : Window
             var startIndex = 0;
             if (!string.IsNullOrWhiteSpace(CurrentVideoId))
             {
-                var idx = FindIndexByVideoId(w._originalEntries, CurrentVideoId);
-                if (idx >= 0 && idx < w._originalEntries.Count)
+                var idx = FindIndexByVideoId(w._playlistCore.Entries, CurrentVideoId);
+                if (idx >= 0 && idx < w._playlistCore.Entries.Count)
                     startIndex = idx;
             }
 
             var displayIndex = w.GetOriginalIndexByVideoId(CurrentVideoId) ?? 0;
 
             w.SetPlaylistTitle(PlaylistTitle);
-            w.SetQueueList(w._originalEntries, w._originalEntries.Count == 0 ? -1 : displayIndex);
+            w.SetQueueList(w._playlistCore.Entries, w._playlistCore.Entries.Count == 0 ? -1 : displayIndex);
             // w._engine.SetQueue(w._currentEntries, w._currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
             w.UpdateRefreshEnabled();
             w.SyncNowPlayingFromEngine();
@@ -360,100 +363,11 @@ public partial class MainWindow : Window
     private bool _localImportAppend;
     private bool _localImportRemoveDuplicates;
     private readonly AppSettings _startupSettings;
-    private List<PlaylistEntry> _originalEntries = new();
-    private readonly List<string> _recentlyPlayedVideoIds = new(5);
-    private int GetRecentlyPlayedWindowSize()
-    {
-        // Scale with playlist size (avoid a fixed constant).
-        // Examples: 25->5, 100->10, 400->20, 2500->40 (cap).
-        var n = Math.Max(0, _originalEntries.Count);
-        var scaled = (int)Math.Ceiling(Math.Sqrt(n));
-        return Math.Clamp(scaled, 5, 40);
-    }
-
-    /// <summary>
-    /// Shuffle "history tape": a list of played VideoIds plus a cursor pointing at the current position.
-    /// Prev/Next should traverse this tape when the user has gone back in history.
-    /// </summary>
-    private readonly List<string> _shuffleTapeVideoIds = new();
-    private int _shuffleTapeCursor = -1;
-    private int GetShuffleTapeMaxSize()
-    {
-        // "Generous" and scales with playlist size; always at least 10.
-        // Use ~10% of the playlist (cap to keep memory bounded for huge lists).
-        var n = Math.Max(0, _originalEntries.Count);
-        var scaled = (int)Math.Ceiling(n * 0.10);
-        var max = Math.Clamp(scaled, 10, 200);
-        return Math.Min(max, n == 0 ? max : n);
-    }
-
-    private void RecordNowPlayingForShuffleTape(string videoId)
-    {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(videoId))
-                return;
-
-            // If we're moving within the existing tape, just move the cursor.
-            if (_shuffleTapeCursor >= 0 && _shuffleTapeCursor < _shuffleTapeVideoIds.Count)
-            {
-                if (string.Equals(_shuffleTapeVideoIds[_shuffleTapeCursor], videoId, StringComparison.OrdinalIgnoreCase))
-                    return;
-
-                if (_shuffleTapeCursor + 1 < _shuffleTapeVideoIds.Count &&
-                    string.Equals(_shuffleTapeVideoIds[_shuffleTapeCursor + 1], videoId, StringComparison.OrdinalIgnoreCase))
-                {
-                    _shuffleTapeCursor++;
-                    return;
-                }
-
-                if (_shuffleTapeCursor - 1 >= 0 &&
-                    string.Equals(_shuffleTapeVideoIds[_shuffleTapeCursor - 1], videoId, StringComparison.OrdinalIgnoreCase))
-                {
-                    _shuffleTapeCursor--;
-                    return;
-                }
-
-                // If we were in the middle and something else started playing (queued/manual),
-                // drop forward history and continue from the current cursor.
-                if (_shuffleTapeCursor < _shuffleTapeVideoIds.Count - 1)
-                    _shuffleTapeVideoIds.RemoveRange(_shuffleTapeCursor + 1, _shuffleTapeVideoIds.Count - (_shuffleTapeCursor + 1));
-            }
-
-            // Append if it isn't a duplicate of the tail.
-            if (_shuffleTapeVideoIds.Count == 0 ||
-                !string.Equals(_shuffleTapeVideoIds[^1], videoId, StringComparison.OrdinalIgnoreCase))
-            {
-                _shuffleTapeVideoIds.Add(videoId);
-            }
-            _shuffleTapeCursor = _shuffleTapeVideoIds.Count - 1;
-
-            // Trim oldest entries while keeping cursor valid.
-            var max = GetShuffleTapeMaxSize();
-            while (_shuffleTapeVideoIds.Count > max)
-            {
-                _shuffleTapeVideoIds.RemoveAt(0);
-                _shuffleTapeCursor--;
-            }
-            _shuffleTapeCursor = Math.Clamp(_shuffleTapeCursor, -1, _shuffleTapeVideoIds.Count - 1);
-        }
-        catch { /* ignore */ }
-    }
-
-    private void RecordRecentlyPlayedVideoId(string videoId)
-    {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(videoId))
-                return;
-
-            _recentlyPlayedVideoIds.Add(videoId);
-            var max = GetRecentlyPlayedWindowSize();
-            while (_recentlyPlayedVideoIds.Count > max)
-                _recentlyPlayedVideoIds.RemoveAt(0);
-        }
-        catch { /* ignore */ }
-    }
+    private readonly AppShell _shell = new();
+    private PlaylistService _playlistCore => _shell.Playlist;
+    private PlayOrderService _playOrder => _shell.PlayOrder;
+    private SettingsService _settingsService => _shell.Settings;
+    private LyricsService _lyricsService => _shell.Lyrics;
     /// <summary>Stack of previously played track VideoIds for "Previous" button navigation.</summary>
     private readonly Stack<string> _previousTrackHistory = new();
     /// <summary>Maximum number of entries in _previousTrackHistory to avoid unbounded growth.</summary>
@@ -468,12 +382,12 @@ public partial class MainWindow : Window
             _pendingResumeVideoId = null;
             _suppressAutoScrollVideoId = null;
 
-            var idx = _originalEntries.FindIndex(e => string.Equals(e.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase));
+            var idx = _playlistCore.Entries.FindIndex(e => string.Equals(e.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase));
             if (idx < 0)
                 return;
 
             _suppressPreviousTrackHistoryPushOnce = suppressHistoryPushOnce;
-            _engine.SetQueue(_originalEntries, startIndex: idx, raiseNowPlayingChanged: true);
+            _engine.SetQueue(_playlistCore.Entries, startIndex: idx, raiseNowPlayingChanged: true);
             _ = _engine.PlayCurrentAsync();
         }
         catch { /* ignore */ }
@@ -535,9 +449,6 @@ public partial class MainWindow : Window
     private bool _startupResumeAttempted;
     private bool _hasLoadedPlaylist;
     private bool _playlistIsCompound;
-    private sealed record PlaylistOriginInfo(string Label, string Source);
-    private readonly Dictionary<string, PlaylistOriginInfo> _playlistOriginByVideoId = new(StringComparer.OrdinalIgnoreCase);
-    private PlaylistOriginInfo? _basePlaylistOrigin;
     private sealed record QueuedInstance(Guid Id, PlaylistEntry Entry);
     private readonly List<QueuedInstance> _queuedNext = new();
     private Guid? _manualQueuedPlayInstanceId;
@@ -602,6 +513,8 @@ public partial class MainWindow : Window
     private const double BaseSnapThresholdPx = 18;
     private const double BaseSnapUnsnapPx = 40;
     private const double SnapGapPx = 0;
+    private const double SnapPersistAdjacencyPx = 2;
+    private const double SnapPersistMinOverlapPx = 24;
     // Options should snap similarly to Playlist; too-large thresholds feel "magnetic" and accidental.
     private const double BaseOptionsSnapThresholdPx = 18;
     private const double BaseOptionsSnapUnsnapPx = 40;
@@ -656,6 +569,7 @@ public partial class MainWindow : Window
     // Legacy manual drag state removed (DragMove is used instead).
 
     private DispatcherTimer? _snapRestoreDebounceTimer;
+    private DispatcherTimer? _auxSnapSyncDebounceTimer;
 
     /// <summary>Minimal main layout: no options/playlist row; hide shuffle/repeat and playlist title in the card.</summary>
     private bool _mainWindowCompact;
@@ -743,10 +657,7 @@ public partial class MainWindow : Window
     private string _appIconVisibility = "TaskbarOnly";
     private bool _lyricsEnabled;
     private bool _lyricsLocalFilesEnabled;
-    private LyricsManager _lyricsManager = new();
     private DispatcherTimer? _lyricsTimer;
-    private int _lastDisplayedLyricLineIndex = int.MinValue;
-    private string? _lyricsResolvedVideoId;
     private System.Drawing.Icon? _trayIcon;
     private bool? _lastAppliedShowInTaskbar;
     private bool? _lastAppliedShowTray;
@@ -836,8 +747,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         _shellStyleHook = MainWindowShellStyleHwndHook;
-        _isFreshSettingsInstall = !File.Exists(SettingsStore.GetSettingsPath());
-        _startupSettings = SettingsStore.Load(out _settingsStartupLoadInfo);
+        _isFreshSettingsInstall = !File.Exists(_settingsService.GetSettingsPath());
+        _startupSettings = _settingsService.LoadStartup(out _settingsStartupLoadInfo);
         _mainWindowCompact = _startupSettings.MainWindowCompact ?? false;
         _compactModeHidesAuxWindows = _startupSettings.CompactModeHidesAuxWindows ?? true;
         _compactModeLayout = SettingsStore.NormalizeCompactModeLayout(_startupSettings.CompactModeLayout);
@@ -871,7 +782,7 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         // Universal gapless snapping between LyllyPlayer windows.
-        try { WindowSnapService.Register(this); } catch { /* ignore */ }
+        try { WindowCoordinator.RegisterSnapping(this); } catch { /* ignore */ }
 
         _appLogLevel = AppLog.NormalizeLevelString(_startupSettings.AppLogLevel);
         try { AppLog.SetLevel(_appLogLevel); } catch { /* ignore */ }
@@ -881,7 +792,7 @@ public partial class MainWindow : Window
         var startupInfo = _settingsStartupLoadInfo;
         if (startupInfo.SettingsFileExisted)
         {
-            var settingsPath = SettingsStore.GetSettingsPath();
+            var settingsPath = _settingsService.GetSettingsPath();
             if (startupInfo.RecoveryKind == SettingsStartupRecoveryKind.CorruptUsedDefaults)
             {
                 System.Windows.MessageBox.Show(
@@ -964,7 +875,7 @@ public partial class MainWindow : Window
         ApplyVisualizerMode(ParseVisualizerMode(_startupSettings.VisualizerMode));
 
         // Initialize lyrics cache and timer
-        var settingsDir = Path.GetDirectoryName(SettingsStore.GetSettingsPath());
+        var settingsDir = Path.GetDirectoryName(_settingsService.GetSettingsPath());
         if (!string.IsNullOrWhiteSpace(settingsDir))
             LyricsCache.Initialize(settingsDir);
         // Startup: hydrate cached lyrics immediately using the persisted CurrentVideoId.
@@ -1042,8 +953,8 @@ public partial class MainWindow : Window
 
                     // Shuffle tape + "recently played" window for shuffle candidate selection.
                     if (_shuffleEnabled)
-                        RecordNowPlayingForShuffleTape(entry.VideoId);
-                    RecordRecentlyPlayedVideoId(entry.VideoId);
+                        _playOrder.RecordNowPlayingForShuffleTape(entry.VideoId, _playlistCore.Entries.Count);
+                    _playOrder.RecordRecentlyPlayedVideoId(entry.VideoId, _playlistCore.Entries.Count);
 
                     // Only clear lyrics when the track actually changes.
                     // Resuming stopped playback on the same track should preserve lyrics.
@@ -1052,9 +963,7 @@ public partial class MainWindow : Window
                         // Clear lyrics BEFORE Refresh() so the window doesn't show stale lyrics
                         // from the previous track. TryResolveLyricsAsync (called async below) will
                         // call Refresh() again once new lyrics are resolved.
-                        _lyricsManager.Clear();
-                        _lastDisplayedLyricLineIndex = int.MinValue;
-                        _lyricsResolvedVideoId = null;
+                        _lyricsService.ClearParsedLyricsState();
                         _lyricsWindow?.Refresh();
 
                         // Immediately hydrate from cache (no network) so the lyrics window is populated
@@ -1357,7 +1266,7 @@ public partial class MainWindow : Window
             _startupBoundsApplied = true;
             try
             {
-                var s = SettingsStore.Load();
+                var s = _settingsService.LoadLatest();
                 AppLog.Info($"Startup bounds (sourceinit) settings: L={s.WindowLeft} T={s.WindowTop} W={s.WindowWidth} H={s.WindowHeight} State={s.WindowState}");
                 ApplyWindowSettings(s);
                 ApplyMainWindowCompactMode();
@@ -1663,23 +1572,23 @@ public partial class MainWindow : Window
 
             PlaylistEntry? updatedEntry = null;
 
-            for (var i = 0; i < _originalEntries.Count; i++)
+            for (var i = 0; i < _playlistCore.Entries.Count; i++)
             {
-                if (!string.Equals(_originalEntries[i].VideoId, videoId, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(_playlistCore.Entries[i].VideoId, videoId, StringComparison.OrdinalIgnoreCase))
                     continue;
-                var e = _originalEntries[i];
+                var e = _playlistCore.Entries[i];
                 var newE = e with
                 {
                     Title = string.IsNullOrWhiteSpace(title) ? e.Title : title!,
                     Channel = string.IsNullOrWhiteSpace(artist) ? e.Channel : artist,
                     DurationSeconds = durationSeconds ?? e.DurationSeconds
                 };
-                _originalEntries[i] = newE;
+                _playlistCore.Entries[i] = newE;
                 updatedEntry = newE;
                 break;
             }
 
-            if (_originalEntries is List<PlaylistEntry> curList)
+            if (_playlistCore.Entries is List<PlaylistEntry> curList)
             {
                 for (var i = 0; i < curList.Count; i++)
                 {
@@ -2144,7 +2053,7 @@ public partial class MainWindow : Window
         {
             if (_optionsWindow is not null)
             {
-                try { CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState); } catch { /* ignore */ }
+                try { WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState); } catch { /* ignore */ }
                 try { _optionsWindow.Close(); } catch { /* ignore */ }
             }
         }
@@ -2154,7 +2063,7 @@ public partial class MainWindow : Window
         {
             if (_playlistWindow is not null && !_compactUserOpenedPlaylistWindow)
             {
-                try { CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState); } catch { /* ignore */ }
+                try { WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState); } catch { /* ignore */ }
                 try { _playlistWindow.Close(); } catch { /* ignore */ }
             }
         }
@@ -2164,7 +2073,7 @@ public partial class MainWindow : Window
         {
             if (_lyricsWindow is not null && !_compactUserOpenedLyricsWindow)
             {
-                try { CaptureWindowBounds(_lyricsWindow, out var _unusedLyricsBounds, out var _unusedLyricsState); } catch { /* ignore */ }
+                try { WindowCoordinator.CaptureWindowBounds(_lyricsWindow, out var _unusedLyricsBounds, out var _unusedLyricsState); } catch { /* ignore */ }
                 try { _lyricsWindow.Close(); } catch { /* ignore */ }
             }
         }
@@ -3212,14 +3121,14 @@ public partial class MainWindow : Window
             // Shuffle "tape": if we are at the beginning and user clicks Prev, disallow.
             if (_shuffleEnabled)
             {
-                if (_shuffleTapeCursor <= 0 || _shuffleTapeVideoIds.Count == 0)
+                if (_playOrder.ShuffleTapeCursor <= 0 || _playOrder.ShuffleTapeVideoIds.Count == 0)
                     return;
 
                 // Walk back until we find an entry that still exists in the playlist.
-                for (var i = _shuffleTapeCursor - 1; i >= 0; i--)
+                for (var i = _playOrder.ShuffleTapeCursor - 1; i >= 0; i--)
                 {
-                    var prevVideoId = _shuffleTapeVideoIds[i];
-                    var prevEntry = _originalEntries.FirstOrDefault(e => string.Equals(e.VideoId, prevVideoId, StringComparison.OrdinalIgnoreCase));
+                    var prevVideoId = _playOrder.ShuffleTapeVideoIds[i];
+                    var prevEntry = _playlistCore.Entries.FirstOrDefault(e => string.Equals(e.VideoId, prevVideoId, StringComparison.OrdinalIgnoreCase));
                     if (prevEntry is not null)
                     {
                         PlayTargetEntryNow(prevEntry, suppressHistoryPushOnce: true);
@@ -3235,7 +3144,7 @@ public partial class MainWindow : Window
             while (_previousTrackHistory.Count > 0)
             {
                 var prevVideoId = _previousTrackHistory.Pop();
-                var prevEntry = _originalEntries.FirstOrDefault(e => string.Equals(e.VideoId, prevVideoId, StringComparison.OrdinalIgnoreCase));
+                var prevEntry = _playlistCore.Entries.FirstOrDefault(e => string.Equals(e.VideoId, prevVideoId, StringComparison.OrdinalIgnoreCase));
                 if (prevEntry is not null)
                 {
                     // Prevent "ping-pong": when going back, don't immediately push the current track into history.
@@ -3260,7 +3169,7 @@ public partial class MainWindow : Window
                     _playlistWindowWasOpenBeforeCompact = false;
 
                 // Capture before closing (the Closing event also captures, but don't rely on field state).
-                CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
+                WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
                 _playlistWindow.Close();
             }
             catch { /* ignore */ }
@@ -3280,11 +3189,11 @@ public partial class MainWindow : Window
 
             // Always restore playlist window bounds from the latest saved settings.
             // (_startupSettings is a startup snapshot and won't reflect changes made during this run.)
-            var latestSettings = SettingsStore.Load();
+            var latestSettings = _settingsService.LoadLatest();
             AppLog.Info($"Playlist bounds (open) settings: L={latestSettings.PlaylistWindowLeft} T={latestSettings.PlaylistWindowTop} W={latestSettings.PlaylistWindowWidth} H={latestSettings.PlaylistWindowHeight} State={latestSettings.PlaylistWindowState}");
             try
             {
-                var path = SettingsStore.GetSettingsPath();
+                var path = _settingsService.GetSettingsPath();
                 if (File.Exists(path))
                 {
                     var raw = SafeJson.ReadUtf8TextForJson(path, SafeJson.MaxAppSettingsFileBytes);
@@ -3325,14 +3234,14 @@ public partial class MainWindow : Window
                         var ext = (Path.GetExtension(path) ?? "").Trim().ToLowerInvariant();
                         if (ext is ".m3u" or ".m3u8")
                         {
-                            var origin = _playlistOriginByVideoId.ToDictionary(
+                            var origin = _playlistCore.OriginByVideoId.ToDictionary(
                                 k => k.Key,
                                 v => new LyllyPlayer.Models.SavedPlaylistOrigin(v.Value.Label, v.Value.Source),
                                 StringComparer.OrdinalIgnoreCase);
                             LyllyPlayer.Utils.M3uPlaylistFile.Save(
                                 path,
                                 name,
-                                _originalEntries,
+                                _playlistCore.Entries,
                                 new LyllyPlayer.Utils.M3uPlaylistFile.ExportOptions(
                                     IncludeYoutube: _exportM3uIncludeYoutube,
                                     PreferRelativePaths: _exportM3uPreferRelativePaths,
@@ -3349,8 +3258,8 @@ public partial class MainWindow : Window
                                 name,
                                 srcType,
                                 src,
-                                _originalEntries,
-                                originInfoByVideoId: _playlistOriginByVideoId.ToDictionary(
+                                _playlistCore.Entries,
+                                originInfoByVideoId: _playlistCore.OriginByVideoId.ToDictionary(
                                     k => k.Key,
                                     v => new LyllyPlayer.Models.SavedPlaylistOrigin(v.Value.Label, v.Value.Source),
                                     StringComparer.OrdinalIgnoreCase));
@@ -3486,8 +3395,8 @@ public partial class MainWindow : Window
                             {
                                 _manualQueuedPlayInstanceId = qid;
                                 // _currentEntries = BuildEffectivePlayOrder(inst.Entry, _shuffleEnabled).ToList();
-                                playIdx = _originalEntries.FindIndex(e => e.VideoId.Equals(inst.Entry.VideoId));
-                                _engine.SetQueue(_originalEntries, startIndex: playIdx, raiseNowPlayingChanged: true);
+                                playIdx = _playlistCore.Entries.FindIndex(e => e.VideoId.Equals(inst.Entry.VideoId));
+                                _engine.SetQueue(_playlistCore.Entries, startIndex: playIdx, raiseNowPlayingChanged: true);
                             }
                         }
                         catch { /* ignore */ }
@@ -3496,7 +3405,7 @@ public partial class MainWindow : Window
                     {
                         // Manual play from base playlist: rebuild effective order around this new "current"
                         // so the next track becomes the first queued item (not the next shuffled base item).
-                        var selectedEntry = _originalEntries.FirstOrDefault(e =>
+                        var selectedEntry = _playlistCore.Entries.FirstOrDefault(e =>
                             string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
                         if (selectedEntry is null)
                         {
@@ -3506,11 +3415,11 @@ public partial class MainWindow : Window
                         {
                             _manualQueuedPlayInstanceId = null;
                             //_currentEntries = BuildEffectivePlayOrder(selectedEntry, _shuffleEnabled).ToList();
-                            playIdx = _originalEntries.FindIndex(e => e.VideoId.Equals(selectedEntry.VideoId));
+                            playIdx = _playlistCore.Entries.FindIndex(e => e.VideoId.Equals(selectedEntry.VideoId));
                             if (playIdx < 0)
-                                playIdx = FindIndexByVideoId(_originalEntries, selectedEntry.VideoId);
+                                playIdx = FindIndexByVideoId(_playlistCore.Entries, selectedEntry.VideoId);
                             if (playIdx >= 0)
-                                _engine.SetQueue(_originalEntries, startIndex: playIdx, raiseNowPlayingChanged: true);
+                                _engine.SetQueue(_playlistCore.Entries, startIndex: playIdx, raiseNowPlayingChanged: true);
                         }
                     }
                     if (playIdx < 0)
@@ -3566,7 +3475,7 @@ public partial class MainWindow : Window
                 _ = Enum.TryParse<PlaylistSortDirection>(sortDirRaw, ignoreCase: true, out var sd);
                 var spec = new PlaylistSortSpec(sm, sd);
                 _playlistWindow.SetSortSpec(spec);
-                if (spec.Mode != PlaylistSortMode.None && _originalEntries.Count > 1)
+                if (spec.Mode != PlaylistSortMode.None && _playlistCore.Entries.Count > 1)
                     _ = ApplyPlaylistSortAsync(spec, CancellationToken.None);
             }
             catch { /* ignore */ }
@@ -3584,7 +3493,8 @@ public partial class MainWindow : Window
                 if (_isShuttingDown)
                     return;
                 if (_playlistWindow is not null)
-                    CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
+                    WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
+                try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
                 // Persist bounds/state when the playlist window is closed.
                 SaveSettingsSnapshot();
             };
@@ -3592,7 +3502,8 @@ public partial class MainWindow : Window
             {
                 if (_syncingWindowMove || _restoringAuxFromMinimize) return;
                 if (_playlistWindow is not null)
-                    CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
+                    WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
+                try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
                 // Legacy "dock to main" snapping fights the new snap service.
                 // Let WM_MOVING-based snapping control interactive positioning.
                 RequestPersistSnapshot();
@@ -3601,7 +3512,8 @@ public partial class MainWindow : Window
             {
                 if (_syncingWindowMove || _restoringAuxFromMinimize) return;
                 if (_playlistWindow is not null)
-                    CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
+                    WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
+                try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
                 // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
                 RequestPersistSnapshot();
             };
@@ -3612,7 +3524,7 @@ public partial class MainWindow : Window
                 // If user closes Playlist, clear the compact "pin open" override.
                 _compactUserOpenedPlaylistWindow = false;
             };
-            try { WindowSnapService.Register(_playlistWindow); } catch { /* ignore */ }
+            try { WindowCoordinator.RegisterSnapping(_playlistWindow); } catch { /* ignore */ }
             _playlistWindow.SetItemsSource(_queueItems, _playlistItems);
             UpdateRefreshEnabled();
             try { _playlistWindow.ApplyPersistedPlaylistFilter(latestSettings.PlaylistWindowFilter); } catch { /* ignore */ }
@@ -3625,6 +3537,10 @@ public partial class MainWindow : Window
             AppLog.Info($"Playlist bounds (open) pre-show: L={_playlistWindow.Left} T={_playlistWindow.Top} W={_playlistWindow.Width} H={_playlistWindow.Height} State={_playlistWindow.WindowState}");
             try { _playlistWindow.BeginSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
             _playlistWindow.Show();
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+            }), DispatcherPriority.Background);
             try
             {
                 var current = _engine.GetCurrent();
@@ -3635,14 +3551,6 @@ public partial class MainWindow : Window
             }
             catch { /* ignore */ }
             ApplyAlwaysOnTopFromSettings();
-            // Legacy "dock to main" snap restore disabled: WM_MOVING snap service is the single source of truth.
-            try
-            {
-                _playlistSnapped = false;
-                _playlistSnapEdge = PlaylistSnapEdge.None;
-            }
-            catch { /* ignore */ }
-
             // NOTE: We intentionally avoid delayed re-application of bounds here.
             // It caused snapping to break by moving the window back to its persisted position.
         }
@@ -3709,32 +3617,24 @@ public partial class MainWindow : Window
             var curId = cur?.VideoId;
             var oldIndex = _engine.CurrentIndex;
 
-            var removed = _originalEntries.RemoveAll(e => invalidIds.Contains(e.VideoId));
-            if (removed <= 0)
+            var removedIds = _playlistCore.RemoveInvalidEntries(invalidIds);
+            if (removedIds.Count <= 0)
                 return Task.FromResult(0);
-
-            // Clean per-item origins for removed items.
-            try
-            {
-                foreach (var id in invalidIds)
-                    _playlistOriginByVideoId.Remove(id);
-            }
-            catch { /* ignore */ }
 
             // Preserve current track if it still exists; otherwise pick the nearest surviving index.
             var newIndex = -1;
             if (!string.IsNullOrWhiteSpace(curId))
-                newIndex = _originalEntries.FindIndex(e => string.Equals(e.VideoId, curId, StringComparison.OrdinalIgnoreCase));
+                newIndex = _playlistCore.Entries.FindIndex(e => string.Equals(e.VideoId, curId, StringComparison.OrdinalIgnoreCase));
             if (newIndex < 0)
-                newIndex = _originalEntries.Count == 0 ? -1 : Math.Clamp(oldIndex, 0, _originalEntries.Count - 1);
+                newIndex = _playlistCore.Entries.Count == 0 ? -1 : Math.Clamp(oldIndex, 0, _playlistCore.Entries.Count - 1);
 
-            _engine.SetQueue(_originalEntries, startIndex: newIndex, raiseNowPlayingChanged: true);
-            SetQueueList(_originalEntries, selectedIndex: -1);
+            _engine.SetQueue(_playlistCore.Entries, startIndex: newIndex, raiseNowPlayingChanged: true);
+            SetQueueList(_playlistCore.Entries, selectedIndex: -1);
             UpdatePlaylistTitleDisplayForNowPlaying();
             UpdateRefreshEnabled();
             RequestPersistSnapshot();
 
-            return Task.FromResult(removed);
+            return Task.FromResult(removedIds.Count);
         }
         catch
         {
@@ -3776,7 +3676,7 @@ public partial class MainWindow : Window
             if (_lyricsWindow is not null)
                 return;
 
-            var latestSettings = SettingsStore.Load();
+            var latestSettings = _settingsService.LoadLatest();
 
             // Fast path: if we have cached lyrics for the current track, load them before showing the window
             // so the initial render isn't blank while other startup work is happening.
@@ -3784,11 +3684,11 @@ public partial class MainWindow : Window
 
             _lyricsWindow = new LyricsWindow(
                 lyricsEnabled: () => _lyricsEnabled,
-                hasLyrics: () => _lyricsManager.HasLyrics,
-                lyricsTitle: () => _lyricsManager.ResolvedTitleDisplay,
-                lyricsLines: () => _lyricsManager.HasLyrics ? _lyricsManager.GetLineTexts() : Array.Empty<string>(),
-                isPlainLyrics: () => _lyricsManager.IsPlainLyrics,
-                getCurrentLineIndex: () => _lyricsManager.GetCurrentLineIndex(_engine.CurrentPositionSeconds)
+                hasLyrics: () => _lyricsService.Manager.HasLyrics,
+                lyricsTitle: () => _lyricsService.Manager.ResolvedTitleDisplay,
+                lyricsLines: () => _lyricsService.Manager.HasLyrics ? _lyricsService.Manager.GetLineTexts() : Array.Empty<string>(),
+                isPlainLyrics: () => _lyricsService.Manager.IsPlainLyrics,
+                getCurrentLineIndex: () => _lyricsService.Manager.GetCurrentLineIndex(_engine.CurrentPositionSeconds)
             )
             {
                 Owner = null,
@@ -3800,14 +3700,16 @@ public partial class MainWindow : Window
                 if (_isShuttingDown)
                     return;
                 if (_lyricsWindow is not null)
-                    CaptureWindowBounds(_lyricsWindow, out _lastLyricsBounds, out _lastLyricsWindowState);
+                    WindowCoordinator.CaptureWindowBounds(_lyricsWindow, out _lastLyricsBounds, out _lastLyricsWindowState);
+                try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
                 SaveSettingsSnapshot();
             };
             _lyricsWindow.LocationChanged += (_, _) =>
             {
                 if (_syncingWindowMove || _restoringAuxFromMinimize) return;
                 if (_lyricsWindow is not null)
-                    CaptureWindowBounds(_lyricsWindow, out var lastLyricsBounds, out var lastLyricsState);
+                    WindowCoordinator.CaptureWindowBounds(_lyricsWindow, out var lastLyricsBounds, out var lastLyricsState);
+                try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
                 // Legacy "dock to main" snapping fights the new snap service.
                 RequestPersistSnapshot();
             };
@@ -3815,7 +3717,8 @@ public partial class MainWindow : Window
             {
                 if (_syncingWindowMove || _restoringAuxFromMinimize) return;
                 if (_lyricsWindow is not null)
-                    CaptureWindowBounds(_lyricsWindow, out var lastLyricsBounds, out var lastLyricsState);
+                    WindowCoordinator.CaptureWindowBounds(_lyricsWindow, out var lastLyricsBounds, out var lastLyricsState);
+                try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
                 // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
                 RequestPersistSnapshot();
             };
@@ -3826,13 +3729,17 @@ public partial class MainWindow : Window
                 // Force a refresh on close (even when paused) so the title bar switches immediately.
                 try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
             };
-            try { WindowSnapService.Register(_lyricsWindow); } catch { /* ignore */ }
+            try { WindowCoordinator.RegisterSnapping(_lyricsWindow); } catch { /* ignore */ }
 
             ApplyLyricsWindowSettings(latestSettings, _lyricsWindow);
             _lyricsWindow.MinWidth = 400.0 * UiScale;
             _lyricsWindow.MinHeight = 300.0 * UiScale;
 
             _lyricsWindow.Show();
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+            }), DispatcherPriority.Background);
             // Ultra-compact title bar shows lyric line only when the lyrics window is closed.
             // Force a refresh on open so the title switches immediately (even if the lyric line hasn't changed yet).
             try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
@@ -3846,13 +3753,6 @@ public partial class MainWindow : Window
             }), DispatcherPriority.Background);
 
             ApplyAlwaysOnTopFromSettings();
-            // Legacy "dock to main" snap restore disabled: WM_MOVING snap service is the single source of truth.
-            try
-            {
-                _lyricsSnapped = false;
-                _lyricsSnapEdge = LyricsSnapEdge.None;
-            }
-            catch { /* ignore */ }
         }
         catch (Exception ex)
         {
@@ -3883,14 +3783,14 @@ public partial class MainWindow : Window
                 try { _playlistWindow.EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
                 return;
             }
-            if (_originalEntries.Count == 0)
+            if (_playlistCore.Entries.Count == 0)
             {
                 try { _playlistWindow.EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
                 return;
             }
 
-            var idx = _originalEntries.FindIndex(e => string.Equals(e.VideoId, cur.VideoId, StringComparison.OrdinalIgnoreCase));
-            if (idx < 0 || idx >= _originalEntries.Count)
+            var idx = _playlistCore.Entries.FindIndex(e => string.Equals(e.VideoId, cur.VideoId, StringComparison.OrdinalIgnoreCase));
+            if (idx < 0 || idx >= _playlistCore.Entries.Count)
             {
                 try { _playlistWindow.EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
                 return;
@@ -4230,16 +4130,16 @@ public partial class MainWindow : Window
         UpdateRefreshEnabled();
 
         foreach (var e in appended)
-            _originalEntries.Add(e);
+            _playlistCore.Entries.Add(e);
 
         // Per-item origins for appended entries.
         foreach (var e in appended)
-            _playlistOriginByVideoId[e.VideoId] = new PlaylistOriginInfo(originLabel, originSource);
+            _playlistCore.OriginByVideoId[e.VideoId] = new PlaylistOriginInfo(originLabel, originSource);
 
         // Rebuild play order around the current track; do not change playback.
         // RebuildEffectivePlayOrderPreserveCurrent(raiseNowPlayingChanged: false);
-        _engine.SetQueue(_originalEntries, startIndex: _engine.CurrentIndex); // , raiseNowPlayingChanged: false);
-        SetQueueList(_originalEntries, selectedIndex: -1);
+        _engine.SetQueue(_playlistCore.Entries, startIndex: _engine.CurrentIndex); // , raiseNowPlayingChanged: false);
+        SetQueueList(_playlistCore.Entries, selectedIndex: -1);
         UpdatePlaylistTitleDisplayForNowPlaying();
         RequestPersistSnapshot();
     }
@@ -4247,7 +4147,7 @@ public partial class MainWindow : Window
     private List<PlaylistEntry> RemoveLocalDuplicatesByFullPath(List<PlaylistEntry> entries)
     {
         var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var e in _originalEntries.ToArray())
+        foreach (var e in _playlistCore.Entries.ToArray())
         {
             if (LocalPlaylistLoader.TryGetLocalPath(e.WebpageUrl, out var p))
                 existing.Add(NormalizeLocalPathKey(p));
@@ -4308,7 +4208,7 @@ public partial class MainWindow : Window
         else
         {
             _playlistIsCompound = true;
-            merged = _originalEntries.ToList();
+            merged = _playlistCore.Entries.ToList();
             var beforeCount = merged.Count;
             var appendLabel = string.IsNullOrWhiteSpace(plName) ? src : plName;
             if (dedupe)
@@ -4325,7 +4225,7 @@ public partial class MainWindow : Window
             try
             {
                 foreach (var e in imported)
-                    _playlistOriginByVideoId[e.VideoId] = new PlaylistOriginInfo(appendLabel, src);
+                    _playlistCore.OriginByVideoId[e.VideoId] = new PlaylistOriginInfo(appendLabel, src);
             }
             catch { /* ignore */ }
             try
@@ -4338,13 +4238,13 @@ public partial class MainWindow : Window
         }
 
         // Apply list without stopping playback; preserve current track if possible.
-        _originalEntries = merged;
+        _playlistCore.ReplaceEntries(merged);
         //_currentEntries = BuildEffectivePlayOrder(_engine.GetCurrent(), _shuffleEnabled).ToList();
-        var startIndex = FindIndexByVideoId(_originalEntries, curId);
-        _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : (startIndex >= 0 ? startIndex : 0), raiseNowPlayingChanged: false);
+        var startIndex = FindIndexByVideoId(_playlistCore.Entries, curId);
+        _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : (startIndex >= 0 ? startIndex : 0), raiseNowPlayingChanged: false);
 
         var displayIndex = GetOriginalIndexByVideoId(curId) ?? 0;
-        SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
+        SetQueueList(_playlistCore.Entries, selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : displayIndex);
         UpdateRefreshEnabled();
         MarkLastPlaylistSnapshotDirty();
         RequestPersistSnapshot();
@@ -4356,7 +4256,7 @@ public partial class MainWindow : Window
         cancellationToken.ThrowIfCancellationRequested();
 
         var mode = spec.Mode;
-        if (mode == PlaylistSortMode.None || _originalEntries.Count <= 1)
+        if (mode == PlaylistSortMode.None || _playlistCore.Entries.Count <= 1)
             return Task.CompletedTask;
 
         var isYoutube = IsYoutubeLikeSource(_lastPlaylistSourceType);
@@ -4402,7 +4302,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                if (_playlistOriginByVideoId.TryGetValue(e.VideoId, out var origin))
+                if (_playlistCore.OriginByVideoId.TryGetValue(e.VideoId, out var origin))
                     return (origin.Label ?? "").Trim();
             }
             catch { /* ignore */ }
@@ -4439,52 +4339,52 @@ public partial class MainWindow : Window
         {
             ordered = mode switch
             {
-                PlaylistSortMode.NameOrTitle => _originalEntries
+                PlaylistSortMode.NameOrTitle => _playlistCore.Entries
                     .OrderByDescending(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
-                PlaylistSortMode.ChannelOrPath => _originalEntries
+                PlaylistSortMode.ChannelOrPath => _playlistCore.Entries
                     .OrderByDescending(SourceKey, StringComparer.OrdinalIgnoreCase)
                     .ThenByDescending(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
-                PlaylistSortMode.Duration => _originalEntries
+                PlaylistSortMode.Duration => _playlistCore.Entries
                     // Keep unknown durations last even in Desc.
                     .OrderBy(static e => e.DurationSeconds is null ? 1 : 0)
                     .ThenByDescending(static e => e.DurationSeconds ?? 0)
                     .ThenByDescending(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
-                _ => _originalEntries.OrderByDescending(NameKey, StringComparer.OrdinalIgnoreCase),
+                _ => _playlistCore.Entries.OrderByDescending(NameKey, StringComparer.OrdinalIgnoreCase),
             };
         }
         else
         {
             ordered = mode switch
             {
-                PlaylistSortMode.NameOrTitle => _originalEntries
+                PlaylistSortMode.NameOrTitle => _playlistCore.Entries
                     .OrderBy(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
-                PlaylistSortMode.ChannelOrPath => _originalEntries
+                PlaylistSortMode.ChannelOrPath => _playlistCore.Entries
                     .OrderBy(SourceKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
-                PlaylistSortMode.Duration => _originalEntries
+                PlaylistSortMode.Duration => _playlistCore.Entries
                     // Keep unknown durations last.
                     .OrderBy(static e => e.DurationSeconds is null ? 1 : 0)
                     .ThenBy(static e => e.DurationSeconds ?? 0)
                     .ThenBy(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
-                _ => _originalEntries.OrderBy(NameKey, StringComparer.OrdinalIgnoreCase),
+                _ => _playlistCore.Entries.OrderBy(NameKey, StringComparer.OrdinalIgnoreCase),
             };
         }
 
         var sorted = ordered.ToList();
 
-        _originalEntries = sorted;
+        _playlistCore.ReplaceEntries(sorted);
         //_currentEntries = BuildEffectivePlayOrder(_engine.GetCurrent(), _shuffleEnabled).ToList();
-        var startIndex = FindIndexByVideoId(_originalEntries, curId);
-        _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : (startIndex >= 0 ? startIndex : 0), raiseNowPlayingChanged: false);
+        var startIndex = FindIndexByVideoId(_playlistCore.Entries, curId);
+        _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : (startIndex >= 0 ? startIndex : 0), raiseNowPlayingChanged: false);
 
         var displayIndex = GetOriginalIndexByVideoId(curId) ?? 0;
-        SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
+        SetQueueList(_playlistCore.Entries, selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : displayIndex);
         MarkLastPlaylistSnapshotDirty();
         RequestPersistSnapshot();
         return Task.CompletedTask;
@@ -4499,7 +4399,7 @@ public partial class MainWindow : Window
                 if (_mainWindowCompact && _compactModeHidesAuxWindows)
                     _optionsWindowWasOpenBeforeCompact = false;
 
-                CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
+                WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
                 _optionsWindow.Close();
             }
             catch { /* ignore */ }
@@ -4517,11 +4417,11 @@ public partial class MainWindow : Window
         if (_optionsWindow is not null)
             return;
 
-        var latestSettings = SettingsStore.Load();
+        var latestSettings = _settingsService.LoadLatest();
         AppLog.Info($"Options bounds (open) settings: L={latestSettings.OptionsWindowLeft} T={latestSettings.OptionsWindowTop} W={latestSettings.OptionsWindowWidth} H={latestSettings.OptionsWindowHeight} State={latestSettings.OptionsWindowState}");
         try
         {
-            var path = SettingsStore.GetSettingsPath();
+            var path = _settingsService.GetSettingsPath();
             if (File.Exists(path))
             {
                 var raw = SafeJson.ReadUtf8TextForJson(path, SafeJson.MaxAppSettingsFileBytes);
@@ -4846,14 +4746,16 @@ public partial class MainWindow : Window
             if (_isShuttingDown)
                 return;
             if (_optionsWindow is not null)
-                CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
+                WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
+            try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             SaveSettingsSnapshot();
         };
         _optionsWindow.LocationChanged += (_, _) =>
         {
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
             if (_optionsWindow is not null)
-                CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
+                WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
+            try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             // Legacy "dock to main" snapping fights the new snap service.
             RequestPersistSnapshot();
         };
@@ -4861,25 +4763,22 @@ public partial class MainWindow : Window
         {
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
             if (_optionsWindow is not null)
-                CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
+                WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
+            try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
             RequestPersistSnapshot();
         };
         _optionsWindow.Closed += (_, _) => _optionsWindow = null;
-        try { WindowSnapService.Register(_optionsWindow); } catch { /* ignore */ }
+        try { WindowCoordinator.RegisterSnapping(_optionsWindow); } catch { /* ignore */ }
         ApplyOptionsWindowScaledChromeSize(_optionsWindow);
         ApplyOptionsWindowSettings(latestSettings, _optionsWindow);
         try { _optionsWindow.SetLogPopoutOpen(_logWindow is not null); } catch { /* ignore */ }
         _optionsWindow.Show();
-        ApplyAlwaysOnTopFromSettings();
-        // Legacy "dock to main" snap restore disabled: WM_MOVING snap service is the single source of truth.
-        try
+        Dispatcher.BeginInvoke(new Action(() =>
         {
-            _optionsSnapped = false;
-            _optionsSnapEdge = OptionsSnapEdge.None;
-        }
-        catch { /* ignore */ }
-
+            try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+        }), DispatcherPriority.Background);
+        ApplyAlwaysOnTopFromSettings();
         // NOTE: avoid delayed bounds re-apply; it races with snapping.
     }
 
@@ -5157,6 +5056,44 @@ public partial class MainWindow : Window
         catch { /* ignore */ }
 
         // Legacy "dock to main" snapping disabled (new snap service is interactive-only).
+
+        // Persisted snap relations (aux snapped to Main) still require syncing on Main move/resize,
+        // especially when SizeToContent changes height (Compact/Ultra).
+        try
+        {
+            if (_playlistSnapped || _optionsSnapped || _lyricsSnapped)
+            {
+                try
+                {
+                    if (WindowSnapService.AnyWindowDragging)
+                        return;
+                }
+                catch { /* ignore */ }
+
+                _auxSnapSyncDebounceTimer?.Stop();
+                _auxSnapSyncDebounceTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+                {
+                    Interval = TimeSpan.FromMilliseconds(40),
+                };
+                _auxSnapSyncDebounceTimer.Tick += (_, _) =>
+                {
+                    try { _auxSnapSyncDebounceTimer?.Stop(); } catch { /* ignore */ }
+                    try
+                    {
+                        if (WindowSnapService.AnyWindowDragging)
+                            return;
+                    }
+                    catch { /* ignore */ }
+
+                    try { if (_playlistSnapped) SyncPlaylistWindowToMain(); } catch { /* ignore */ }
+                    try { if (_optionsSnapped) SyncOptionsWindowToMain(); } catch { /* ignore */ }
+                    try { if (_lyricsSnapped) SyncLyricsWindowToMain(); } catch { /* ignore */ }
+                    try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+                };
+                _auxSnapSyncDebounceTimer.Start();
+            }
+        }
+        catch { /* ignore */ }
 
         // If a compact-mode toggle is in-flight, apply the UserDefined crop after the resize + aux-window sync.
         if (_userDefinedMainCropRefreshAfterSizePending && ShouldApplyUserDefinedBackgroundForMain())
@@ -5832,91 +5769,6 @@ public partial class MainWindow : Window
         catch { /* ignore */ }
     }
 
-    private void TryLoadLyricsFromCacheForCurrentBestEffort()
-    {
-        try
-        {
-            if (!_lyricsEnabled)
-                return;
-
-            var entry = _engine.GetCurrent();
-            if (entry is null || string.IsNullOrWhiteSpace(entry.VideoId))
-                return;
-            TryLoadLyricsFromCacheForEntryBestEffort(entry);
-        }
-        catch { /* ignore */ }
-    }
-
-    private void TryLoadLyricsFromCacheForEntryBestEffort(PlaylistEntry entry)
-    {
-        try
-        {
-            if (!_lyricsEnabled)
-                return;
-            if (entry is null || string.IsNullOrWhiteSpace(entry.VideoId))
-                return;
-
-            // Don't stomp already loaded lyrics for this track.
-            if (_lyricsManager.HasLyrics && string.Equals(_lyricsResolvedVideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
-                return;
-
-            var isLocal = entry.VideoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase);
-            if (isLocal && !_lyricsLocalFilesEnabled)
-                return;
-
-            var cacheKey = isLocal ? $"lyr_{entry.VideoId}" : $"yt_{entry.VideoId}";
-            if (LyricsCache.IsMiss(cacheKey))
-                return;
-
-            var cached = LyricsCache.Get(cacheKey);
-            if (string.IsNullOrWhiteSpace(cached))
-                return;
-
-            var metadata = LrcParser.TryExtractMetadata(cached);
-            var cacheArtist = metadata?.Artist ?? entry.Channel;
-            var cacheTitle = metadata?.Title ?? entry.Title;
-            _lyricsManager.Parse(cached, artist: cacheArtist, title: cacheTitle);
-            _lyricsResolvedVideoId = entry.VideoId;
-            try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
-        }
-        catch { /* ignore */ }
-    }
-
-    private void TryHydrateLyricsFromCacheForStartupVideoIdBestEffort()
-    {
-        try
-        {
-            if (!_lyricsEnabled)
-                return;
-
-            var vid = _startupSettings.CurrentVideoId;
-            if (string.IsNullOrWhiteSpace(vid))
-                return;
-
-            // If we already hydrated/resolved this id, nothing to do.
-            if (_lyricsManager.HasLyrics && string.Equals(_lyricsResolvedVideoId, vid, StringComparison.OrdinalIgnoreCase))
-                return;
-
-            var isLocal = vid.StartsWith("local:", StringComparison.OrdinalIgnoreCase);
-            if (isLocal && !_lyricsLocalFilesEnabled)
-                return;
-
-            var cacheKey = isLocal ? $"lyr_{vid}" : $"yt_{vid}";
-            if (LyricsCache.IsMiss(cacheKey))
-                return;
-
-            var cached = LyricsCache.Get(cacheKey);
-            if (string.IsNullOrWhiteSpace(cached))
-                return;
-
-            // We might not have metadata yet; parse with whatever we can.
-            var metadata = LrcParser.TryExtractMetadata(cached);
-            _lyricsManager.Parse(cached, artist: metadata?.Artist, title: metadata?.Title);
-            _lyricsResolvedVideoId = vid;
-        }
-        catch { /* ignore */ }
-    }
-
     private void DetachMainWindowShellStyleHook()
     {
         if (!_shellStyleHookAttached || _shellStyleHookSource is null)
@@ -6012,7 +5864,7 @@ public partial class MainWindow : Window
         {
             if (_playlistWindow is not null && _playlistWindow.IsVisible && !_alwaysOnTopPlaylistWindow)
             {
-                CaptureWindowBounds(_playlistWindow, out var b, out var s);
+                WindowCoordinator.CaptureWindowBounds(_playlistWindow, out var b, out var s);
                 _playlistBoundsBeforeTopTaskbarMinimize = b;
                 _playlistMinimizedByTopTaskbar = true;
                 _playlistWindow.WindowState = WindowState.Minimized;
@@ -6024,7 +5876,7 @@ public partial class MainWindow : Window
         {
             if (_optionsWindow is not null && _optionsWindow.IsVisible && !_alwaysOnTopOptionsWindow)
             {
-                CaptureWindowBounds(_optionsWindow, out var b, out var s);
+                WindowCoordinator.CaptureWindowBounds(_optionsWindow, out var b, out var s);
                 _optionsBoundsBeforeTopTaskbarMinimize = b;
                 _optionsMinimizedByTopTaskbar = true;
                 _optionsWindow.WindowState = WindowState.Minimized;
@@ -6057,6 +5909,157 @@ public partial class MainWindow : Window
         var width = w.ActualWidth > 0 ? w.ActualWidth : w.Width;
         var height = w.ActualHeight > 0 ? w.ActualHeight : w.Height;
         return new Rect(w.Left, w.Top, width, height);
+    }
+
+    private static double Overlap1D(double a0, double a1, double b0, double b1)
+        => Math.Max(0, Math.Min(a1, b1) - Math.Max(a0, b0));
+
+    private void UpdatePlaylistSnapStateFromCurrentPositionsBestEffort()
+    {
+        try
+        {
+            if (_playlistWindow is null)
+                return;
+
+            var main = GetOuterBounds(this);
+            var aux = GetOuterBounds(_playlistWindow);
+            var mainRight = main.Left + main.Width;
+            var mainBottom = main.Top + main.Height;
+            var auxRight = aux.Left + aux.Width;
+            var auxBottom = aux.Top + aux.Height;
+
+            var vOverlap = Overlap1D(main.Top, mainBottom, aux.Top, auxBottom);
+            var hOverlap = Overlap1D(main.Left, mainRight, aux.Left, auxRight);
+
+            if (Math.Abs(aux.Left - (mainRight + SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
+            {
+                _playlistSnapped = true;
+                _playlistSnapEdge = PlaylistSnapEdge.Right;
+                _playlistDockYOffset = aux.Top - main.Top;
+                return;
+            }
+            if (Math.Abs(auxRight - (main.Left - SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
+            {
+                _playlistSnapped = true;
+                _playlistSnapEdge = PlaylistSnapEdge.Left;
+                _playlistDockYOffset = aux.Top - main.Top;
+                return;
+            }
+            if (Math.Abs(aux.Top - (mainBottom + SnapGapPx)) <= SnapPersistAdjacencyPx && hOverlap >= SnapPersistMinOverlapPx)
+            {
+                _playlistSnapped = true;
+                _playlistSnapEdge = PlaylistSnapEdge.Bottom;
+                _playlistDockXOffset = aux.Left - main.Left;
+                return;
+            }
+            if (Math.Abs(auxBottom - (main.Top - SnapGapPx)) <= SnapPersistAdjacencyPx && hOverlap >= SnapPersistMinOverlapPx)
+            {
+                _playlistSnapped = true;
+                _playlistSnapEdge = PlaylistSnapEdge.Top;
+                _playlistDockXOffset = aux.Left - main.Left;
+                return;
+            }
+
+            _playlistSnapped = false;
+            _playlistSnapEdge = PlaylistSnapEdge.None;
+        }
+        catch { /* ignore */ }
+    }
+
+    private void UpdateLyricsSnapStateFromCurrentPositionsBestEffort()
+    {
+        try
+        {
+            if (_lyricsWindow is null)
+                return;
+
+            var main = GetOuterBounds(this);
+            var aux = GetOuterBounds(_lyricsWindow);
+            var mainRight = main.Left + main.Width;
+            var mainBottom = main.Top + main.Height;
+            var auxRight = aux.Left + aux.Width;
+            var auxBottom = aux.Top + aux.Height;
+
+            var vOverlap = Overlap1D(main.Top, mainBottom, aux.Top, auxBottom);
+            var hOverlap = Overlap1D(main.Left, mainRight, aux.Left, auxRight);
+
+            if (Math.Abs(aux.Left - (mainRight + SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
+            {
+                _lyricsSnapped = true;
+                _lyricsSnapEdge = LyricsSnapEdge.Right;
+                _lyricsDockYOffset = aux.Top - main.Top;
+                return;
+            }
+            if (Math.Abs(auxRight - (main.Left - SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
+            {
+                _lyricsSnapped = true;
+                _lyricsSnapEdge = LyricsSnapEdge.Left;
+                _lyricsDockYOffset = aux.Top - main.Top;
+                return;
+            }
+            if (Math.Abs(aux.Top - (mainBottom + SnapGapPx)) <= SnapPersistAdjacencyPx && hOverlap >= SnapPersistMinOverlapPx)
+            {
+                _lyricsSnapped = true;
+                _lyricsSnapEdge = LyricsSnapEdge.Bottom;
+                _lyricsDockXOffset = aux.Left - main.Left;
+                return;
+            }
+            if (Math.Abs(auxBottom - (main.Top - SnapGapPx)) <= SnapPersistAdjacencyPx && hOverlap >= SnapPersistMinOverlapPx)
+            {
+                _lyricsSnapped = true;
+                _lyricsSnapEdge = LyricsSnapEdge.Top;
+                _lyricsDockXOffset = aux.Left - main.Left;
+                return;
+            }
+
+            _lyricsSnapped = false;
+            _lyricsSnapEdge = LyricsSnapEdge.None;
+        }
+        catch { /* ignore */ }
+    }
+
+    private void UpdateOptionsSnapStateFromCurrentPositionsBestEffort()
+    {
+        try
+        {
+            if (_optionsWindow is null)
+                return;
+
+            var main = GetOuterBounds(this);
+            var aux = GetOuterBounds(_optionsWindow);
+            var mainRight = main.Left + main.Width;
+            var mainBottom = main.Top + main.Height;
+            var auxRight = aux.Left + aux.Width;
+
+            var vOverlap = Overlap1D(main.Top, mainBottom, aux.Top, aux.Top + aux.Height);
+            var hOverlap = Overlap1D(main.Left, mainRight, aux.Left, auxRight);
+
+            if (Math.Abs(aux.Left - (mainRight + SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
+            {
+                _optionsSnapped = true;
+                _optionsSnapEdge = OptionsSnapEdge.Right;
+                _optionsDockYOffset = aux.Top - main.Top;
+                return;
+            }
+            if (Math.Abs(auxRight - (main.Left - SnapGapPx)) <= SnapPersistAdjacencyPx && vOverlap >= SnapPersistMinOverlapPx)
+            {
+                _optionsSnapped = true;
+                _optionsSnapEdge = OptionsSnapEdge.Left;
+                _optionsDockYOffset = aux.Top - main.Top;
+                return;
+            }
+            if (Math.Abs(aux.Top - (mainBottom + SnapGapPx)) <= SnapPersistAdjacencyPx && hOverlap >= SnapPersistMinOverlapPx)
+            {
+                _optionsSnapped = true;
+                _optionsSnapEdge = OptionsSnapEdge.Bottom;
+                _optionsDockXOffset = aux.Left - main.Left;
+                return;
+            }
+
+            _optionsSnapped = false;
+            _optionsSnapEdge = OptionsSnapEdge.None;
+        }
+        catch { /* ignore */ }
     }
 
     private double SnapRound(double value)
@@ -6150,10 +6153,10 @@ public partial class MainWindow : Window
                 // state is seeded so the current track is reachable via Prev after the next shuffle advance.
                 if (_shuffleEnabled)
                 {
-                    if (_shuffleTapeVideoIds.Count == 0 || _shuffleTapeCursor < 0)
-                        RecordNowPlayingForShuffleTape(cur.VideoId);
+                    if (_playOrder.ShuffleTapeVideoIds.Count == 0 || _playOrder.ShuffleTapeCursor < 0)
+                        _playOrder.RecordNowPlayingForShuffleTape(cur.VideoId, _playlistCore.Entries.Count);
                 }
-                RecordRecentlyPlayedVideoId(cur.VideoId);
+                _playOrder.RecordRecentlyPlayedVideoId(cur.VideoId, _playlistCore.Entries.Count);
             }
             catch { /* ignore */ }
 
@@ -6260,9 +6263,9 @@ public partial class MainWindow : Window
                 _hasLoadedPlaylist &&
                 !string.IsNullOrWhiteSpace(_loadedPlaylistId) &&
                 string.Equals(_loadedPlaylistId, playlistId, StringComparison.OrdinalIgnoreCase) &&
-                _originalEntries.Count > 0)
+                _playlistCore.Entries.Count > 0)
             {
-                SetStatusMessage("INFO", $"Loaded {_originalEntries.Count} items (cached in memory).");
+                SetStatusMessage("INFO", $"Loaded {_playlistCore.Entries.Count} items (cached in memory).");
                 SyncNowPlayingFromEngine();
                 MarkLastPlaylistSnapshotDirty();
                 return;
@@ -6306,23 +6309,23 @@ public partial class MainWindow : Window
                 {
                     _loadedPlaylistId = playlistId;
                     SetPlaylistTitle(cached.PlaylistTitle);
-                    _originalEntries = cached.Entries.ToList();
+                    _playlistCore.ReplaceEntries(cached.Entries);
                     // Only apply saved play-order from startup settings on initial app startup.
                     var applyIds = !_hasLoadedPlaylist ? _startupSettings.PlayOrderVideoIds : null;
-                    // _currentEntries = ApplySavedOrderIfAny(_originalEntries, applyIds, shuffle: _shuffleEnabled).ToList();
+                    // _currentEntries = ApplySavedOrderIfAny(_playlistCore.Entries, applyIds, shuffle: _shuffleEnabled).ToList();
 
                     var cacheStartIndex = 0;
-                    var cacheDesiredId = isStartupAutoLoad ? _startupSettings.CurrentVideoId : (_originalEntries.Count > 0 ? _originalEntries[0].VideoId : null);
+                    var cacheDesiredId = isStartupAutoLoad ? _startupSettings.CurrentVideoId : (_playlistCore.Entries.Count > 0 ? _playlistCore.Entries[0].VideoId : null);
                     if (!string.IsNullOrWhiteSpace(cacheDesiredId))
                     {
-                        var idx = FindIndexByVideoId(_originalEntries, cacheDesiredId);
-                        if (idx >= 0 && idx < _originalEntries.Count)
+                        var idx = FindIndexByVideoId(_playlistCore.Entries, cacheDesiredId);
+                        if (idx >= 0 && idx < _playlistCore.Entries.Count)
                             cacheStartIndex = idx;
                     }
 
                     var cacheDisplayIndex = GetOriginalIndexByVideoId(cacheDesiredId) ?? 0;
-                    _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : cacheStartIndex, raiseNowPlayingChanged: true);
-                    SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : cacheDisplayIndex);
+                    _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : cacheStartIndex, raiseNowPlayingChanged: true);
+                    SetQueueList(_playlistCore.Entries, selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : cacheDisplayIndex);
                     _hasLoadedPlaylist = true;
                     _previousTrackHistory.Clear();
                     UpdateRefreshEnabled();
@@ -6363,29 +6366,29 @@ public partial class MainWindow : Window
             try { _playlistWindow?.SetSourceText(_playlistSourceText ?? ""); } catch { /* ignore */ }
             SetPlaylistTitle(resolved.PlaylistTitle);
             var entries = resolved.Entries;
-            _originalEntries = entries.ToList();
+            _playlistCore.ReplaceEntries(entries);
             // Only apply saved play-order from startup settings on initial app startup.
             var applyIds2 = !_hasLoadedPlaylist ? _startupSettings.PlayOrderVideoIds : null;
-            // _currentEntries = ApplySavedOrderIfAny(_originalEntries, applyIds2, shuffle: _shuffleEnabled).ToList();
+            // _currentEntries = ApplySavedOrderIfAny(_playlistCore.Entries, applyIds2, shuffle: _shuffleEnabled).ToList();
 
             var startIndex = 0;
             var desiredId = isStartupAutoLoad
                 ? _startupSettings.CurrentVideoId
-                : (_originalEntries.Count > 0 ? _originalEntries[0].VideoId : null);
+                : (_playlistCore.Entries.Count > 0 ? _playlistCore.Entries[0].VideoId : null);
             if (!string.IsNullOrWhiteSpace(desiredId))
             {
-                var idx = FindIndexByVideoId(_originalEntries, desiredId);
-                if (idx >= 0 && idx < _originalEntries.Count)
+                var idx = FindIndexByVideoId(_playlistCore.Entries, desiredId);
+                if (idx >= 0 && idx < _playlistCore.Entries.Count)
                     startIndex = idx;
             }
 
             SetStatusMessage("INFO", entries.Count == 0 ? "Playlist is empty." : $"Loaded {entries.Count} items.");
             SyncNowPlayingFromEngine();
 
-            _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
+            _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
             // Playlist window always shows original playlist order.
             var displayIndex = GetOriginalIndexByVideoId(desiredId) ?? 0;
-            SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
+            SetQueueList(_playlistCore.Entries, selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : displayIndex);
             _hasLoadedPlaylist = true;
             _previousTrackHistory.Clear();
             UpdateRefreshEnabled();
@@ -6461,7 +6464,7 @@ public partial class MainWindow : Window
             ClearQueue();
 
             var list = entries?.ToList() ?? new List<PlaylistEntry>();
-            _originalEntries = list;
+            _playlistCore.ReplaceEntries(list);
 
             // Populate shuffle buffer so the first "Next" click has tracks ready
             if (_shuffleEnabled)
@@ -6475,7 +6478,7 @@ public partial class MainWindow : Window
                 foreach (var id in qids)
                 {
                     if (string.IsNullOrWhiteSpace(id)) continue;
-                    var match = _originalEntries.FirstOrDefault(e => string.Equals(e.VideoId, id, StringComparison.OrdinalIgnoreCase));
+                    var match = _playlistCore.Entries.FirstOrDefault(e => string.Equals(e.VideoId, id, StringComparison.OrdinalIgnoreCase));
                     if (match is not null)
                         AddToQueue(match);
                 }
@@ -6483,23 +6486,23 @@ public partial class MainWindow : Window
 
             // Only apply saved play-order from startup settings on initial app startup.
             var applyIds3 = !_hasLoadedPlaylist ? _startupSettings.PlayOrderVideoIds : null;
-            // var baseOrder = ApplySavedOrderIfAny(_originalEntries, applyIds3, shuffle: _shuffleEnabled).ToList();
+            // var baseOrder = ApplySavedOrderIfAny(_playlistCore.Entries, applyIds3, shuffle: _shuffleEnabled).ToList();
             // _currentEntries = (_queuedNext.Count == 0 ? baseOrder : _queuedNext.Select(q => q.Entry).Concat(baseOrder)).ToList();
 
             var startIndex = 0;
             var desiredId = isStartupAutoLoad
                 ? _startupSettings.CurrentVideoId
-                : (_originalEntries.Count > 0 ? _originalEntries[0].VideoId : null);
+                : (_playlistCore.Entries.Count > 0 ? _playlistCore.Entries[0].VideoId : null);
             if (!string.IsNullOrWhiteSpace(desiredId))
             {
-                var idx = FindIndexByVideoId(_originalEntries, desiredId);
-                if (idx >= 0 && idx < _originalEntries.Count)
+                var idx = FindIndexByVideoId(_playlistCore.Entries, desiredId);
+                if (idx >= 0 && idx < _playlistCore.Entries.Count)
                     startIndex = idx;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
             SetPlaylistTitle(title);
-            _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: !deferNowPlayingChanged);
+            _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: !deferNowPlayingChanged);
             // Startup restore: Apply saved duration after SetQueue (Stop/SetQueue paths can clear engine duration).
             try
             {
@@ -6518,8 +6521,8 @@ public partial class MainWindow : Window
                     try
                     {
                         _ = SetQueueListAsync(
-                            _originalEntries,
-                            selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex,
+                            _playlistCore.Entries,
+                            selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : displayIndex,
                             forceFullRebuild: true,
                             cancellationToken: CancellationToken.None);
                     }
@@ -6529,8 +6532,8 @@ public partial class MainWindow : Window
             else
             {
                 await SetQueueListAsync(
-                    _originalEntries,
-                    selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex,
+                    _playlistCore.Entries,
+                    selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : displayIndex,
                     cancellationToken: cancellationToken);
             }
             _hasLoadedPlaylist = true;
@@ -6542,11 +6545,11 @@ public partial class MainWindow : Window
 
             if (!deferNowPlayingChanged)
             {
-                SetStatusMessage("INFO", _originalEntries.Count == 0 ? "Playlist is empty." : $"Loaded {_originalEntries.Count} items.");
+                SetStatusMessage("INFO", _playlistCore.Entries.Count == 0 ? "Playlist is empty." : $"Loaded {_playlistCore.Entries.Count} items.");
                 SyncNowPlayingFromEngine();
             }
             else
-                SetStatusMessage("INFO", _originalEntries.Count == 0 ? "Searching…" : $"Searching… ({_originalEntries.Count} found)");
+                SetStatusMessage("INFO", _playlistCore.Entries.Count == 0 ? "Searching…" : $"Searching… ({_playlistCore.Entries.Count} found)");
             MarkLastPlaylistSnapshotDirty();
 
             if (!deferNowPlayingChanged && !isStartupAutoLoad)
@@ -6673,7 +6676,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (_originalEntries is null || _originalEntries.Count == 0)
+            if (_playlistCore.Entries is null || _playlistCore.Entries.Count == 0)
                 return;
 
             var snap = CaptureLastPlaylistSnapshotForWrite();
@@ -6700,15 +6703,10 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (_originalEntries is null || _originalEntries.Count == 0)
-                return null;
-
-            return SavedPlaylistFile.FromEntries(
+            return _playlistCore.BuildSavedPlaylistSnapshot(
                 name: _playlistTitle ?? "Autosave",
                 sourceType: _lastPlaylistSourceType.ToString(),
-                source: _playlistSourceText ?? "",
-                entries: _originalEntries.ToList(),
-                originInfoByVideoId: _playlistOriginByVideoId.ToDictionary(k => k.Key, v => new SavedPlaylistOrigin(v.Value.Label, v.Value.Source), StringComparer.OrdinalIgnoreCase));
+                source: _playlistSourceText ?? "");
         }
         catch
         {
@@ -6784,7 +6782,7 @@ public partial class MainWindow : Window
             SyncNowPlayingFromEngine();
             UpdatePlaylistTitleDisplayForNowPlaying();
             try { _ = TryResolveLyricsAsync(); } catch { /* ignore */ }
-            // SetStatusMessage("INFO", _originalEntries.Count == 0 ? "Playlist is empty." : $"Loaded {_originalEntries.Count} items.");
+            // SetStatusMessage("INFO", _playlistCore.Entries.Count == 0 ? "Playlist is empty." : $"Loaded {_playlistCore.Entries.Count} items.");
 
             return true;
         }
@@ -6821,7 +6819,7 @@ public partial class MainWindow : Window
 
         var w = new LogWindow { Owner = this };
         _logWindow = w;
-        try { WindowSnapService.Register(w); } catch { /* ignore */ }
+        try { WindowCoordinator.RegisterSnapping(w); } catch { /* ignore */ }
         try { _optionsWindow?.SetLogPopoutOpen(true); } catch { /* ignore */ }
         w.Closed += (_, _) =>
         {
@@ -6901,16 +6899,14 @@ public partial class MainWindow : Window
             // Seed/reset shuffle tape when enabling shuffle so the current track becomes the first tape item.
             if (_shuffleEnabled)
             {
-                _shuffleTapeVideoIds.Clear();
-                _shuffleTapeCursor = -1;
+                _playOrder.ClearShuffleTape();
                 var curId = _engine.GetCurrent()?.VideoId;
                 if (!string.IsNullOrWhiteSpace(curId))
-                    RecordNowPlayingForShuffleTape(curId);
+                    _playOrder.RecordNowPlayingForShuffleTape(curId, _playlistCore.Entries.Count);
             }
             else
             {
-                _shuffleTapeVideoIds.Clear();
-                _shuffleTapeCursor = -1;
+                _playOrder.ClearShuffleTape();
             }
         }
         catch { /* ignore */ }
@@ -7174,23 +7170,23 @@ public partial class MainWindow : Window
             }
             SetPlaylistTitle(resolved.PlaylistTitle);
             var entries = resolved.Entries;
-            _originalEntries = entries.ToList();
+            _playlistCore.ReplaceEntries(entries);
             // _currentEntries = BuildEffectivePlayOrder(_engine.GetCurrent(), _shuffleEnabled).ToList();
             _loadedPlaylistId = playlistId;
 
             var startIndex = 0;
             if (!string.IsNullOrWhiteSpace(currentVideoId))
             {
-                var idx = FindIndexByVideoId(_originalEntries, currentVideoId);
-                if (idx >= 0 && idx < _originalEntries.Count)
+                var idx = FindIndexByVideoId(_playlistCore.Entries, currentVideoId);
+                if (idx >= 0 && idx < _playlistCore.Entries.Count)
                     startIndex = idx;
             }
 
-            _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
+            _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
             var displayIndex = GetOriginalIndexByVideoId(currentVideoId) ?? 0;
-            SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex);
+            SetQueueList(_playlistCore.Entries, selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : displayIndex);
 
-            SetStatusMessage("INFO", _originalEntries.Count == 0 ? "Playlist is empty." : $"Refreshed {_originalEntries.Count} items.");
+            SetStatusMessage("INFO", _playlistCore.Entries.Count == 0 ? "Playlist is empty." : $"Refreshed {_playlistCore.Entries.Count} items.");
             SyncNowPlayingFromEngine();
 
             // Update cache so future launches avoid yt-dlp unless refreshed/changed.
@@ -7331,10 +7327,10 @@ public partial class MainWindow : Window
         {
             // Safety: compound can also be inferred from origins (e.g. loaded from saved playlist file).
             // If multiple distinct origins exist, treat as compound even if a flag wasn't set.
-            if (!_playlistIsCompound && _playlistOriginByVideoId.Count > 0)
+            if (!_playlistIsCompound && _playlistCore.OriginByVideoId.Count > 0)
             {
                 var distinct = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var o in _playlistOriginByVideoId.Values)
+                foreach (var o in _playlistCore.OriginByVideoId.Values)
                     distinct.Add($"{o.Label}||{o.Source}");
                 if (distinct.Count > 1)
                     _playlistIsCompound = true;
@@ -7453,36 +7449,35 @@ public partial class MainWindow : Window
             _playlistIsCompound = false;
             RebuildPerItemPlaylistOriginsForCurrentPlaylist(title ?? sourceKey, sourceKey);
 
-            _originalEntries = entries?.ToList() ?? new List<PlaylistEntry>();
+            _playlistCore.ReplaceEntries(entries ?? Array.Empty<PlaylistEntry>());
             // _currentEntries = BuildEffectivePlayOrder(_engine.GetCurrent(), _shuffleEnabled).ToList();
 
             var startIndex = 0;
             if (!string.IsNullOrWhiteSpace(preserveCurrentVideoId))
             {
-                var idx = FindIndexByVideoId(_originalEntries, preserveCurrentVideoId);
-                if (idx >= 0 && idx < _originalEntries.Count)
+                var idx = FindIndexByVideoId(_playlistCore.Entries, preserveCurrentVideoId);
+                if (idx >= 0 && idx < _playlistCore.Entries.Count)
                     startIndex = idx;
             }
 
             SetPlaylistTitle(title);
             var displayIndex = GetOriginalIndexByVideoId(preserveCurrentVideoId) ?? 0;
             await SetQueueListAsync(
-                _originalEntries,
-                selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex,
+                _playlistCore.Entries,
+                selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : displayIndex,
                 cancellationToken: cancellationToken);
             // _engine.SetQueue(_currentEntries, startIndex: _currentEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: true);
-            _engine.SetBasePlayOrder(_originalEntries, startIndex: 0);
+            _engine.SetBasePlayOrder(_playlistCore.Entries, startIndex: 0);
             _hasLoadedPlaylist = true;
-            _recentlyPlayedVideoIds.Clear();
+            _playOrder.ClearRecentlyPlayed();
             _previousTrackHistory.Clear();
-            _shuffleTapeVideoIds.Clear();
-            _shuffleTapeCursor = -1;
+            _playOrder.ClearShuffleTape();
             _shuffleNextBuffer.Clear();
             UpdateRefreshEnabled();
             FocusPlaylistOnNowPlaying();
             UpdatePlaylistTitleDisplayForNowPlaying();
 
-            SetStatusMessage("INFO", _originalEntries.Count == 0 ? "Playlist is empty." : $"Loaded {_originalEntries.Count} items.");
+            SetStatusMessage("INFO", _playlistCore.Entries.Count == 0 ? "Playlist is empty." : $"Loaded {_playlistCore.Entries.Count} items.");
             SyncNowPlayingFromEngine();
 
             try
@@ -7539,27 +7534,27 @@ public partial class MainWindow : Window
         var startIndex = 0;
         if (!string.IsNullOrWhiteSpace(currentVideoId))
         {
-            var idx = FindIndexByVideoId(_originalEntries, currentVideoId);
-            if (idx >= 0 && idx < _originalEntries.Count)
+            var idx = FindIndexByVideoId(_playlistCore.Entries, currentVideoId);
+            if (idx >= 0 && idx < _playlistCore.Entries.Count)
                 startIndex = idx;
         }
 
         // Shuffle is only changing play order; avoid raising NowPlayingChanged (it can auto-center the playlist and
         // look like the list "jerks" even when the current track didn't change).
-        _engine.SetQueue(_originalEntries, startIndex: _originalEntries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: false);
+        _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : startIndex, raiseNowPlayingChanged: false);
 
         // Playlist window always shows the original playlist order. Shuffle only changes engine play order — do not
         // clear/rebind the list when rows are already the same (that flashes the Playlist window).
         var displayIndex = GetOriginalIndexByVideoId(currentVideoId) ?? 0;
-        SetQueueList(_originalEntries, selectedIndex: _originalEntries.Count == 0 ? -1 : displayIndex, forceFullRebuild: false);
+        SetQueueList(_playlistCore.Entries, selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : displayIndex, forceFullRebuild: false);
     }
 
     private int? GetOriginalIndexByVideoId(string? videoId)
     {
         if (string.IsNullOrWhiteSpace(videoId))
             return null;
-        var idx = _originalEntries.FindIndex(e => string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
-        return idx >= 0 && idx < _originalEntries.Count ? idx : null;
+        var idx = _playlistCore.Entries.FindIndex(e => string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
+        return idx >= 0 && idx < _playlistCore.Entries.Count ? idx : null;
     }
 
     private static int FindIndexByVideoId(IReadOnlyList<PlaylistEntry> entries, string? videoId)
@@ -7771,34 +7766,34 @@ public partial class MainWindow : Window
                 var currentId = _engine.GetCurrent()?.VideoId;
 
                 // If the user previously navigated back in shuffle history, move forward within the tape first.
-                if (_shuffleTapeCursor >= 0 && _shuffleTapeCursor < _shuffleTapeVideoIds.Count - 1)
+                if (_playOrder.ShuffleTapeCursor >= 0 && _playOrder.ShuffleTapeCursor < _playOrder.ShuffleTapeVideoIds.Count - 1)
                 {
                     // Skip over any tape entries that no longer exist in the playlist.
-                    for (var i = _shuffleTapeCursor + 1; i < _shuffleTapeVideoIds.Count; i++)
+                    for (var i = _playOrder.ShuffleTapeCursor + 1; i < _playOrder.ShuffleTapeVideoIds.Count; i++)
                     {
-                        var vid = _shuffleTapeVideoIds[i];
-                        var e = _originalEntries.FirstOrDefault(x => string.Equals(x.VideoId, vid, StringComparison.OrdinalIgnoreCase));
+                        var vid = _playOrder.ShuffleTapeVideoIds[i];
+                        var e = _playlistCore.Entries.FirstOrDefault(x => string.Equals(x.VideoId, vid, StringComparison.OrdinalIgnoreCase));
                         if (e is not null)
                             return e;
                     }
                 }
 
                 // Build candidate list: exclude current track, recently played, and unavailable tracks
-                var candidates = _originalEntries
+                var candidates = _playlistCore.Entries
                     .Where(e => !string.Equals(e.VideoId, currentId, StringComparison.OrdinalIgnoreCase)
-                             && !_recentlyPlayedVideoIds.Contains(e.VideoId)
+                             && !_playOrder.RecentlyPlayedContains(e.VideoId)
                              && !_unavailableVideoIds.Contains(e.VideoId)
                              && !_ageRestrictedVideoIds.Contains(e.VideoId)
                              && !_premiumVideoIds.Contains(e.VideoId))
                     .ToList();
 
-                AppLog.Info($"ResolveNextTrack[SHUFFLE]: currentId={currentId?[..Math.Min(40, currentId.Length)] ?? "<null>"} candidates={candidates.Count} recentlyPlayed={_recentlyPlayedVideoIds.Count}");
+                AppLog.Info($"ResolveNextTrack[SHUFFLE]: currentId={currentId?[..Math.Min(40, currentId.Length)] ?? "<null>"} candidates={candidates.Count} recentlyPlayed={_playOrder.RecentlyPlayedCount}");
 
                 if (candidates.Count == 0)
                 {
                     // All tracks excluded — reset recently played and try again
-                    _recentlyPlayedVideoIds.Clear();
-                    candidates = _originalEntries
+                    _playOrder.ClearRecentlyPlayed();
+                    candidates = _playlistCore.Entries
                         .Where(e => !string.Equals(e.VideoId, currentId, StringComparison.OrdinalIgnoreCase)
                                  && !_unavailableVideoIds.Contains(e.VideoId)
                                  && !_ageRestrictedVideoIds.Contains(e.VideoId)
@@ -7832,18 +7827,18 @@ public partial class MainWindow : Window
             // --- Sequential Mode ---
             int nextIndex = _engine.CurrentIndex + 1;
 
-            if (_repeatMode == RepeatMode.Playlist && nextIndex >= _originalEntries.Count)
+            if (_repeatMode == RepeatMode.Playlist && nextIndex >= _playlistCore.Entries.Count)
             {
                 nextIndex = 0; // Loop back to start
             }
 
-            if (nextIndex >= _originalEntries.Count)
+            if (nextIndex >= _playlistCore.Entries.Count)
             {
-                AppLog.Info($"ResolveNextTrack[SEQ]: nextIndex={nextIndex} >= entries={_originalEntries.Count} -> returning null");
+                AppLog.Info($"ResolveNextTrack[SEQ]: nextIndex={nextIndex} >= entries={_playlistCore.Entries.Count} -> returning null");
                 return null; // End of list (Repeat:None)
             }
 
-            var sequentialNextTrack = _originalEntries[nextIndex];
+            var sequentialNextTrack = _playlistCore.Entries[nextIndex];
             AppLog.Info($"ResolveNextTrack[SEQ]: nextIndex={nextIndex} nextVideoId={sequentialNextTrack.VideoId[..Math.Min(40, sequentialNextTrack.VideoId.Length)]}... (CURRENT index={dbgCurrentIndex})");
             return sequentialNextTrack;
         }
@@ -7874,7 +7869,7 @@ public partial class MainWindow : Window
             {
                 // If we're in the middle of the shuffle tape, Next will be a history-forward move.
                 // Suppress prefetch/preheat (lyrics + audio) for history traversal.
-                if (_shuffleTapeCursor >= 0 && _shuffleTapeCursor < _shuffleTapeVideoIds.Count - 1)
+                if (_playOrder.ShuffleTapeCursor >= 0 && _playOrder.ShuffleTapeCursor < _playOrder.ShuffleTapeVideoIds.Count - 1)
                     return null;
 
                 if (_shuffleNextBuffer.Count > 0)
@@ -7884,11 +7879,11 @@ public partial class MainWindow : Window
 
             // Sequential.
             var nextIndex = _engine.CurrentIndex + 1;
-            if (_repeatMode == RepeatMode.Playlist && nextIndex >= _originalEntries.Count)
+            if (_repeatMode == RepeatMode.Playlist && nextIndex >= _playlistCore.Entries.Count)
                 nextIndex = 0;
-            if (nextIndex < 0 || nextIndex >= _originalEntries.Count)
+            if (nextIndex < 0 || nextIndex >= _playlistCore.Entries.Count)
                 return null;
-            return _originalEntries[nextIndex];
+            return _playlistCore.Entries[nextIndex];
         }
         catch
         {
@@ -7986,7 +7981,7 @@ public partial class MainWindow : Window
 
     private void QueueNextByVideoId(string videoId)
     {
-        var entry = _originalEntries.FirstOrDefault(e => string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
+        var entry = _playlistCore.Entries.FirstOrDefault(e => string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
         if (entry is null) return;
 
         // Check if already in queue
@@ -8004,7 +7999,7 @@ public partial class MainWindow : Window
 
     private void QueueLastByVideoId(string videoId)
     {
-        var entry = _originalEntries.FirstOrDefault(e => string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
+        var entry = _playlistCore.Entries.FirstOrDefault(e => string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
         if (entry is null) return;
 
         // Check if already in queue
@@ -8106,11 +8101,11 @@ public partial class MainWindow : Window
     private void UpdateNowPlayingText(string? extraDetail = null)
     {
         var status = string.IsNullOrWhiteSpace(_nowPlayingStatus) ? "STOPPED" : _nowPlayingStatus.Trim().ToUpperInvariant();
-        // AppLog.Info($"UpdateNowPlayingText: status={status}, entry={_nowPlayingEntry?.VideoId ?? "(null)"}, lyricsEnabled={_lyricsEnabled}, hasLyrics={_lyricsManager.HasLyrics}, lineCount={_lyricsManager.LineCount}, isPlaying={_engine.IsPlaying}, position={_engine.CurrentPositionSeconds:F2}s");
+        // AppLog.Info($"UpdateNowPlayingText: status={status}, entry={_nowPlayingEntry?.VideoId ?? "(null)"}, lyricsEnabled={_lyricsEnabled}, hasLyrics={_lyricsService.Manager.HasLyrics}, lineCount={_lyricsService.Manager.LineCount}, isPlaying={_engine.IsPlaying}, position={_engine.CurrentPositionSeconds:F2}s");
         if (NowPlayingStatusRun is not null)
         {
             // Don't show lyric line/status when lyrics window is open — it already displays lyrics.
-            if (_lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
+            if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
             {
                 NowPlayingStatusRun.Text = $"[>]";
             }
@@ -8129,9 +8124,9 @@ public partial class MainWindow : Window
         {
             // Check for lyrics override (Normal/Compact modes show current lyric line).
             // Only show lyric lines in main window when lyrics window is NOT open — it already displays them.
-            if (_lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
+            if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
             {
-                var lyricLine = _lyricsManager.GetCurrentLine(_engine.CurrentPositionSeconds);
+                var lyricLine = _lyricsService.Manager.GetCurrentLine(_engine.CurrentPositionSeconds);
                 if (!string.IsNullOrEmpty(lyricLine))
                     title = lyricLine;
                 else
@@ -8140,7 +8135,7 @@ public partial class MainWindow : Window
             else
             {
                 // Lyrics window is open — highlight the current line there instead of the title.
-                if (_lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying)
+                if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying)
                     _lyricsWindow?.RefreshCurrentLine();
 
                 title = $"{_nowPlayingEntry.Title}{(string.IsNullOrWhiteSpace(_nowPlayingEntry.Channel) ? "" : $" \u2014 {_nowPlayingEntry.Channel}")}";
@@ -8211,7 +8206,7 @@ public partial class MainWindow : Window
     {
         var l = string.IsNullOrWhiteSpace(label) ? null : label.Trim();
         var s = string.IsNullOrWhiteSpace(source) ? null : source.Trim();
-        _basePlaylistOrigin = (string.IsNullOrWhiteSpace(l) && string.IsNullOrWhiteSpace(s))
+        _playlistCore.BaseOrigin = (string.IsNullOrWhiteSpace(l) && string.IsNullOrWhiteSpace(s))
             ? null
             : new PlaylistOriginInfo(l ?? "", s ?? "");
     }
@@ -8221,12 +8216,12 @@ public partial class MainWindow : Window
         try
         {
             SetBasePlaylistOrigin(baseLabel, baseSource);
-            _playlistOriginByVideoId.Clear();
-            var b = _basePlaylistOrigin;
+            _playlistCore.OriginByVideoId.Clear();
+            var b = _playlistCore.BaseOrigin;
             if (b is null)
                 return;
-            foreach (var e in _originalEntries)
-                _playlistOriginByVideoId[e.VideoId] = b;
+            foreach (var e in _playlistCore.Entries)
+                _playlistCore.OriginByVideoId[e.VideoId] = b;
         }
         catch { /* ignore */ }
     }
@@ -8241,14 +8236,14 @@ public partial class MainWindow : Window
             var cur = _nowPlayingEntry;
 
             // Check if lyrics are active (enabled + loaded + playing).
-            bool lyricsActive = _lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null;
+            bool lyricsActive = _lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null;
 
             // Resolve the origin label: per-video origin > base origin > playlist title.
             string? origin = cur is not null &&
-                _playlistOriginByVideoId.TryGetValue(cur.VideoId, out var info) &&
+                _playlistCore.OriginByVideoId.TryGetValue(cur.VideoId, out var info) &&
                 !string.IsNullOrWhiteSpace(info?.Label)
                 ? info.Label
-                : (_basePlaylistOrigin?.Label ?? _playlistTitle ?? "");
+                : (_playlistCore.BaseOrigin?.Label ?? _playlistTitle ?? "");
 
             // Show "<origin> - <title>" on the origin line when lyrics are active; otherwise normal display.
             PlaylistTitleTextBlock.Text = (lyricsActive && cur is not null)
@@ -8266,7 +8261,7 @@ public partial class MainWindow : Window
             var cur = _nowPlayingEntry;
             if (cur is null)
                 return false;
-            if (_playlistOriginByVideoId.TryGetValue(cur.VideoId, out var o))
+            if (_playlistCore.OriginByVideoId.TryGetValue(cur.VideoId, out var o))
             {
                 origin = o;
                 return true;
@@ -8349,7 +8344,7 @@ public partial class MainWindow : Window
             var baseSource = string.IsNullOrWhiteSpace(pl?.Source) ? null : pl!.Source.Trim();
             SetBasePlaylistOrigin(baseLabel, baseSource);
 
-            _playlistOriginByVideoId.Clear();
+            _playlistCore.OriginByVideoId.Clear();
 
             var legacy = pl?.OriginByVideoId;
             var origins = pl?.OriginInfoByVideoId;
@@ -8377,7 +8372,7 @@ public partial class MainWindow : Window
 
                 if (!string.IsNullOrWhiteSpace(label) || !string.IsNullOrWhiteSpace(src))
                 {
-                    _playlistOriginByVideoId[e.VideoId] = new PlaylistOriginInfo(label, src);
+                    _playlistCore.OriginByVideoId[e.VideoId] = new PlaylistOriginInfo(label, src);
                     if (!string.IsNullOrWhiteSpace(label))
                         distinct.Add(label);
                 }
@@ -8813,187 +8808,6 @@ public partial class MainWindow : Window
 
         if (_isSeeking)
             ElapsedTextBlock.Text = FormatTime(SeekSlider.Value);
-    }
-
-    private const int MaxPersistedPlaylistFilterChars = 500;
-
-    private static string? NormalizePersistedPlaylistFilter(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return null;
-        var t = raw.Trim();
-        if (t.Length > MaxPersistedPlaylistFilterChars)
-            t = t.Substring(0, MaxPersistedPlaylistFilterChars);
-        return t.Length == 0 ? null : t;
-    }
-
-    private void SaveSettingsSnapshot(double? overridePositionSeconds = null, bool? overrideWasPlaying = null)
-    {
-        var cur = SettingsStore.Load();
-        var state = WindowState;
-        var bounds = state == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
-
-        static double? FiniteOrNull(double v)
-            => double.IsNaN(v) || double.IsInfinity(v) ? null : v;
-
-        var pState = _playlistWindow?.WindowState ?? WindowState.Normal;
-        var pBounds = _playlistWindow is null
-            ? new Rect(double.NaN, double.NaN, double.NaN, double.NaN)
-            : (pState == WindowState.Normal ? new Rect(_playlistWindow.Left, _playlistWindow.Top, _playlistWindow.Width, _playlistWindow.Height) : _playlistWindow.RestoreBounds);
-
-        var savePBounds = ChooseBestBounds(
-            primary: pBounds,
-            secondary: _lastPlaylistBounds,
-            fallbackLeft: cur.PlaylistWindowLeft,
-            fallbackTop: cur.PlaylistWindowTop,
-            fallbackWidth: cur.PlaylistWindowWidth,
-            fallbackHeight: cur.PlaylistWindowHeight
-        );
-        var savePState = _playlistWindow is not null ? pState : (_lastPlaylistWindowState ?? pState);
-
-        var oState = _optionsWindow?.WindowState ?? WindowState.Normal;
-        var oBounds = _optionsWindow is null
-            ? new Rect(double.NaN, double.NaN, double.NaN, double.NaN)
-            : (oState == WindowState.Normal ? new Rect(_optionsWindow.Left, _optionsWindow.Top, _optionsWindow.Width, _optionsWindow.Height) : _optionsWindow.RestoreBounds);
-        var saveOBounds = ChooseBestBounds(
-            primary: oBounds,
-            secondary: _lastOptionsBounds,
-            fallbackLeft: cur.OptionsWindowLeft,
-            fallbackTop: cur.OptionsWindowTop,
-            fallbackWidth: cur.OptionsWindowWidth,
-            fallbackHeight: cur.OptionsWindowHeight
-        );
-        var saveOState = _optionsWindow is not null ? oState : (_lastOptionsWindowState ?? oState);
-
-        var lState = _lyricsWindow?.WindowState ?? WindowState.Normal;
-        var lBounds = _lyricsWindow is null
-            ? new Rect(double.NaN, double.NaN, double.NaN, double.NaN)
-            : (lState == WindowState.Normal ? new Rect(_lyricsWindow.Left, _lyricsWindow.Top, _lyricsWindow.Width, _lyricsWindow.Height) : _lyricsWindow.RestoreBounds);
-        var saveLBounds = ChooseBestBounds(
-            primary: lBounds,
-            secondary: _lastLyricsBounds,
-            fallbackLeft: cur.LyricsWindowLeft,
-            fallbackTop: cur.LyricsWindowTop,
-            fallbackWidth: cur.LyricsWindowWidth,
-            fallbackHeight: cur.LyricsWindowHeight
-        );
-        var saveLState = _lyricsWindow is not null ? lState : (_lastLyricsWindowState ?? lState);
-
-        var lastYtUrlMem = PlaylistSourcePathHeuristics.SanitizePersistedLastYoutubeUrl(_lastYoutubeUrl);
-
-        SettingsStore.Save(new AppSettings(
-            YtDlpPath: _savedYtDlpPath,
-            FfmpegPath: _savedFfmpegPath,
-            // Keep last YouTube URL even if current playlist is local.
-            LastPlaylistUrl: string.IsNullOrEmpty(lastYtUrlMem) ? null : lastYtUrlMem,
-            LastPlaylistSourceType: _lastPlaylistSourceType.ToString(),
-            LastLocalPlaylistPath: _lastPlaylistSourceType == PlaylistSourceType.YouTube ? null : (_lastLocalPlaylistPath ?? _playlistSourceText?.Trim()),
-            VisualizerMode: _visualizerMode.ToString(),
-            ShuffleEnabled: _shuffleEnabled,
-            GlobalMediaKeysEnabled: _globalMediaKeysEnabled,
-            RepeatMode: _repeatMode.ToString(),
-            CurrentVideoId: _engine.GetCurrent()?.VideoId,
-            PlayOrderVideoIds: _engine.PlayOrder.Select(e => e.VideoId).ToList(),
-            QueuedVideoIds: _queuedNext.Select(e => e.Entry.VideoId).ToList(),
-            CurrentPositionSeconds: overridePositionSeconds ?? _engine.CurrentPositionSeconds,
-            CurrentDurationSeconds: _engine.CurrentDurationSeconds ?? _nowPlayingEntry?.DurationSeconds,
-            WasPlaying: overrideWasPlaying ?? _engine.IsPlaying,
-            CacheMaxMb: _cacheMaxMb,
-            Volume: VolumeSlider?.Value,
-            PlaylistAutoRefreshMinutes: _autoRefreshMinutes,
-            IncludeSubfoldersOnFolderLoad: _includeSubfoldersOnFolderLoad,
-            AlwaysOnTop: _alwaysOnTop,
-            AlwaysOnTopPlaylistWindow: _alwaysOnTopPlaylistWindow,
-            AlwaysOnTopOptionsWindow: _alwaysOnTopOptionsWindow,
-            AlwaysOnTopLyricsWindow: _alwaysOnTopLyricsWindow,
-            WindowLeft: FiniteOrNull(bounds.Left) ?? cur.WindowLeft,
-            WindowTop: FiniteOrNull(bounds.Top) ?? cur.WindowTop,
-            WindowWidth: FiniteOrNull(bounds.Width) ?? cur.WindowWidth,
-            WindowHeight: FiniteOrNull(bounds.Height) ?? cur.WindowHeight,
-            WindowState: state.ToString(),
-            PlaylistWindowLeft: FiniteOrNull(savePBounds.Left) ?? cur.PlaylistWindowLeft,
-            PlaylistWindowTop: FiniteOrNull(savePBounds.Top) ?? cur.PlaylistWindowTop,
-            PlaylistWindowWidth: FiniteOrNull(savePBounds.Width) ?? cur.PlaylistWindowWidth,
-            PlaylistWindowHeight: FiniteOrNull(savePBounds.Height) ?? cur.PlaylistWindowHeight,
-            PlaylistWindowState: savePState.ToString(),
-            PlaylistWindowOpen: (_playlistWindow is not null) || (_mainWindowCompact && _playlistWindowWasOpenBeforeCompact),
-            PlaylistWindowFilter: _playlistWindow is not null
-                ? NormalizePersistedPlaylistFilter(_playlistWindow.GetPlaylistFilterText())
-                : cur.PlaylistWindowFilter,
-            PlaylistWindowSortMode: _playlistWindow is not null ? _playlistWindow.GetSortSpec().Mode.ToString() : cur.PlaylistWindowSortMode,
-            PlaylistWindowSortDirection: _playlistWindow is not null ? _playlistWindow.GetSortSpec().Direction.ToString() : cur.PlaylistWindowSortDirection,
-            OptionsWindowLeft: FiniteOrNull(saveOBounds.Left) ?? cur.OptionsWindowLeft,
-            OptionsWindowTop: FiniteOrNull(saveOBounds.Top) ?? cur.OptionsWindowTop,
-            OptionsWindowWidth: FiniteOrNull(saveOBounds.Width) ?? cur.OptionsWindowWidth,
-            OptionsWindowHeight: FiniteOrNull(saveOBounds.Height) ?? cur.OptionsWindowHeight,
-            OptionsWindowState: saveOState.ToString(),
-            OptionsWindowOpen: (_optionsWindow is not null) || (_mainWindowCompact && _optionsWindowWasOpenBeforeCompact),
-            PlaylistWindowSnapped: _playlistSnapped,
-            PlaylistWindowSnapEdge: _playlistSnapEdge.ToString(),
-            PlaylistWindowDockYOffset: FiniteOrNull(_playlistDockYOffset) ?? 0,
-            PlaylistWindowDockXOffset: FiniteOrNull(_playlistDockXOffset) ?? 0,
-            PlaylistWindowBoundsUiScalePercent: _uiScalePercent,
-            OptionsWindowSnapped: _optionsSnapped,
-            OptionsWindowSnapEdge: _optionsSnapEdge.ToString(),
-            OptionsWindowDockYOffset: FiniteOrNull(_optionsDockYOffset) ?? 0,
-            OptionsWindowDockXOffset: FiniteOrNull(_optionsDockXOffset) ?? 0,
-            OptionsWindowBottomAlignToPlaylist: false,
-            OptionsWindowSelectedTab: _optionsSelectedTab,
-            LyricsWindowSnapped: _lyricsSnapped,
-            LyricsWindowSnapEdge: _lyricsSnapEdge.ToString(),
-            LyricsWindowDockYOffset: FiniteOrNull(_lyricsDockYOffset) ?? 0,
-            LyricsWindowDockXOffset: FiniteOrNull(_lyricsDockXOffset) ?? 0,
-            LyricsWindowLeft: FiniteOrNull(saveLBounds.Left) ?? cur.LyricsWindowLeft,
-            LyricsWindowTop: FiniteOrNull(saveLBounds.Top) ?? cur.LyricsWindowTop,
-            LyricsWindowWidth: FiniteOrNull(saveLBounds.Width) ?? cur.LyricsWindowWidth,
-            LyricsWindowHeight: FiniteOrNull(saveLBounds.Height) ?? cur.LyricsWindowHeight,
-            LyricsWindowState: saveLState.ToString(),
-            LyricsWindowOpen: (_lyricsWindow is not null) || (_mainWindowCompact && _lyricsWindowWasOpenBeforeCompact),
-            ThemeMode: _themeMode,
-            BackgroundMode: _backgroundMode,
-            CustomBackgroundImagePath: string.IsNullOrWhiteSpace(_customBackgroundImagePath) ? null : _customBackgroundImagePath.Trim(),
-            BackgroundColorMode: _backgroundColorMode,
-            CustomBackgroundColor: string.IsNullOrWhiteSpace(_customBackgroundColor) ? null : _customBackgroundColor.Trim(),
-            BackgroundAlpha: _backgroundAlpha,
-            BackgroundScrimPercent: _backgroundScrimPercent,
-            BackgroundImageStretch: _backgroundImageStretch,
-            BackgroundUserDefinedMainNormal: _backgroundUserDefinedMainNormal,
-            BackgroundUserDefinedMainCompact: _backgroundUserDefinedMainCompact,
-            BackgroundUserDefinedMainUltra: _backgroundUserDefinedMainUltra,
-            BackgroundUserDefinedPlaylist: _backgroundUserDefinedPlaylist,
-            BackgroundUserDefinedOptionsLog: _backgroundUserDefinedOptionsLog,
-            BackgroundUserDefinedLyrics: _backgroundUserDefinedLyrics,
-            AppTitleMode: _appTitleMode,
-            CustomAppTitle: string.IsNullOrWhiteSpace(_customAppTitle) ? null : _customAppTitle.Trim(),
-            AppIconVisibility: _appIconVisibility,
-            LyricsEnabled: _lyricsEnabled,
-            LyricsLocalFilesEnabled: _lyricsLocalFilesEnabled,
-            SearchDefaultCount: _searchDefaultCount,
-            SearchMinLengthSeconds: _searchMinLengthSeconds,
-            ReadMetadataOnLoad: _readMetadataOnLoad,
-            UiScalePercent: _uiScalePercent,
-            WindowBorderMode: _windowBorderMode,
-            WindowBorderCustomPx: _windowBorderCustomPx,
-            NodeJsPath: _savedNodePath,
-            YtdlpEjsComponentSource: _ytdlpEjsComponentSource,
-            YoutubeCookiesFromBrowserEnabled: _youtubeCookiesFromBrowserEnabled,
-            YoutubeCookiesFromBrowser: string.IsNullOrWhiteSpace(_youtubeCookiesFromBrowser) ? null : _youtubeCookiesFromBrowser.Trim(),
-            YoutubeImportAppend: _youtubeImportAppend,
-            ExportM3uIncludeYoutube: _exportM3uIncludeYoutube,
-            ExportM3uPreferRelativePaths: _exportM3uPreferRelativePaths,
-            ExportM3uIncludeLyllyMetadata: _exportM3uIncludeLyllyMetadata,
-            LocalImportAppend: _localImportAppend,
-            LocalImportRemoveDuplicates: _localImportRemoveDuplicates,
-            AudioQuality: _audioQuality,
-            AudioOutputDevice: string.IsNullOrWhiteSpace(_audioOutputDevice) ? null : _audioOutputDevice,
-            AppLogLevel: _appLogLevel,
-            AppLogMaxMb: _appLogMaxMb,
-            MainWindowCompact: _mainWindowCompact,
-            CompactModeLayout: _compactModeLayout,
-            CompactModeHidesAuxWindows: _compactModeHidesAuxWindows,
-            KeepIncompletePlaylistOnCancel: _keepIncompletePlaylistOnCancel,
-            LastSavedByAppVersion: AppVersion.Current
-        ));
     }
 
     private static string? NormalizeToolSave(string? s)
@@ -10218,9 +10032,9 @@ public partial class MainWindow : Window
             {
                 // Lyrics override for Ultra-Compact mode.
                 // Only show lyric lines in main window when lyrics window is NOT open — it already displays them.
-                if (_lyricsEnabled && _lyricsManager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
+                if (_lyricsEnabled && _lyricsService.Manager.HasLyrics && _engine.IsPlaying && _lyricsWindow is null)
                 {
-                    var lyricLine = _lyricsManager.GetCurrentLine(_engine.CurrentPositionSeconds);
+                    var lyricLine = _lyricsService.Manager.GetCurrentLine(_engine.CurrentPositionSeconds);
                     if (!string.IsNullOrEmpty(lyricLine))
                     {
                         Title = $"{lyricLine}";
@@ -10370,7 +10184,7 @@ public partial class MainWindow : Window
 
         if (!_lyricsTimer.IsEnabled)
         {
-            _lastDisplayedLyricLineIndex = int.MinValue;
+            _lyricsService.LastDisplayedLyricLineIndex = int.MinValue;
             _lyricsTimer.Start();
         }
     }
@@ -10382,18 +10196,18 @@ public partial class MainWindow : Window
 
     private void UpdateLyricsDisplay(bool force)
     {
-        // AppLog.Info($"UpdateLyricsDisplay: lyricsEnabled={_lyricsEnabled}, hasLyrics={_lyricsManager.HasLyrics}, lineCount={_lyricsManager.LineCount}, position={_engine.CurrentPositionSeconds:F2}s, compact={_mainWindowCompact}, layout={_compactModeLayout}");
-        if (!_lyricsEnabled || !_lyricsManager.HasLyrics)
+        // AppLog.Info($"UpdateLyricsDisplay: lyricsEnabled={_lyricsEnabled}, hasLyrics={_lyricsService.Manager.HasLyrics}, lineCount={_lyricsService.Manager.LineCount}, position={_engine.CurrentPositionSeconds:F2}s, compact={_mainWindowCompact}, layout={_compactModeLayout}");
+        if (!_lyricsEnabled || !_lyricsService.Manager.HasLyrics)
             return;
 
-        var lineIdx = _lyricsManager.GetCurrentLineIndex(_engine.CurrentPositionSeconds);
+        var lineIdx = _lyricsService.Manager.GetCurrentLineIndex(_engine.CurrentPositionSeconds);
         if (lineIdx < 0)
             return;
-        if (!force && lineIdx == _lastDisplayedLyricLineIndex)
+        if (!force && lineIdx == _lyricsService.LastDisplayedLyricLineIndex)
             return;
-        _lastDisplayedLyricLineIndex = lineIdx;
+        _lyricsService.LastDisplayedLyricLineIndex = lineIdx;
 
-        var lyricLine = _lyricsManager.GetCurrentLine(_engine.CurrentPositionSeconds);
+        var lyricLine = _lyricsService.Manager.GetCurrentLine(_engine.CurrentPositionSeconds);
         // AppLog.Info($"UpdateLyricsDisplay: GetCurrentLine result={lyricLine ?? "(null)"}");
         if (string.IsNullOrEmpty(lyricLine))
             return;
@@ -10427,35 +10241,24 @@ public partial class MainWindow : Window
     private async Task TryResolveLyricsAsync()
     {
         var entry = _engine.GetCurrent();
-        AppLog.Info($"TryResolveLyricsAsync: entry={entry?.VideoId ?? "(null)"}, lyricsEnabled={_lyricsEnabled}, resolvedVideoId={_lyricsResolvedVideoId ?? "(none)"}");
+        AppLog.Info($"TryResolveLyricsAsync: entry={entry?.VideoId ?? "(null)"}, lyricsEnabled={_lyricsEnabled}, resolvedVideoId={_lyricsService.ResolvedVideoId ?? "(none)"}");
         if (entry is null)
         {
             // When the engine has no current entry (e.g., stopped), preserve lyrics so the
             // lyrics window keeps displaying them. Only clear when there's truly no track.
             if (_nowPlayingEntry is null)
             {
-                _lyricsManager.Clear();
-                _lyricsResolvedVideoId = null;
+                _lyricsService.ClearParsedLyricsState();
                 _lyricsWindow?.Refresh();
             }
             return;
         }
 
-        void ClearResolvedIfStillCurrent(string videoId)
-        {
-            try
-            {
-                if (string.Equals(_lyricsResolvedVideoId, videoId, StringComparison.OrdinalIgnoreCase))
-                    _lyricsResolvedVideoId = null;
-            }
-            catch { /* ignore */ }
-        }
-
         // Already resolved for this track — no need to re-resolve
-        if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(entry.VideoId, _lyricsService.ResolvedVideoId, StringComparison.OrdinalIgnoreCase))
         {
-            _lyricsManager.Clear();
-            _lyricsResolvedVideoId = entry.VideoId;
+            _lyricsService.Manager.Clear();
+            _lyricsService.ResolvedVideoId = entry.VideoId;
             _lyricsWindow?.Refresh();
 
             if (_lyricsEnabled && !string.IsNullOrWhiteSpace(entry.VideoId))
@@ -10484,7 +10287,7 @@ public partial class MainWindow : Window
                         var cacheArtist = metadata?.Artist ?? entry.Channel;
                         var cacheTitle = metadata?.Title ?? entry.Title;
                         AppLog.Info($"TryResolveLyricsAsync: cache hit for {entry.VideoId}, lines={LrcParser.Parse(cached, CancellationToken.None).Count}, artist={cacheArtist ?? "(none)"}, title={cacheTitle ?? "(none)"}");
-                        _lyricsManager.Parse(cached, artist: cacheArtist, title: cacheTitle);
+                        _lyricsService.Manager.Parse(cached, artist: cacheArtist, title: cacheTitle);
                         UpdateNowPlayingText();
                         UpdatePlaylistTitleDisplayForNowPlaying();
                         _lyricsWindow?.Refresh();
@@ -10523,7 +10326,7 @@ public partial class MainWindow : Window
                         var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics, isDefinitiveMiss) =
                             await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, duration, CancellationToken.None);
                         // Discard stale result if track changed while fetching — cache first
-                        if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
+                        if (!string.Equals(entry.VideoId, _lyricsService.ResolvedVideoId, StringComparison.OrdinalIgnoreCase))
                         {
                             if (!string.IsNullOrWhiteSpace(lrcLrclib))
                             {
@@ -10549,7 +10352,7 @@ public partial class MainWindow : Window
                             {
                                 AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
                             }
-                            _lyricsManager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
+                            _lyricsService.Manager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
                             LyricsCache.Set(cacheKey, lrcLrclib);
                             Dispatcher.Invoke(() =>
                             {
@@ -10569,7 +10372,7 @@ public partial class MainWindow : Window
                     {
                         AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (localDur={duration?.ToString("F0") ?? "null"}s)");
                         // Do not treat failures as "resolved" — allow retry later.
-                        ClearResolvedIfStillCurrent(entry.VideoId);
+                        _lyricsService.ClearResolvedIfStillCurrent(entry.VideoId);
                     }
                     _lyricsWindow?.Refresh();
                 }
@@ -10590,7 +10393,7 @@ public partial class MainWindow : Window
                         var cacheArtist = metadata?.Artist ?? entry.Channel;
                         var cacheTitle = metadata?.Title ?? entry.Title;
                         AppLog.Info($"TryResolveLyricsAsync: cache hit for {entry.VideoId}, lines={LrcParser.Parse(cached, CancellationToken.None).Count}, artist={cacheArtist ?? "(none)"}, title={cacheTitle ?? "(none)"}");
-                        _lyricsManager.Parse(cached, artist: cacheArtist, title: cacheTitle);
+                        _lyricsService.Manager.Parse(cached, artist: cacheArtist, title: cacheTitle);
                         UpdateNowPlayingText();
                         UpdatePlaylistTitleDisplayForNowPlaying();
                         _lyricsWindow?.Refresh();
@@ -10604,7 +10407,7 @@ public partial class MainWindow : Window
                     {
                         var lrc = await LyricsResolver.FetchLyricsForYouTubeAsync(resolvedYtDlp.EffectiveFileName, entry.VideoId, CancellationToken.None);
                         // Discard stale result if track changed while fetching — cache first
-                        if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
+                        if (!string.Equals(entry.VideoId, _lyricsService.ResolvedVideoId, StringComparison.OrdinalIgnoreCase))
                         {
                             if (!string.IsNullOrWhiteSpace(lrc))
                             {
@@ -10623,7 +10426,7 @@ public partial class MainWindow : Window
                             var ytArtist = metadata?.Artist ?? entry.Channel;
                             var ytTitle = metadata?.Title ?? entry.Title;
                             AppLog.Info($"TryResolveLyricsAsync: fetched lyrics for {entry.VideoId}, length={lrc.Length}, lines={LrcParser.Parse(lrc, CancellationToken.None).Count}, artist={ytArtist ?? "(none)"}, title={ytTitle ?? "(none)"}");
-                            _lyricsManager.Parse(lrc, artist: ytArtist, title: ytTitle);
+                            _lyricsService.Manager.Parse(lrc, artist: ytArtist, title: ytTitle);
                             LyricsCache.Set(cacheKey, lrc);
                             Dispatcher.Invoke(() =>
                             {
@@ -10643,7 +10446,7 @@ public partial class MainWindow : Window
                                 var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics, isDefinitiveMiss) =
                                     await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.Channel, entry.DurationSeconds, CancellationToken.None);
                                 // Discard stale result if track changed while fetching — cache first
-                                if (!string.Equals(entry.VideoId, _lyricsResolvedVideoId, StringComparison.OrdinalIgnoreCase))
+                                if (!string.Equals(entry.VideoId, _lyricsService.ResolvedVideoId, StringComparison.OrdinalIgnoreCase))
                                 {
                                     if (!string.IsNullOrWhiteSpace(lrcLrclib))
                                     {
@@ -10671,7 +10474,7 @@ public partial class MainWindow : Window
                                     {
                                         AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
                                     }
-                                    _lyricsManager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
+                                    _lyricsService.Manager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
                                     LyricsCache.Set(cacheKey, lrcLrclib);
                                     Dispatcher.Invoke(() =>
                                     {
@@ -10691,7 +10494,7 @@ public partial class MainWindow : Window
                             {
                                 AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
                                 // Do not treat failures as "resolved" — allow retry later.
-                                ClearResolvedIfStillCurrent(entry.VideoId);
+                                _lyricsService.ClearResolvedIfStillCurrent(entry.VideoId);
                             }
 
                             _lyricsWindow?.Refresh();
@@ -10701,7 +10504,7 @@ public partial class MainWindow : Window
                     {
                         AppLog.Exception(ex, $"TryResolveLyricsAsync: fetch failed for {entry.VideoId}");
                         // Do not treat failures as "resolved" — allow retry later.
-                        ClearResolvedIfStillCurrent(entry.VideoId);
+                        _lyricsService.ClearResolvedIfStillCurrent(entry.VideoId);
                     }
 
                     _lyricsWindow?.Refresh();
@@ -10729,9 +10532,9 @@ public partial class MainWindow : Window
             return;
 
         var currentId = _engine.GetCurrent()?.VideoId;
-        var candidates = _originalEntries
+        var candidates = _playlistCore.Entries
             .Where(e => !string.Equals(e.VideoId, currentId, StringComparison.OrdinalIgnoreCase)
-                     && !_recentlyPlayedVideoIds.Contains(e.VideoId)
+                     && !_playOrder.RecentlyPlayedContains(e.VideoId)
                      && !_unavailableVideoIds.Contains(e.VideoId)
                      && !_ageRestrictedVideoIds.Contains(e.VideoId)
                      && !_premiumVideoIds.Contains(e.VideoId))
@@ -12373,29 +12176,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private static Rect ChooseBestBounds(
-        Rect primary,
-        Rect? secondary,
-        double? fallbackLeft,
-        double? fallbackTop,
-        double? fallbackWidth,
-        double? fallbackHeight)
-    {
-        static bool IsFinite(double v) => !(double.IsNaN(v) || double.IsInfinity(v));
-
-        static bool LooksValid(Rect r)
-            => IsFinite(r.Left) && IsFinite(r.Top) && IsFinite(r.Width) && IsFinite(r.Height) && r.Width > 50 && r.Height > 50;
-
-        if (LooksValid(primary))
-            return primary;
-        if (secondary is Rect s && LooksValid(s))
-            return s;
-        if (fallbackLeft is double l && fallbackTop is double t && fallbackWidth is double w && fallbackHeight is double h &&
-            LooksValid(new Rect(l, t, w, h)))
-            return new Rect(l, t, w, h);
-        return primary;
-    }
-
     private void CaptureOptionsWindowBounds()
     {
         try
@@ -12417,46 +12197,57 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void CaptureWindowBounds(Window w, out Rect? bounds, out WindowState? state)
-    {
-        bounds = null;
-        state = null;
-        try
-        {
-            var ws = w.WindowState;
-            var b = ws == WindowState.Normal
-                ? new Rect(w.Left, w.Top, w.Width, w.Height)
-                : w.RestoreBounds;
-            bounds = b;
-            state = ws;
-        }
-        catch
-        {
-            // ignore
-        }
-    }
-
-    private void RequestPersistSnapshot()
-    {
-        // Debounced to avoid excessive disk writes while dragging/resizing.
-        try
-        {
-            _persistTimer.Stop();
-            _persistTimer.Start();
-        }
-        catch
-        {
-            // ignore
-        }
-    }
-
     private void ApplyOptionsWindowSettings(AppSettings settings, Window w)
     {
         try
         {
             // Outer size is always 640×480 (design) × UiScale — see <see cref="ApplyOptionsWindowScaledChromeSize"/>.
 
-            if (settings.OptionsWindowLeft is double l && settings.OptionsWindowTop is double t)
+            // If snapped, restore relative to Main rather than using absolute coords.
+            var placedBySnap = false;
+            try
+            {
+                if ((settings.OptionsWindowSnapped ?? false) &&
+                    Enum.TryParse<OptionsSnapEdge>(settings.OptionsWindowSnapEdge, ignoreCase: true, out var edge) &&
+                    edge != OptionsSnapEdge.None)
+                {
+                    var main = GetOuterBounds(this);
+                    var mainLeft = main.Left;
+                    var mainTop = main.Top;
+                    var mainRight = mainLeft + main.Width;
+                    var mainBottom = mainTop + main.Height;
+
+                    var dockX = settings.OptionsWindowDockXOffset ?? 0;
+                    var dockY = settings.OptionsWindowDockYOffset ?? 0;
+
+                    var desiredLeft = edge switch
+                    {
+                        OptionsSnapEdge.Right => mainRight + SnapGapPx,
+                        OptionsSnapEdge.Left => mainLeft - w.Width - SnapGapPx,
+                        OptionsSnapEdge.Bottom => ClampOptionsBottomSnapLeft(mainLeft, mainRight, w.Width, dockX),
+                        _ => mainLeft + dockX
+                    };
+                    var desiredTop = edge switch
+                    {
+                        OptionsSnapEdge.Bottom => mainBottom + SnapGapPx,
+                        _ => mainTop + dockY
+                    };
+
+                    // Keep persisted dock offsets consistent even when Main size changes while aux is closed.
+                    if (edge == OptionsSnapEdge.Bottom)
+                        _optionsDockXOffset = desiredLeft - mainLeft;
+                    else
+                        _optionsDockYOffset = desiredTop - mainTop;
+
+                    w.WindowStartupLocation = WindowStartupLocation.Manual;
+                    w.Left = desiredLeft;
+                    w.Top = desiredTop;
+                    placedBySnap = true;
+                }
+            }
+            catch { /* ignore */ }
+
+            if (!placedBySnap && settings.OptionsWindowLeft is double l && settings.OptionsWindowTop is double t)
             {
                 w.WindowStartupLocation = WindowStartupLocation.Manual;
                 var vsLeft = SystemParameters.VirtualScreenLeft;
@@ -12589,7 +12380,51 @@ public partial class MainWindow : Window
             if (settings.PlaylistWindowHeight is > 200 and < 10000)
                 w.Height = settings.PlaylistWindowHeight.Value;
 
-            if (settings.PlaylistWindowLeft is double l && settings.PlaylistWindowTop is double t)
+            // If snapped, restore relative to Main rather than using absolute coords.
+            var placedBySnap = false;
+            try
+            {
+                if ((settings.PlaylistWindowSnapped ?? false) &&
+                    Enum.TryParse<PlaylistSnapEdge>(settings.PlaylistWindowSnapEdge, ignoreCase: true, out var edge) &&
+                    edge != PlaylistSnapEdge.None)
+                {
+                    var main = GetOuterBounds(this);
+                    var mainLeft = main.Left;
+                    var mainTop = main.Top;
+                    var mainRight = mainLeft + main.Width;
+                    var mainBottom = mainTop + main.Height;
+
+                    var dockX = settings.PlaylistWindowDockXOffset ?? 0;
+                    var dockY = settings.PlaylistWindowDockYOffset ?? 0;
+
+                    var desiredLeft = edge switch
+                    {
+                        PlaylistSnapEdge.Right => mainRight + SnapGapPx,
+                        PlaylistSnapEdge.Left => mainLeft - w.Width - SnapGapPx,
+                        PlaylistSnapEdge.Bottom or PlaylistSnapEdge.Top => mainLeft + dockX,
+                        _ => mainLeft + dockX
+                    };
+                    var desiredTop = edge switch
+                    {
+                        PlaylistSnapEdge.Bottom => mainBottom + SnapGapPx,
+                        PlaylistSnapEdge.Top => mainTop - w.Height - SnapGapPx,
+                        _ => mainTop + dockY
+                    };
+
+                    if (edge is PlaylistSnapEdge.Bottom or PlaylistSnapEdge.Top)
+                        _playlistDockXOffset = desiredLeft - mainLeft;
+                    else
+                        _playlistDockYOffset = desiredTop - mainTop;
+
+                    w.WindowStartupLocation = WindowStartupLocation.Manual;
+                    w.Left = desiredLeft;
+                    w.Top = desiredTop;
+                    placedBySnap = true;
+                }
+            }
+            catch { /* ignore */ }
+
+            if (!placedBySnap && settings.PlaylistWindowLeft is double l && settings.PlaylistWindowTop is double t)
             {
                 w.WindowStartupLocation = WindowStartupLocation.Manual;
                 var vsLeft = SystemParameters.VirtualScreenLeft;
@@ -12626,7 +12461,51 @@ public partial class MainWindow : Window
             if (settings.LyricsWindowHeight is > 200 and < 10000)
                 w.Height = settings.LyricsWindowHeight.Value;
 
-            if (settings.LyricsWindowLeft is double l && settings.LyricsWindowTop is double t)
+            // If snapped, restore relative to Main rather than using absolute coords.
+            var placedBySnap = false;
+            try
+            {
+                if ((settings.LyricsWindowSnapped ?? false) &&
+                    Enum.TryParse<LyricsSnapEdge>(settings.LyricsWindowSnapEdge, ignoreCase: true, out var edge) &&
+                    edge != LyricsSnapEdge.None)
+                {
+                    var main = GetOuterBounds(this);
+                    var mainLeft = main.Left;
+                    var mainTop = main.Top;
+                    var mainRight = mainLeft + main.Width;
+                    var mainBottom = mainTop + main.Height;
+
+                    var dockX = settings.LyricsWindowDockXOffset ?? 0;
+                    var dockY = settings.LyricsWindowDockYOffset ?? 0;
+
+                    var desiredLeft = edge switch
+                    {
+                        LyricsSnapEdge.Right => mainRight + SnapGapPx,
+                        LyricsSnapEdge.Left => mainLeft - w.Width - SnapGapPx,
+                        LyricsSnapEdge.Bottom or LyricsSnapEdge.Top => mainLeft + dockX,
+                        _ => mainLeft + dockX
+                    };
+                    var desiredTop = edge switch
+                    {
+                        LyricsSnapEdge.Bottom => mainBottom + SnapGapPx,
+                        LyricsSnapEdge.Top => mainTop - w.Height - SnapGapPx,
+                        _ => mainTop + dockY
+                    };
+
+                    if (edge is LyricsSnapEdge.Bottom or LyricsSnapEdge.Top)
+                        _lyricsDockXOffset = desiredLeft - mainLeft;
+                    else
+                        _lyricsDockYOffset = desiredTop - mainTop;
+
+                    w.WindowStartupLocation = WindowStartupLocation.Manual;
+                    w.Left = desiredLeft;
+                    w.Top = desiredTop;
+                    placedBySnap = true;
+                }
+            }
+            catch { /* ignore */ }
+
+            if (!placedBySnap && settings.LyricsWindowLeft is double l && settings.LyricsWindowTop is double t)
             {
                 w.WindowStartupLocation = WindowStartupLocation.Manual;
                 var vsLeft = SystemParameters.VirtualScreenLeft;

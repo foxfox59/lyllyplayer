@@ -17,4 +17,3 @@ public enum PlaylistSortDirection
 }
 
 public readonly record struct PlaylistSortSpec(PlaylistSortMode Mode, PlaylistSortDirection Direction);
-

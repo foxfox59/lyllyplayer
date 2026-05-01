@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using LyllyPlayer.Utils;
+using LyllyPlayer.ShellServices;
 
 namespace LyllyPlayer.Windows;
 
@@ -18,6 +19,7 @@ public partial class LyricsWindow : Window
     private readonly Func<bool> _getIsPlainLyrics;
     private readonly Func<int> _getCurrentLineIndex;
     private int _lastScrolledIndex = -1;
+    private readonly LyricsWindowPresenter _presenter = new();
 
     public LyricsWindow(
         Func<bool> lyricsEnabled,
@@ -53,37 +55,30 @@ public partial class LyricsWindow : Window
         try
         {
             var enabled = _getLyricsEnabled();
-
-            if (!enabled)
-            {
-                LyricsTitleLabel.Content = "Lyrics not enabled";
-                LyricsListBox.ItemsSource = null;
-                return;
-            }
-
-            if (!_getHasLyrics())
-            {
-                LyricsTitleLabel.Content = "No lyrics available";
-                LyricsListBox.ItemsSource = null;
-                return;
-            }
-
-            var isPlain = _getIsPlainLyrics();
+            var hasLyrics = false;
+            try { hasLyrics = _getHasLyrics(); } catch { hasLyrics = false; }
+            var isPlain = false;
+            try { isPlain = _getIsPlainLyrics(); } catch { isPlain = false; }
             var title = _getLyricsTitle();
             var lines = _getLyricsLines();
 
-            if (isPlain)
-            {
-                LyricsTitleLabel.Content = "No synced lyrics available";
-                LyricsListBox.ItemsSource = lines;
+            // Note: Items.Count isn't updated until after ItemsSource assignment; pass current count as best-effort.
+            var state = _presenter.BuildRefreshState(
+                lyricsEnabled: enabled,
+                hasLyrics: hasLyrics,
+                isPlainLyrics: isPlain,
+                title: title,
+                lines: lines,
+                getCurrentLineIndex: _getCurrentLineIndex,
+                itemsCountOrZero: LyricsListBox.Items.Count);
+
+            LyricsTitleLabel.Content = state.TitleText;
+            LyricsListBox.ItemsSource = state.Lines;
+
+            if (state.Lines is null)
                 return;
-            }
-
-            if (string.IsNullOrWhiteSpace(title))
-                title = "(No title)";
-
-            LyricsTitleLabel.Content = title;
-            LyricsListBox.ItemsSource = lines;
+            if (state.IsPlainLyrics)
+                return;
 
             // Defer initial selection/scroll until after layout settles.
             // On reopen we want to keep the currently highlighted line, not jump to index 0.
@@ -94,8 +89,7 @@ public partial class LyricsWindow : Window
                 {
                     if (LyricsListBox.Items.Count > 0)
                     {
-                        var idx = -1;
-                        try { idx = _getCurrentLineIndex(); } catch { idx = -1; }
+                        var idx = state.InitialSelectedIndex ?? 0;
                         if (idx < 0 || idx >= LyricsListBox.Items.Count)
                             idx = 0;
 
@@ -123,11 +117,13 @@ public partial class LyricsWindow : Window
         try
         {
             // Don't update highlight for plain lyrics (no time alignment)
-            if (_getIsPlainLyrics())
+            var isPlain = false;
+            try { isPlain = _getIsPlainLyrics(); } catch { isPlain = false; }
+            var index = -1;
+            try { index = _getCurrentLineIndex(); } catch { index = -1; }
+            if (!_presenter.TryGetHighlightIndex(isPlain, index, LyricsListBox.Items.Count, out var selectedIndex))
                 return;
-
-            var index = _getCurrentLineIndex();
-            if (index < 0 || index >= LyricsListBox.Items.Count)
+            if (selectedIndex < 0)
             {
                 LyricsListBox.SelectedIndex = -1;
                 _lastScrolledIndex = -1;
@@ -135,19 +131,19 @@ public partial class LyricsWindow : Window
             }
 
             // Only scroll when the line actually changes — prevents jittery fighting with user scroll
-            if (index == _lastScrolledIndex)
+            if (selectedIndex == _lastScrolledIndex)
             {
-                LyricsListBox.SelectedIndex = index;
+                LyricsListBox.SelectedIndex = selectedIndex;
                 return;
             }
 
-            LyricsListBox.SelectedIndex = index;
-            _lastScrolledIndex = index;
+            LyricsListBox.SelectedIndex = selectedIndex;
+            _lastScrolledIndex = selectedIndex;
 
             // Pin the selected line near the top for better readability.
             // Defer so layout/containers are ready and we don't fight ScrollIntoView.
             Dispatcher.BeginInvoke(
-                new Action(() => ScrollSelectedNearTopBestEffort(selectedIndex: index)),
+                new Action(() => ScrollSelectedNearTopBestEffort(selectedIndex: selectedIndex)),
                 DispatcherPriority.Background);
         }
         catch { /* ignore */ }

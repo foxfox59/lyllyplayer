@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using LyllyPlayer.Settings;
 using LyllyPlayer.Utils;
+using LyllyPlayer.ShellServices;
 using NAudio.Wave;
 using Forms = System.Windows.Forms;
 
@@ -135,65 +136,7 @@ public partial class OptionsWindow : Window
     private readonly Func<LyllyPlayer.Settings.RectN?> _getBackgroundUserDefinedLyrics;
     private readonly Action<LyllyPlayer.Settings.RectN?> _setBackgroundUserDefinedLyrics;
 
-    private sealed class Draft
-    {
-        public string YtDlpPath = "";
-        public string FfmpegPath = "";
-        public int CacheMaxMb;
-        public int? PlaylistAutoRefreshMinutes;
-        public bool GlobalMediaKeysEnabled;
-
-        public string ThemeMode = "Auto";
-        public string BackgroundMode = "Default";
-        public string CustomBackgroundImagePath = "";
-        public string BackgroundColorMode = "Default";
-        public string CustomBackgroundColor = "";
-        public int BackgroundAlpha = SettingsStore.DefaultBackgroundAlpha;
-        public int BackgroundScrimPercent = SettingsStore.DefaultBackgroundScrimPercent;
-        public string BackgroundImageStretch = "Stretch";
-        public LyllyPlayer.Settings.RectN BackgroundUserDefinedMainNormal = LyllyPlayer.Settings.RectN.Full;
-        public LyllyPlayer.Settings.RectN BackgroundUserDefinedMainCompact = LyllyPlayer.Settings.RectN.Full;
-        public LyllyPlayer.Settings.RectN BackgroundUserDefinedMainUltra = LyllyPlayer.Settings.RectN.Full;
-        public LyllyPlayer.Settings.RectN BackgroundUserDefinedPlaylist = LyllyPlayer.Settings.RectN.Full;
-        public LyllyPlayer.Settings.RectN BackgroundUserDefinedOptionsLog = LyllyPlayer.Settings.RectN.Full;
-        public LyllyPlayer.Settings.RectN BackgroundUserDefinedLyrics = LyllyPlayer.Settings.RectN.Full;
-        public string AppTitleMode = "Default";
-        public string CustomAppTitle = "";
-        public int UiScalePercent = 100;
-
-        public string WindowBorderMode = "None";
-        public double WindowBorderCustomPx = 2;
-
-        public int SearchDefaultCount = 50;
-        public int SearchMinLengthSeconds;
-
-        public bool IncludeSubfoldersOnFolderLoad;
-        public bool ReadMetadataOnLoad;
-        public bool AlwaysOnTopPlaylistWindow;
-        public bool AlwaysOnTopOptionsWindow;
-        public bool AlwaysOnTopLyricsWindow;
-        public bool CompactModeHidesAuxWindows;
-        public string CompactModeLayout = "Normal";
-        public bool KeepIncompletePlaylistOnCancel;
-        public bool LyricsEnabled;
-        public bool LyricsLocalFilesEnabled;
-        public bool ExportM3uIncludeYoutube;
-        public bool ExportM3uPreferRelativePaths;
-        public bool ExportM3uIncludeLyllyMetadata;
-        public string AppIconVisibility = "TaskbarOnly";
-
-        public string NodeJsPath = "";
-        public string YtdlpEjsComponentSource = "github";
-        public bool YoutubeCookiesEnabled;
-        public string YoutubeCookiesText = "";
-        public string AudioQuality = "Auto";
-        public string? AudioOutputDevice; // null = Default (WAVE_MAPPER)
-        public string AppLogLevel = "ErrorsAndWarnings";
-        public int AppLogMaxMb = SettingsStore.DefaultAppLogMaxMb;
-        public string OptionsSelectedTab = "Tools";
-    }
-
-    private Draft _draft = new();
+    private OptionsDraft _draft = new();
 
     public OptionsWindow(
         Func<string> getYtDlpPath,
@@ -444,77 +387,55 @@ public partial class OptionsWindow : Window
 
     private void LoadDraftFromCurrent()
     {
-        try { _draft.YtDlpPath = _getYtDlpPath() ?? ""; } catch { _draft.YtDlpPath = ""; }
-        try { _draft.FfmpegPath = _getFfmpegPath() ?? ""; } catch { _draft.FfmpegPath = ""; }
-        try { _draft.NodeJsPath = _getNodeJsPath() ?? ""; } catch { _draft.NodeJsPath = ""; }
-        try
-        {
-            var ejs = _getYtdlpEjsComponentSource() ?? "github";
-            _draft.YtdlpEjsComponentSource = string.Equals(ejs, "bundled", StringComparison.OrdinalIgnoreCase) ? "bundled" : "github";
-        }
-        catch { _draft.YtdlpEjsComponentSource = "github"; }
-        try { _draft.YoutubeCookiesEnabled = _getYoutubeCookiesFromBrowserEnabled(); } catch { _draft.YoutubeCookiesEnabled = false; }
-        try { _draft.YoutubeCookiesText = _getYoutubeCookiesFromBrowser() ?? ""; } catch { _draft.YoutubeCookiesText = ""; }
-        try { _draft.CacheMaxMb = Math.Clamp(_getCacheMaxMb(), 16, 102400); } catch { _draft.CacheMaxMb = 2048; }
-        try { _draft.PlaylistAutoRefreshMinutes = _getPlaylistAutoRefreshMinutes(); } catch { _draft.PlaylistAutoRefreshMinutes = null; }
-        try { _draft.GlobalMediaKeysEnabled = _getGlobalMediaKeysEnabled(); } catch { _draft.GlobalMediaKeysEnabled = false; }
-
-        try { _draft.ThemeMode = SettingsStore.NormalizeThemeMode(_getThemeMode()); } catch { _draft.ThemeMode = "Auto"; }
-        try { _draft.BackgroundMode = SettingsStore.NormalizeBackgroundMode(_getBackgroundMode()); } catch { _draft.BackgroundMode = "Default (Lylly)"; }
-        try { _draft.CustomBackgroundImagePath = _getCustomBackgroundImagePath() ?? ""; } catch { _draft.CustomBackgroundImagePath = ""; }
-        try { _draft.BackgroundColorMode = SettingsStore.NormalizeBackgroundColorMode(_getBackgroundColorMode()); } catch { _draft.BackgroundColorMode = "Default"; }
-        try { _draft.CustomBackgroundColor = _getCustomBackgroundColor() ?? ""; } catch { _draft.CustomBackgroundColor = ""; }
-        try { _draft.BackgroundAlpha = Math.Clamp(_getBackgroundAlpha(), 0, 255); } catch { _draft.BackgroundAlpha = SettingsStore.DefaultBackgroundAlpha; }
-        try { _draft.BackgroundScrimPercent = Math.Clamp(_getBackgroundScrimPercent(), 0, 80); } catch { _draft.BackgroundScrimPercent = SettingsStore.DefaultBackgroundScrimPercent; }
-        try { _draft.BackgroundImageStretch = SettingsStore.NormalizeBackgroundImageStretch(_getBackgroundImageStretch()); } catch { _draft.BackgroundImageStretch = "Stretch"; }
-        try { _draft.BackgroundUserDefinedMainNormal = _getBackgroundUserDefinedMainNormal() ?? LyllyPlayer.Settings.RectN.Full; } catch { _draft.BackgroundUserDefinedMainNormal = LyllyPlayer.Settings.RectN.Full; }
-        try { _draft.BackgroundUserDefinedMainCompact = _getBackgroundUserDefinedMainCompact() ?? _draft.BackgroundUserDefinedMainNormal; } catch { _draft.BackgroundUserDefinedMainCompact = _draft.BackgroundUserDefinedMainNormal; }
-        try { _draft.BackgroundUserDefinedMainUltra = _getBackgroundUserDefinedMainUltra() ?? _draft.BackgroundUserDefinedMainNormal; } catch { _draft.BackgroundUserDefinedMainUltra = _draft.BackgroundUserDefinedMainNormal; }
-        try { _draft.BackgroundUserDefinedPlaylist = _getBackgroundUserDefinedPlaylist() ?? LyllyPlayer.Settings.RectN.Full; } catch { _draft.BackgroundUserDefinedPlaylist = LyllyPlayer.Settings.RectN.Full; }
-        try { _draft.BackgroundUserDefinedOptionsLog = _getBackgroundUserDefinedOptionsLog() ?? LyllyPlayer.Settings.RectN.Full; } catch { _draft.BackgroundUserDefinedOptionsLog = LyllyPlayer.Settings.RectN.Full; }
-        try { _draft.BackgroundUserDefinedLyrics = _getBackgroundUserDefinedLyrics() ?? LyllyPlayer.Settings.RectN.Full; } catch { _draft.BackgroundUserDefinedLyrics = LyllyPlayer.Settings.RectN.Full; }
-        try { _draft.AppTitleMode = string.IsNullOrWhiteSpace(_getAppTitleMode()) ? "Default" : _getAppTitleMode().Trim(); } catch { _draft.AppTitleMode = "Default"; }
-        try { _draft.CustomAppTitle = _getCustomAppTitle() ?? ""; } catch { _draft.CustomAppTitle = ""; }
-        try { _draft.UiScalePercent = Math.Clamp(_getUiScalePercent(), 50, 200); } catch { _draft.UiScalePercent = 100; }
-        try { _draft.WindowBorderMode = string.IsNullOrWhiteSpace(_getWindowBorderMode()) ? "None" : _getWindowBorderMode().Trim(); } catch { _draft.WindowBorderMode = "None"; }
-        try { _draft.WindowBorderCustomPx = Math.Clamp(_getWindowBorderCustomPx(), 1, 24); } catch { _draft.WindowBorderCustomPx = 2; }
-
-        try
-        {
-            var (c, min) = _getSearchDefaults();
-            _draft.SearchDefaultCount = Math.Clamp(c, 1, 200);
-            _draft.SearchMinLengthSeconds = Math.Clamp(min, 0, 3600);
-        }
-        catch
-        {
-            _draft.SearchDefaultCount = 50;
-            _draft.SearchMinLengthSeconds = 0;
-        }
-
-        try { _draft.IncludeSubfoldersOnFolderLoad = _getIncludeSubfoldersOnFolderLoad(); } catch { _draft.IncludeSubfoldersOnFolderLoad = false; }
-        try { _draft.ReadMetadataOnLoad = _getReadMetadataOnLoad(); } catch { _draft.ReadMetadataOnLoad = false; }
-        try { _draft.AlwaysOnTopPlaylistWindow = _getAlwaysOnTopPlaylistWindow(); } catch { _draft.AlwaysOnTopPlaylistWindow = false; }
-        try { _draft.AlwaysOnTopOptionsWindow = _getAlwaysOnTopOptionsWindow(); } catch { _draft.AlwaysOnTopOptionsWindow = false; }
-        try { _draft.AlwaysOnTopLyricsWindow = _getAlwaysOnTopLyricsWindow(); } catch { _draft.AlwaysOnTopLyricsWindow = false; }
-        try { _draft.CompactModeHidesAuxWindows = _getCompactModeHidesAuxWindows(); } catch { _draft.CompactModeHidesAuxWindows = true; }
-        try { _draft.CompactModeLayout = SettingsStore.NormalizeCompactModeLayout(_getCompactModeLayout()); } catch { _draft.CompactModeLayout = "Normal"; }
-        try { _draft.KeepIncompletePlaylistOnCancel = _getKeepIncompletePlaylistOnCancel(); } catch { _draft.KeepIncompletePlaylistOnCancel = false; }
-        try { _draft.ExportM3uIncludeYoutube = _getExportM3uIncludeYoutube(); } catch { _draft.ExportM3uIncludeYoutube = true; }
-        try { _draft.ExportM3uPreferRelativePaths = _getExportM3uPreferRelativePaths(); } catch { _draft.ExportM3uPreferRelativePaths = false; }
-        try { _draft.ExportM3uIncludeLyllyMetadata = _getExportM3uIncludeLyllyMetadata(); } catch { _draft.ExportM3uIncludeLyllyMetadata = true; }
-        try { _draft.AppIconVisibility = SettingsStore.NormalizeAppIconVisibility(_getAppIconVisibility()); } catch { _draft.AppIconVisibility = "TaskbarOnly"; }
-        try
-        {
-            var q = _getAudioQuality();
-            _draft.AudioQuality = q is "Auto" or "High" or "Medium" or "Low" ? q : "Auto";
-        }
-        catch { _draft.AudioQuality = "Auto"; }
-        try { _draft.AudioOutputDevice = _getAudioOutputDevice(); } catch { _draft.AudioOutputDevice = null; }
-        try { _draft.AppLogLevel = AppLog.NormalizeLevelString(_getAppLogLevel()); } catch { _draft.AppLogLevel = "ErrorsAndWarnings"; }
-        try { _draft.AppLogMaxMb = Math.Clamp(_getAppLogMaxMb(), 1, 200); } catch { _draft.AppLogMaxMb = SettingsStore.DefaultAppLogMaxMb; }
-        try { _draft.OptionsSelectedTab = SettingsStore.NormalizeOptionsWindowSelectedTab(_getOptionsSelectedTab()); } catch { _draft.OptionsSelectedTab = "Tools"; }
-        try { _draft.LyricsEnabled = _getLyricsEnabled(); } catch { _draft.LyricsEnabled = false; }
-        try { _draft.LyricsLocalFilesEnabled = _getLyricsLocalFilesEnabled(); } catch { _draft.LyricsLocalFilesEnabled = false; }
+        _draft = OptionsDraftLoader.LoadFromCurrent(
+            _getYtDlpPath,
+            _getFfmpegPath,
+            _getNodeJsPath,
+            _getYtdlpEjsComponentSource,
+            _getYoutubeCookiesFromBrowserEnabled,
+            _getYoutubeCookiesFromBrowser,
+            _getCacheMaxMb,
+            _getPlaylistAutoRefreshMinutes,
+            _getGlobalMediaKeysEnabled,
+            _getThemeMode,
+            _getBackgroundMode,
+            _getCustomBackgroundImagePath,
+            _getBackgroundColorMode,
+            _getCustomBackgroundColor,
+            _getBackgroundAlpha,
+            _getBackgroundScrimPercent,
+            _getBackgroundImageStretch,
+            _getBackgroundUserDefinedMainNormal,
+            _getBackgroundUserDefinedMainCompact,
+            _getBackgroundUserDefinedMainUltra,
+            _getBackgroundUserDefinedPlaylist,
+            _getBackgroundUserDefinedOptionsLog,
+            _getBackgroundUserDefinedLyrics,
+            _getAppTitleMode,
+            _getCustomAppTitle,
+            _getUiScalePercent,
+            _getWindowBorderMode,
+            _getWindowBorderCustomPx,
+            _getSearchDefaults,
+            _getIncludeSubfoldersOnFolderLoad,
+            _getReadMetadataOnLoad,
+            _getAlwaysOnTopPlaylistWindow,
+            _getAlwaysOnTopOptionsWindow,
+            _getAlwaysOnTopLyricsWindow,
+            _getCompactModeHidesAuxWindows,
+            _getCompactModeLayout,
+            _getKeepIncompletePlaylistOnCancel,
+            _getExportM3uIncludeYoutube,
+            _getExportM3uPreferRelativePaths,
+            _getExportM3uIncludeLyllyMetadata,
+            _getAppIconVisibility,
+            _getAudioQuality,
+            _getAudioOutputDevice,
+            _getAppLogLevel,
+            _getAppLogMaxMb,
+            _getOptionsSelectedTab,
+            _getLyricsEnabled,
+            _getLyricsLocalFilesEnabled);
     }
 
     private void RefreshUi()

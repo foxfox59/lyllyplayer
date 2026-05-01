@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>LyllyPlayer</RootNamespace>
+    <AssemblyName>LyllyPlayer.Core</AssemblyName>
+    <Description>LyllyPlayer platform-agnostic domain and services</Description>
+  </PropertyGroup>
+
+</Project>

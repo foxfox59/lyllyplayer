@@ -26,55 +26,100 @@ public sealed class QueueItem : INotifyPropertyChanged
     public int? BaseIndex { get; init; }
     public Guid? QueueInstanceId { get; init; }
     public int? QueueOrdinal { get; set; }
+    private string? _displayTitleCache;
     public string DisplayTitle
-        => false
-            ? ""
-            : $"{(IsQueued && QueueOrdinal is int q ? $"Q{q}. " : "")}{(!string.IsNullOrWhiteSpace(IndexPrefix) ? IndexPrefix : "")}{(IsPremium ? "[PREMIUM] " : "")}{(string.IsNullOrWhiteSpace(Channel) ? Title : $"{Title} — {Channel}")}{(RequiresCookies ? " [auth]" : "")}{(IsUnavailable ? " (Not available)" : "")}";
+    {
+        get
+        {
+            // This is bound for *every* row; cache aggressively and invalidate on updates.
+            if (_displayTitleCache is not null)
+                return _displayTitleCache;
+
+            var prefix = (IsQueued && QueueOrdinal is int q ? $"Q{q}. " : "");
+            var indexPrefix = (!string.IsNullOrWhiteSpace(IndexPrefix) ? IndexPrefix : "");
+            var premium = (IsPremium ? "[PREMIUM] " : "");
+            var main = (string.IsNullOrWhiteSpace(Channel) ? Title : $"{Title} — {Channel}");
+            var auth = (RequiresCookies ? " [auth]" : "");
+            var unavailable = (IsUnavailable ? " (Not available)" : "");
+            _displayTitleCache = $"{prefix}{indexPrefix}{premium}{main}{auth}{unavailable}";
+            return _displayTitleCache;
+        }
+    }
     public int? DurationSeconds => Entry?.DurationSeconds;
     public string WebpageUrl => Entry?.WebpageUrl ?? "";
+
+    private bool? _isLocalCache;
     private bool IsLocal
     {
         get
         {
+            if (_isLocalCache is bool b)
+                return b;
             if (VideoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
-                return true;
-            try { return Path.IsPathRooted(WebpageUrl); } catch { return false; }
+                return (_isLocalCache = true).Value;
+            try { return (_isLocalCache = Path.IsPathRooted(WebpageUrl)).Value; } catch { return (_isLocalCache = false).Value; }
         }
     }
 
+    private bool? _isStreamCache;
     private bool IsStream
     {
         get
         {
+            if (_isStreamCache is bool b)
+                return b;
             if (IsLocal) return false;
             var s = WebpageUrl;
             if (string.IsNullOrWhiteSpace(s)) return false;
-            if (!Uri.TryCreate(s, UriKind.Absolute, out var uri)) return false;
+            if (!Uri.TryCreate(s, UriKind.Absolute, out var uri)) return (_isStreamCache = false).Value;
             if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-                return false;
+                return (_isStreamCache = false).Value;
             var h = uri.Host ?? "";
             if (h.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) || h.Contains("youtu.be", StringComparison.OrdinalIgnoreCase))
-                return false;
-            return true;
+                return (_isStreamCache = false).Value;
+            return (_isStreamCache = true).Value;
         }
     }
 
+    private bool? _isYoutubeCache;
     private bool IsYoutube
     {
         get
         {
+            if (_isYoutubeCache is bool b)
+                return b;
             if (IsLocal) return false;
             var s = WebpageUrl;
             if (string.IsNullOrWhiteSpace(s)) return false;
-            if (!Uri.TryCreate(s, UriKind.Absolute, out var uri)) return false;
+            if (!Uri.TryCreate(s, UriKind.Absolute, out var uri)) return (_isYoutubeCache = false).Value;
             var h = uri.Host ?? "";
-            return h.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) || h.Contains("youtu.be", StringComparison.OrdinalIgnoreCase);
+            return (_isYoutubeCache = (h.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) || h.Contains("youtu.be", StringComparison.OrdinalIgnoreCase))).Value;
         }
     }
 
+    private string? _sourceGlyphCache;
     public string SourceGlyph
-        => IsLocal ? "\uD83D\uDCC1" : (IsStream ? "\u2248" : (IsYoutube ? "\u25B6" : ""));
+        => _sourceGlyphCache ??= (IsLocal ? "\uD83D\uDCC1" : (IsStream ? "\u2248" : (IsYoutube ? "\u25B6" : "")));
+
+    private string? _searchHaystackLower;
+    public string GetSearchHaystackLower()
+    {
+        if (_searchHaystackLower is not null)
+            return _searchHaystackLower;
+        _searchHaystackLower = $"{Title}\u001f{Channel ?? ""}\u001f{DisplayTitle}\u001f{WebpageUrl}".ToLowerInvariant();
+        return _searchHaystackLower;
+    }
+
+    private void InvalidateCaches()
+    {
+        _displayTitleCache = null;
+        _sourceGlyphCache = null;
+        _searchHaystackLower = null;
+        _isLocalCache = null;
+        _isStreamCache = null;
+        _isYoutubeCache = null;
+    }
 
     private bool _isPremium;
     public bool IsPremium
@@ -84,6 +129,7 @@ public sealed class QueueItem : INotifyPropertyChanged
         {
             if (_isPremium == value) return;
             _isPremium = value;
+            InvalidateCaches();
             OnPropertyChanged();
             OnPropertyChanged(nameof(DisplayTitle));
         }
@@ -97,6 +143,7 @@ public sealed class QueueItem : INotifyPropertyChanged
         {
             if (_isUnavailable == value) return;
             _isUnavailable = value;
+            InvalidateCaches();
             OnPropertyChanged();
             OnPropertyChanged(nameof(DisplayTitle));
         }
@@ -140,6 +187,7 @@ public sealed class QueueItem : INotifyPropertyChanged
     public void UpdateEntry(PlaylistEntry entry)
     {
         Entry = entry;
+        InvalidateCaches();
         OnPropertyChanged(nameof(Entry));
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(Channel));
@@ -150,5 +198,3 @@ public sealed class QueueItem : INotifyPropertyChanged
         OnPropertyChanged(nameof(RequiresCookies));
     }
 }
-
-

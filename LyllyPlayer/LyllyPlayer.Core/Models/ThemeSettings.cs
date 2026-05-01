@@ -16,4 +16,3 @@ public sealed record ThemeSettings(
     string? WindowBorderMode,
     double? WindowBorderCustomPx
 );
-

@@ -30,4 +30,3 @@ public sealed record SavedPlaylistEntry(
     string? Channel,
     string Url
 );
-

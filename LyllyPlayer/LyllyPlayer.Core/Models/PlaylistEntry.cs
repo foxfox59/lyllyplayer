@@ -12,5 +12,3 @@ public sealed record PlaylistEntry(
     /// </summary>
     bool RequiresCookies = false
 );
-
-

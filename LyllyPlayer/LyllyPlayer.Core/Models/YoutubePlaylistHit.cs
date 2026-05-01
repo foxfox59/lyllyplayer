@@ -6,4 +6,3 @@ public sealed record YoutubePlaylistHit(
     string? Channel,
     int? ItemCount
 );
-

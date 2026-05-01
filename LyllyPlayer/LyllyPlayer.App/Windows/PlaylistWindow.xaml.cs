@@ -17,24 +17,13 @@ using Microsoft.Win32;
 using Forms = System.Windows.Forms;
 using LyllyPlayer.Models;
 using LyllyPlayer.Utils;
+using LyllyPlayer.ShellServices;
 using System.Threading;
 
 namespace LyllyPlayer.Windows;
 
 public partial class PlaylistWindow : Window
 {
-    private sealed class SortChoice
-    {
-        public PlaylistSortMode Mode { get; }
-        public string Label { get; }
-        public SortChoice(PlaylistSortMode mode, string label)
-        {
-            Mode = mode;
-            Label = label;
-        }
-        public override string ToString() => Label;
-    }
-
     private sealed class Win32OwnerWrapper : Forms.IWin32Window
     {
         public IntPtr Handle { get; }
@@ -212,16 +201,8 @@ public partial class PlaylistWindow : Window
             var isYoutube = false;
             try { isYoutube = _getIsYoutubeSource(); } catch { /* ignore */ }
 
-            var items = new List<SortChoice>
-            {
-                new(PlaylistSortMode.None, "None"),
-                new(PlaylistSortMode.NameOrTitle, isYoutube ? "Title" : "Name"),
-                new(PlaylistSortMode.ChannelOrPath, "Source"),
-                new(PlaylistSortMode.Duration, "Duration"),
-            };
-
             var wantMode = _lastSortSpec.Mode;
-            SortModeComboBox.ItemsSource = items;
+            SortModeComboBox.ItemsSource = PlaylistWindowSorting.BuildSortChoices(isYoutube);
             SortModeComboBox.DisplayMemberPath = "Label";
             SortModeComboBox.SelectedValuePath = "Mode";
             // Force the SelectionBoxItem to update when labels change (YouTube vs Local).
@@ -368,10 +349,20 @@ public partial class PlaylistWindow : Window
             _playlistViewSource = new CollectionViewSource { Source = _playlistItemsSource };
             _playlistViewSource.View.Filter = PlaylistFilterPredicate;
             PlaylistListBox.ItemsSource = _playlistViewSource.View;
+
+            // Let the window render before we do any expensive view work (filtering can be O(n)).
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try { _playlistViewSource?.View.Refresh(); } catch { /* ignore */ }
+            }), DispatcherPriority.Background);
         }
         else
         {
-            _playlistViewSource.View.Refresh();
+            // Avoid blocking the UI thread during window open; refresh lazily.
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try { _playlistViewSource?.View.Refresh(); } catch { /* ignore */ }
+            }), DispatcherPriority.Background);
         }
 
         // Update queue count display
@@ -397,16 +388,7 @@ public partial class PlaylistWindow : Window
 
     private static bool MatchesPlaylistFilterTokens(string query, QueueItem qi)
     {
-        var haystack = $"{qi.Title}\u001f{qi.Channel ?? ""}\u001f{qi.DisplayTitle}\u001f{qi.WebpageUrl}".ToLowerInvariant();
-        foreach (var token in query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (token.Length == 0)
-                continue;
-            if (!haystack.Contains(token.ToLowerInvariant(), StringComparison.Ordinal))
-                return false;
-        }
-
-        return true;
+        return PlaylistWindowFiltering.MatchesPlaylistFilterTokens(query, qi);
     }
 
     private void ApplyPlaylistFilterFromTextBox()
