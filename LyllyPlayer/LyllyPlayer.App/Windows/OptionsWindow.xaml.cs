@@ -687,21 +687,22 @@ public partial class OptionsWindow : Window
     private void RefreshToolsResolution()
     {
         var y = ToolPathResolver.Resolve(string.IsNullOrWhiteSpace(_draft.YtDlpPath) ? null : _draft.YtDlpPath, "yt-dlp");
-        var f = ToolPathResolver.Resolve(string.IsNullOrWhiteSpace(_draft.FfmpegPath) ? null : _draft.FfmpegPath, "ffmpeg");
         var n = ToolPathResolver.Resolve(string.IsNullOrWhiteSpace(_draft.NodeJsPath) ? null : _draft.NodeJsPath, "node");
 
         YtDlpPathTextBox.Text = y.DisplayText;
         YtDlpSourceTextBlock.Text = SourceSubtitle(y.Source);
-        FfmpegPathTextBox.Text = f.DisplayText;
-        FfmpegSourceTextBlock.Text = SourceSubtitle(f.Source);
+        try
+        {
+            FfmpegPathTextBox.Text = "(not used — LibVLC)";
+            FfmpegSourceTextBlock.Text = "";
+        }
+        catch { /* ignore */ }
         NodePathTextBox.Text = n.DisplayText;
         NodeSourceTextBlock.Text = SourceSubtitle(n.Source);
 
         var pathLines = new List<string>();
         if (y is { IsFound: true, Source: ToolPathSource.Path })
             pathLines.Add($"yt-dlp → {y.DisplayText}");
-        if (f is { IsFound: true, Source: ToolPathSource.Path })
-            pathLines.Add($"ffmpeg → {f.DisplayText}");
         if (n is { IsFound: true, Source: ToolPathSource.Path })
             pathLines.Add($"node → {n.DisplayText}");
 

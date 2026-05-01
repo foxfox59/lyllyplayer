@@ -39,11 +39,11 @@ public static class LocalPlaylistLoader
 
     private const int MetadataLoadParallelism = 6;
 
-    /// <summary>Fast path: no ffprobe; filenames only.</summary>
-    public static List<PlaylistEntry> LoadFolder(string folder, bool includeSubfolders, string ffmpegPath, bool readMetadataOnLoad = false)
+    /// <summary>Fast path: no metadata probe; filenames only.</summary>
+    public static List<PlaylistEntry> LoadFolder(string folder, bool includeSubfolders, bool readMetadataOnLoad = false)
     {
         if (readMetadataOnLoad)
-            throw new InvalidOperationException("Use LoadFolderAsync when readMetadataOnLoad is true (ffprobe-based).");
+            throw new InvalidOperationException("Use LoadFolderAsync when readMetadataOnLoad is true.");
 
         return LoadFolderCoreSync(folder, includeSubfolders, CancellationToken.None);
     }
@@ -51,7 +51,6 @@ public static class LocalPlaylistLoader
     public static async Task<List<PlaylistEntry>> LoadFolderAsync(
         string folder,
         bool includeSubfolders,
-        string ffmpegPath,
         bool readMetadataOnLoad,
         CancellationToken ct = default,
         IProgress<(int done, int total)>? metadataProgress = null)
@@ -69,7 +68,7 @@ public static class LocalPlaylistLoader
         using var sem = new SemaphoreSlim(MetadataLoadParallelism, MetadataLoadParallelism);
         async Task<PlaylistEntry> TrackAsync(string file)
         {
-            var e = await MapFileWithMetadataAsync(file, ffmpegPath, sem, ct).ConfigureAwait(false);
+            var e = await MapFileWithMetadataAsync(file, sem, ct).ConfigureAwait(false);
             var d = Interlocked.Increment(ref done);
             try { metadataProgress?.Report((d, total)); } catch { /* ignore */ }
             return e;
@@ -192,7 +191,6 @@ public static class LocalPlaylistLoader
 
     private static async Task<PlaylistEntry> MapFileWithMetadataAsync(
         string file,
-        string ffmpegPath,
         SemaphoreSlim sem,
         CancellationToken ct)
     {
@@ -203,7 +201,7 @@ public static class LocalPlaylistLoader
         await sem.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var info = await LocalMetadataService.TryGetInfoAsync(ffmpegPath, file, ct).ConfigureAwait(false);
+            var info = await LocalMetadataService.TryGetInfoAsync(file, ct).ConfigureAwait(false);
             if (info is not null)
             {
                 if (!string.IsNullOrWhiteSpace(info.Title))
@@ -230,18 +228,17 @@ public static class LocalPlaylistLoader
         );
     }
 
-    /// <summary>Fast path: no ffprobe.</summary>
-    public static (List<PlaylistEntry> entries, string? title) LoadM3u(string m3uPath, string ffmpegPath, bool readMetadataOnLoad = false)
+    /// <summary>Fast path: no metadata probe.</summary>
+    public static (List<PlaylistEntry> entries, string? title) LoadM3u(string m3uPath, bool readMetadataOnLoad = false)
     {
         if (readMetadataOnLoad)
-            throw new InvalidOperationException("Use LoadM3uAsync when readMetadataOnLoad is true (ffprobe-based).");
+            throw new InvalidOperationException("Use LoadM3uAsync when readMetadataOnLoad is true.");
 
         return LoadM3uSyncNoMetadata(m3uPath, CancellationToken.None);
     }
 
     public static Task<(List<PlaylistEntry> entries, string? title)> LoadM3uAsync(
         string m3uPath,
-        string ffmpegPath,
         bool readMetadataOnLoad,
         CancellationToken ct = default,
         IProgress<(int done, int total)>? metadataProgress = null)
@@ -250,12 +247,11 @@ public static class LocalPlaylistLoader
         if (!readMetadataOnLoad)
             return Task.Run(() => LoadM3uSyncNoMetadata(m3uPath, ct), ct);
 
-        return LoadM3uWithMetadataAsync(m3uPath, ffmpegPath, ct, metadataProgress);
+        return LoadM3uWithMetadataAsync(m3uPath, ct, metadataProgress);
     }
 
     private static async Task<(List<PlaylistEntry> entries, string? title)> LoadM3uWithMetadataAsync(
         string m3uPath,
-        string ffmpegPath,
         CancellationToken ct,
         IProgress<(int done, int total)>? metadataProgress)
     {
@@ -268,7 +264,7 @@ public static class LocalPlaylistLoader
         using var sem = new SemaphoreSlim(MetadataLoadParallelism, MetadataLoadParallelism);
         async Task<PlaylistEntry> TrackAsync(M3uAudioRow row)
         {
-            var e = await MapM3uRowWithMetadataAsync(row, ffmpegPath, sem, ct).ConfigureAwait(false);
+            var e = await MapM3uRowWithMetadataAsync(row, sem, ct).ConfigureAwait(false);
             var d = Interlocked.Increment(ref done);
             try { metadataProgress?.Report((d, total)); } catch { /* ignore */ }
             return e;
@@ -365,7 +361,6 @@ public static class LocalPlaylistLoader
 
     private static async Task<PlaylistEntry> MapM3uRowWithMetadataAsync(
         M3uAudioRow row,
-        string ffmpegPath,
         SemaphoreSlim sem,
         CancellationToken ct)
     {
@@ -389,7 +384,7 @@ public static class LocalPlaylistLoader
         await sem.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var info = await LocalMetadataService.TryGetInfoAsync(ffmpegPath, row.Path, ct).ConfigureAwait(false);
+            var info = await LocalMetadataService.TryGetInfoAsync(row.Path, ct).ConfigureAwait(false);
             if (info is not null)
             {
                 if (!string.IsNullOrWhiteSpace(info.Title))

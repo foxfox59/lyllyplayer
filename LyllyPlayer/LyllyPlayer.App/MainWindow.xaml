@@ -338,6 +338,15 @@
                                     HorizontalAlignment="Stretch"
                                     VerticalAlignment="Stretch"
                                     Background="Transparent">
+                                <!-- Buffered cache extent (YouTube cookie-pipe + growing disk cache) -->
+                                <Rectangle x:Name="UltraSeekCacheRect"
+                                           Canvas.Left="0"
+                                           Canvas.Top="0"
+                                           Height="26"
+                                           Width="0"
+                                           Fill="{DynamicResource App.Theme.Accent}"
+                                           Opacity="0.12"
+                                           Visibility="Collapsed"/>
                                 <!-- Fill -->
                                 <Rectangle x:Name="UltraSeekFillRect"
                                            Canvas.Left="0"
@@ -417,18 +426,39 @@
                                        Text="0:00"
                                        VerticalAlignment="Center"
                                        Margin="0,0,8,0"/>
-                            <Slider x:Name="SeekSlider"
-                                    Grid.Column="1"
-                                    Style="{StaticResource App.Slider.Seek}"
-                                    Minimum="0"
-                                    Maximum="1"
-                                    Value="0"
-                                    IsEnabled="False"
-                                    VerticalAlignment="Center"
-                                    PreviewMouseLeftButtonDown="SeekSlider_OnPreviewMouseLeftButtonDown"
-                                    PreviewMouseLeftButtonUp="SeekSlider_OnPreviewMouseLeftButtonUp"
-                                    PreviewMouseMove="SeekSlider_OnPreviewMouseMove"
-                                    ValueChanged="SeekSlider_OnValueChanged"/>
+                            <Grid x:Name="SeekSliderHostGrid"
+                                  Grid.Column="1"
+                                  VerticalAlignment="Center"
+                                  MinHeight="22">
+                                <!-- Buffered extent (growing yt-dlp disk cache behind cookie-pipe playback). -->
+                                <Border x:Name="SeekCacheTrackBorder"
+                                        VerticalAlignment="Center"
+                                        Height="4"
+                                        Margin="6,0,6,0"
+                                        CornerRadius="2"
+                                        Background="{DynamicResource App.Theme.Border}"
+                                        Opacity="0.55"
+                                        SnapsToDevicePixels="True"
+                                        Visibility="Collapsed">
+                                    <Border x:Name="SeekCacheFillBorder"
+                                            HorizontalAlignment="Left"
+                                            Width="0"
+                                            CornerRadius="2"
+                                            Background="{DynamicResource App.Theme.Accent}"
+                                            Opacity="0.35"/>
+                                </Border>
+                                <Slider x:Name="SeekSlider"
+                                        Style="{StaticResource App.Slider.Seek}"
+                                        Minimum="0"
+                                        Maximum="1"
+                                        Value="0"
+                                        IsEnabled="False"
+                                        VerticalAlignment="Center"
+                                        PreviewMouseLeftButtonDown="SeekSlider_OnPreviewMouseLeftButtonDown"
+                                        PreviewMouseLeftButtonUp="SeekSlider_OnPreviewMouseLeftButtonUp"
+                                        PreviewMouseMove="SeekSlider_OnPreviewMouseMove"
+                                        ValueChanged="SeekSlider_OnValueChanged"/>
+                            </Grid>
                             <TextBlock x:Name="DurationTextBlock"
                                        Grid.Column="2"
                                        Text="--:--"

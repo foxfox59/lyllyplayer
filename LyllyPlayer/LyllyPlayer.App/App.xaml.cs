@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Threading;
 using System.Threading;
 using System;
+using LyllyPlayer.Player;
 using LyllyPlayer.Utils;
 
 namespace LyllyPlayer;
@@ -17,6 +18,9 @@ public partial class App : System.Windows.Application
     {
         // Before any HWND: stable shell identity (taskbar / Task Manager "Apps" grouping).
         ShellProcessIdentity.TrySetExplicitAppUserModelId();
+
+        // LibVLC native runtime (VideoLAN.LibVLC.Windows) + LibVLCSharp must initialize before Media/MediaPlayer.
+        try { LibVlcHost.EnsureInitialized(); } catch { /* logged on first real use */ }
 
         base.OnStartup(e);
     }

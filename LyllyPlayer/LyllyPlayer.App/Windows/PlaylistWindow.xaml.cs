@@ -905,7 +905,6 @@ public partial class PlaylistWindow : Window
             {
                 var (entries, title) = await LocalPlaylistLoader.LoadM3uAsync(
                     path,
-                    _getFfmpegPath(),
                     readMetadataOnLoad: readMeta,
                     cts.Token,
                     metadataProgress: readMeta ? CreateMetadataLoadProgress() : null).ConfigureAwait(true);
@@ -923,7 +922,6 @@ public partial class PlaylistWindow : Window
                     {
                         var (entriesFast, titleFast) = await LocalPlaylistLoader.LoadM3uAsync(
                             path,
-                            _getFfmpegPath(),
                             readMetadataOnLoad: false,
                             CancellationToken.None).ConfigureAwait(true);
                         _sourceChanged(path);

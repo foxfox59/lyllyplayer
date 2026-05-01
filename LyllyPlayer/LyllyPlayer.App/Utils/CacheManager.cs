@@ -49,6 +49,48 @@ public sealed class CacheManager
         }
     }
 
+    /// <summary>
+    /// Best-effort size of an in-progress or completed yt-dlp cache file for <paramref name="storeKey"/>
+    /// (same key as <see cref="TryGetCachedPath"/> / <c>vp-cache-*</c> naming). Used for seek-bar cache overlay.
+    /// </summary>
+    public long TryGetPartialCacheBytes(string storeKey)
+    {
+        if (string.IsNullOrWhiteSpace(storeKey))
+            return 0;
+
+        try
+        {
+            var safeKey = string.Concat(storeKey.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_'));
+            var prefix = $"vp-cache-{safeKey}.";
+            if (!Directory.Exists(_cacheDir))
+                return 0;
+
+            long best = 0;
+            foreach (var path in Directory.EnumerateFiles(_cacheDir))
+            {
+                var name = Path.GetFileName(path);
+                if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                try
+                {
+                    var len = new FileInfo(path).Length;
+                    if (len > best)
+                        best = len;
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
+
+            return best;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
     public async Task EnsureCachedAsync(
         string videoId,
         Func<CancellationToken, Task<string>> downloadToCacheAsync,

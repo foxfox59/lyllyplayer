@@ -1,3 +1,4 @@
+using LibVLCSharp.Shared;
 using NAudio.Wave;
 using System.Buffers;
 using System.Collections.Concurrent;
@@ -8,14 +9,16 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using LyllyPlayer.Models;
 using LyllyPlayer.Utils;
+using System.Windows.Threading;
 
 namespace LyllyPlayer.Player;
 
 /// <summary>Emitted when background prefetch or disk-cache warm detects a definitive YouTube refusal (unavailable, age, premium, DRM).</summary>
 public sealed record PlaybackPrefetchTag(string VideoId, string Category, string Message);
 
-public sealed class PlaybackEngine : IDisposable
+public sealed partial class PlaybackEngine : IDisposable
 {
+    private readonly object _vlcGate = new();
     public delegate PlaylistEntry? NextTrackResolver();
     private NextTrackResolver? _nextTrackResolver;
     /// <summary>
@@ -25,14 +28,11 @@ public sealed class PlaybackEngine : IDisposable
     public delegate PlaylistEntry? NextTrackPeekResolver();
     private NextTrackPeekResolver? _nextTrackPeekResolver;
     private readonly YtDlpClient _ytDlp;
-    private readonly FfmpegDecoder _decoder;
-    private readonly string _ffmpegPath;
     private AudioOut? _audio;
     private readonly WaveFormat _format;
     private int _audioDeviceNumber = -1; // -1 = WAVE_MAPPER (default)
 
     private CancellationTokenSource? _playCts;
-    private Task? _readerTask;
     /// <summary>Only one <see cref="PlayEntryAsync"/> may run at a time (slow yt-dlp resolve + seek must not overlap).</summary>
     private readonly SemaphoreSlim _playExclusive = new(1, 1);
     /// <summary>
@@ -52,6 +52,8 @@ public sealed class PlaybackEngine : IDisposable
     private long _cacheMaxBytes;
     private float _volume = 0.85f;
     private readonly AudioAnalyzer _analyzer = new();
+    private readonly VisualizerTap _visualizerTap;
+    private readonly VlcVisualizerTap _vlcVisualizerTap;
 
     /// <summary>Same <see cref="PlaylistEntry.VideoId"/> as <see cref="_resolvedInputCache"/> — skips yt-dlp on seek (saves ~4–6s per scrub).</summary>
     private string? _resolvedInputCacheVideoId;
@@ -79,18 +81,6 @@ public sealed class PlaybackEngine : IDisposable
     private PlaylistEntry? _pendingCurrentDiskWarmEntry;
 
     /// <summary>
-    /// Full-pipeline PCM prefetch for the upcoming track.
-    /// Started after the current track is actually playing (first PCM) so rapid Next does not stack yt-dlp/FFmpeg work.
-    /// </summary>
-    private PcmPrefetchSession? _pcmPrefetch;
-
-    /// <summary>
-    /// The FfmpegDecoder that is currently providing the live continuation of a stolen prefetch stream.
-    /// Must be stopped when the session ends (seek, stop, next).
-    /// </summary>
-    private FfmpegDecoder? _activePrefetchDecoder;
-
-    /// <summary>
     /// Background disk-cache warm is skipped above this duration (streaming only for long content).
     /// Playback always starts via stream URL / pipe — we never block on a full-file download before decode.
     /// </summary>
@@ -98,23 +88,17 @@ public sealed class PlaybackEngine : IDisposable
 
     /// <summary>
     /// Do not use an existing on-disk cache for YouTube at/above this length — always stream (multi‑GB cache, and
-    /// FFmpeg seek on a local progressive file is less relevant than consistent DASH streaming for very long content).
+    /// LibVLC seek on a local progressive file is less relevant than consistent DASH streaming for very long content).
     /// </summary>
     private const int YoutubeNeverUseDiskCachePlaybackSeconds = 12 * 60 * 60;
 
-    /// <summary>
-    /// YouTube seeks via <c>yt-dlp --download-sections</c> can take many seconds (large section + disk). Off by default:
-    /// seeks use FFmpeg on the stream URL (sub-second to ~2s typical). Enable only if you get silence after seek on a stubborn stream.
-    /// </summary>
-    private const bool EnableYtdlpDownloadSectionSeek = false;
-
-    public PlaybackEngine(YtDlpClient ytDlp, string ffmpegPath)
+    public PlaybackEngine(YtDlpClient ytDlp)
     {
         _ytDlp = ytDlp;
-        _ffmpegPath = ffmpegPath;
-        _decoder = new FfmpegDecoder(ffmpegPath);
-        _ytDlp.SetFfmpegPath(ffmpegPath);
+        _ytDlp.SetFfmpegPath(null);
         _format = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
+        _visualizerTap = new VisualizerTap(_analyzer);
+        _vlcVisualizerTap = new VlcVisualizerTap(_analyzer);
 
         _cacheMaxBytes = 512L * 1024 * 1024;
         var cacheDir = Path.Combine(Path.GetTempPath(), "LyllyPlayer", "cache");
@@ -123,9 +107,28 @@ public sealed class PlaybackEngine : IDisposable
 
     public IReadOnlyList<PlaylistEntry> PlayOrder { get; private set; } = Array.Empty<PlaylistEntry>();
     public int CurrentIndex { get; private set; } = -1;
-    public bool IsPlaying => _audio?.IsPlaying ?? false;
-    public bool CanResume => _audio is not null && _playCts is not null;
-    public double CurrentPositionSeconds => _startOffsetSeconds + _positionSw.Elapsed.TotalSeconds;
+    public bool IsPlaying
+    {
+        get
+        {
+            lock (_vlcGate)
+            {
+                // Avoid polling LibVLC state (can crash on some systems when called frequently from UI timer).
+                return _vlcMp is not null && _vlcIsPlayingFlag;
+            }
+        }
+    }
+
+    public bool CanResume => (_vlcMp is not null || _audio is not null) && _playCts is not null;
+
+    public double CurrentPositionSeconds
+    {
+        get
+        {
+            // Drive UI clock from our own stopwatch to avoid polling LibVLC Time at 30fps (can crash natively).
+            return _startOffsetSeconds + _positionSw.Elapsed.TotalSeconds;
+        }
+    }
     public int? CurrentDurationSeconds => _currentDurationSeconds;
     public (float vuL, float vuR, float[] bands) GetAudioAnalysisSnapshot() => _analyzer.GetSnapshot();
 
@@ -137,10 +140,10 @@ public sealed class PlaybackEngine : IDisposable
     public event EventHandler<(PlaylistEntry entry, bool endedEarly)>? TrackEnded;
     public event EventHandler<PlaybackPrefetchTag>? PrefetchTagged;
 
+    [Obsolete("FFmpeg is no longer used; call is ignored.")]
     public void SetFfmpegPath(string ffmpegPath)
     {
-        _decoder.SetPath(ffmpegPath);
-        _ytDlp.SetFfmpegPath(ffmpegPath);
+        _ytDlp.SetFfmpegPath(null);
     }
 
     public void SetCacheMaxBytes(long maxBytes)
@@ -154,6 +157,17 @@ public sealed class PlaybackEngine : IDisposable
         _volume = (float)Math.Clamp(volume01, 0, 1);
         if (_audio is not null)
             _audio.Volume = _volume;
+        try
+        {
+            if (_vlcMp is not null)
+            {
+                lock (_vlcGate)
+                {
+                    _vlcMp.Volume = (int)Math.Clamp(_volume * 100.0, 0, 100);
+                }
+            }
+        }
+        catch { /* ignore */ }
     }
 
     /// <summary>
@@ -181,12 +195,12 @@ public sealed class PlaybackEngine : IDisposable
         _audioDeviceNumber = deviceNumber;
 
         var current = _audio;
-        if (current is null || !current.IsPlaying)
+        if (current is null || (!current.IsPlaying && _vlcMp?.State != VLCState.Playing))
             return;
 
         try
         {
-            var next = new AudioOut(_format, deviceNumber, _analyzer.ProcessPcmF32LeStereo);
+            var next = new AudioOut(_format, deviceNumber, onSamplesRead: null);
             next.Volume = _volume;
             if (!next.TryPlay())
             {
@@ -278,6 +292,7 @@ public sealed class PlaybackEngine : IDisposable
         if (current is null)
             return false;
 
+        try { AppLog.Warn($"PlayCurrentAsync: dispatching PlayEntryAsync videoId={current.VideoId}"); } catch { /* ignore */ }
         return await PlayEntryAsync(current, startSeconds: 0, raiseNowPlayingChanged: true).ConfigureAwait(false);
     }
 
@@ -310,6 +325,14 @@ public sealed class PlaybackEngine : IDisposable
         else
             target = Math.Min(target, 48 * 3600.0);
 
+        try
+        {
+            RefreshSeekableBufferedFromCache();
+            if (_lastResolvedForWarmup?.DecodeViaYtdlpStdoutPipe == true)
+                target = Math.Min(target, Math.Max(0, MaxSeekSecondsForUi));
+        }
+        catch { /* ignore */ }
+
         // Seeking should not be treated as a "track change" (avoid UI auto-centering).
         var ok = await PlayEntryAsync(current, startSeconds: target, raiseNowPlayingChanged: false).ConfigureAwait(false);
         if (!ok)
@@ -325,7 +348,7 @@ public sealed class PlaybackEngine : IDisposable
                 _pauseGate.Reset();
                 _audio?.Pause();
                 _positionSw.Stop();
-                PlaybackStateChanged?.Invoke(this, false);
+                RaisePlaybackStateChanged(false);
             }
             catch { /* ignore */ }
         }
@@ -393,29 +416,31 @@ public sealed class PlaybackEngine : IDisposable
 
     public void TogglePlayPause()
     {
-        if (_audio is null)
+        if (_audio is null && _vlcMp is null)
             return;
 
         if (IsPlaying)
         {
             _pauseGate.Reset();
-            _audio.Pause();
+            try { _vlcMp?.SetPause(true); } catch { /* ignore */ }
+            try { _audio?.Pause(); } catch { /* ignore */ }
             try { _positionSw.Stop(); } catch { /* ignore */ }
-            PlaybackStateChanged?.Invoke(this, false);
+            RaisePlaybackStateChanged(false);
         }
         else
         {
             _pauseGate.Set();
-            if (!_audio.TryPlay() && !TryRecoverAudioOutput(leaveStoppedSinkOnTotalFailure: true))
+            try { _vlcMp?.SetPause(false); } catch { /* ignore */ }
+            if (_audio is not null && !_audio.TryPlay() && !TryRecoverAudioOutput(leaveStoppedSinkOnTotalFailure: true))
             {
                 _pauseGate.Reset();
                 try { _positionSw.Stop(); } catch { /* ignore */ }
-                PlaybackStateChanged?.Invoke(this, false);
+                RaisePlaybackStateChanged(false);
                 return;
             }
 
             try { _positionSw.Start(); } catch { /* ignore */ }
-            PlaybackStateChanged?.Invoke(this, true);
+            RaisePlaybackStateChanged(true);
         }
     }
 
@@ -441,7 +466,7 @@ public sealed class PlaybackEngine : IDisposable
         {
             try
             {
-                var a = new AudioOut(_format, deviceNumber, _analyzer.ProcessPcmF32LeStereo);
+                var a = new AudioOut(_format, deviceNumber, onSamplesRead: null);
                 a.Volume = _volume;
                 if (!a.TryPlay())
                 {
@@ -476,7 +501,7 @@ public sealed class PlaybackEngine : IDisposable
         {
             try
             {
-                var a = new AudioOut(_format, -1, _analyzer.ProcessPcmF32LeStereo);
+                var a = new AudioOut(_format, -1, onSamplesRead: null);
                 a.Volume = _volume;
                 _audio = a;
             }
@@ -489,33 +514,6 @@ public sealed class PlaybackEngine : IDisposable
         return false;
     }
 
-    private async Task<Stream> OpenYoutubePcmFallbackAsync(YoutubeStreamInput resolvedInput, CancellationToken ct, PlaybackTimingMark? mark = null)
-    {
-        if (resolvedInput.DecodeViaYtdlpStdoutPipe)
-        {
-            mark?.Step("open_pcm_before_ytdlp_stdout_pipe");
-            var s = await _decoder.StartPcmS16LeFromYtdlpStdoutPipeAsync(
-                resolvedInput.Url,
-                _startOffsetSeconds,
-                _ytDlp.YtDlpPath,
-                psi => _ytDlp.ApplyLaunchPrefixTo(psi),
-                ytdlpAudioFormat: _ytDlp.AudioQualityFormat,
-                ytDlpUsesCookiesFromBrowser: _ytDlp.UsesCookiesFromBrowser,
-                cancellationToken: ct).ConfigureAwait(false);
-            mark?.Step("open_pcm_after_ytdlp_stdout_pipe");
-            return s;
-        }
-
-        // Seekable inputs (local files, direct CDN URLs).
-        mark?.Step("open_pcm_before_ffmpeg_direct_stream");
-        var stream = _decoder.StartPcmS16LeStream(
-            resolvedInput.Url,
-            startSeconds: _startOffsetSeconds,
-            extraHttpHeaders: resolvedInput.HttpHeaders);
-        mark?.Step("open_pcm_after_ffmpeg_direct_stream_ctor");
-        return stream;
-    }
-
     private static void LogPlaybackError(PlaylistEntry entry, string message)
     {
         var detail = string.IsNullOrWhiteSpace(message) ? "(no message)" : message.Trim();
@@ -525,6 +523,8 @@ public sealed class PlaybackEngine : IDisposable
 
     private async Task<bool> PlayEntryAsync(PlaylistEntry entry, double startSeconds, bool raiseNowPlayingChanged)
     {
+        try { AppLog.Warn($"PlayEntryAsync: begin videoId={entry.VideoId} start={startSeconds:0.###} nowPlayingEvent={raiseNowPlayingChanged}"); } catch { /* ignore */ }
+
         // Signal the currently running session to abort *before* waiting on the mutex.
         // Without this, a second seek blocks on WaitAsync until the first's slice download (or silence
         // scan) fully completes — that can be 30-60+ seconds.  Cancelling first causes the in-flight
@@ -543,29 +543,16 @@ public sealed class PlaybackEngine : IDisposable
             // Internal restart for track change/seek: don't signal a full "stopped" state to UI.
             StopInternal(signalPlaybackStopped: false);
 
-            // Wait for the previous reader to finish (or observe cancel). If we start a new FFmpeg while the old
-            // reader's EOS path still runs, it can call _decoder.Stop() and kill the new process — no audio, further seeks break.
             try
             {
-                if (_readerTask is not null)
-                {
-                    var prev = _readerTask;
-                    var done = await Task.WhenAny(prev, Task.Delay(TimeSpan.FromSeconds(8))).ConfigureAwait(false);
-                    if (done != prev)
-                    {
-                        try { AppLog.Warn("Previous PCM reader did not exit in time after stop; forcing decoder kill."); } catch { /* ignore */ }
-                        try { _decoder.Stop(); } catch { /* ignore */ }
-                        await Task.WhenAny(prev, Task.Delay(TimeSpan.FromSeconds(2))).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        try { await prev.ConfigureAwait(false); } catch { /* ignore */ }
-                    }
-                }
+                TeardownVlcBestEffort();
+                await Task.Delay(60, CancellationToken.None).ConfigureAwait(false);
             }
             catch { /* ignore */ }
 
             playbackTiming.Step("after_previous_reader_barrier");
+
+            try { AppLog.Warn($"PlayEntryAsync: after_previous_reader_barrier videoId={entry.VideoId}"); } catch { /* ignore */ }
 
             // Apply timeline state before NowPlayingChanged so UI/timer reads consistent duration/position (avoids
             // one frame of stale CurrentDurationSeconds vs new track).
@@ -578,392 +565,57 @@ public sealed class PlaybackEngine : IDisposable
             _positionSw.Reset();
             _analyzer.Reset();
 
+            try { AppLog.Warn($"PlayEntryAsync: timeline_reset_done videoId={entry.VideoId} startOffset={_startOffsetSeconds:0.###} dur={_currentDurationSeconds?.ToString() ?? "(null)"}"); } catch { /* ignore */ }
+
             if (raiseNowPlayingChanged)
-                NowPlayingChanged?.Invoke(this, entry);
+            {
+                try
+                {
+                    try { AppLog.Warn($"PlayEntryAsync: invoking NowPlayingChanged videoId={entry.VideoId}"); } catch { /* ignore */ }
+                    RaiseNowPlayingChanged(entry);
+                    try { AppLog.Warn($"PlayEntryAsync: NowPlayingChanged scheduled/returned videoId={entry.VideoId}"); } catch { /* ignore */ }
+                }
+                catch (Exception ex)
+                {
+                    try { AppLog.Exception(ex, "NowPlayingChanged handler failed"); } catch { /* ignore */ }
+                }
+            }
+
+            try { AppLog.Warn($"PlayEntryAsync: after_now_playing_event videoId={entry.VideoId}"); } catch { /* ignore */ }
 
             _playCts = new CancellationTokenSource();
             var ct = _playCts.Token;
             var playbackSessionCts = _playCts;
             _firstAudioForCurrentPlayTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+            try { AppLog.Warn($"PlayEntryAsync: session_tokens_ready videoId={entry.VideoId}"); } catch { /* ignore */ }
+
             try
             {
-                // ── PCM prefetch fast path ──────────────────────────────────────────────────
-                // If the prefetch pipeline for this track is already running (or has buffered data),
-                // steal its stream directly.  This eliminates yt-dlp startup + FFmpeg probe time.
-                // Only applies when starting from the beginning (not a seek).
-                Stream? prefetchedPcm = null;
-                if (_startOffsetSeconds < 0.1 &&
-                    _pcmPrefetch is { } activePrefetch &&
-                    string.Equals(activePrefetch.VideoId, entry.VideoId, StringComparison.Ordinal))
-                {
-                    try
-                    {
-                        prefetchedPcm = await activePrefetch.StealAsync().ConfigureAwait(false);
-                        _activePrefetchDecoder = activePrefetch.OwnedDecoder;
-                        _pcmPrefetch = null;
-                        try { activePrefetch.Dispose(); } catch { /* ignore */ }
-                        try { AppLog.Info($"YouTube: using prefetched PCM pipeline for {entry.VideoId}", AppLogInfoTier.Crucial); } catch { /* ignore */ }
-                    }
-                    catch
-                    {
-                        prefetchedPcm = null;
-                    }
-                }
-
-                playbackTiming.Step(prefetchedPcm is not null ? "prefetch_pcm_stolen" : "no_prefetch_pcm");
-
-                YoutubeStreamInput? resolvedInput = null;
-                Stream pcmStream;
-
-                if (prefetchedPcm is not null)
-                {
-                    // Prefetch hit: jump straight to audio setup, no URL resolution needed.
-                    pcmStream = prefetchedPcm;
-                    // Stealing PCM skips ResolveBestInputAsync, which normally kicks background disk cache
-                    // for the current YouTube track (cookies/pipe path relies on this for revisits).
-                    RequestDiskWarmForCurrentAfterPlaying(entry);
-                }
-                else
-                {
                 playbackTiming.Step("before_resolve_best_input");
-                resolvedInput = await ResolveBestInputAsync(entry, ct, playbackTiming, publishResolveStatus: raiseNowPlayingChanged).ConfigureAwait(false);
+                try { AppLog.Warn($"PlayEntryAsync: before_resolve videoId={entry.VideoId}"); } catch { /* ignore */ }
+                var resolvedInput = await ResolveBestInputAsync(entry, ct, playbackTiming, publishResolveStatus: raiseNowPlayingChanged).ConfigureAwait(false);
                 playbackTiming.Step("after_resolve_best_input");
-                if (ShouldUseYtdlpSectionForPlayback(entry, _startOffsetSeconds, resolvedInput!))
+
+                if (resolvedInput.DecodeViaYtdlpStdoutPipe)
                 {
-                    if (raiseNowPlayingChanged)
-                        StatusChanged?.Invoke(this, (entry, "FETCHING", "Preparing seek (downloading a time slice; usually under a minute)…"));
-                    try
+                    UpdateSeekableBuffered(entry, resolvedInput);
+                    if (entry.DurationSeconds is int durClamp && durClamp > 0 &&
+                        _startOffsetSeconds > SeekableBufferedSeconds + 0.25 &&
+                        SeekableBufferedSeconds > 0.25)
                     {
-                        AppLog.Info($"YouTube seek: yt-dlp time slice from {_startOffsetSeconds:0.##}s (VideoId={entry.VideoId})", AppLogInfoTier.Crucial);
-                    }
-                    catch
-                    {
-                        // ignore
-                    }
-
-                    // Do not Release() _playExclusive around the slice: a second seek would take the lock while the first
-                    // await's finally WaitAsync() waits forever — deadlock and stuck LOADING.
-                    try
-                    {
-                        playbackTiming.Step("before_ytdlp_download_section");
-                        pcmStream = await _decoder.StartPcmS16LeFromYtdlpDownloadSectionAsync(
-                            entry.WebpageUrl,
-                            _startOffsetSeconds,
-                            entry.DurationSeconds,
-                            _ytDlp.YtDlpPath,
-                            psi => _ytDlp.ApplyLaunchPrefixTo(psi),
-                            ct,
-                            ytdlpAudioFormat: _ytDlp.AudioQualityFormat,
-                            ytDlpUsesCookiesFromBrowser: _ytDlp.UsesCookiesFromBrowser).ConfigureAwait(false);
-                        playbackTiming.Step("after_ytdlp_download_section");
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        try
-                        {
-                            AppLog.Warn($"YouTube seek slice failed; falling back to stream decode. {ex.Message}");
-                        }
-                        catch
-                        {
-                            // ignore
-                        }
-
-                        LogPlaybackError(entry,
-                            $"Seek slice failed ({ex.Message}). Using stream decode fallback; try updating yt-dlp.");
-                        Error?.Invoke(this,
-                            $"Seek slice failed ({ex.Message}). Using stream decode fallback; try updating yt-dlp.");
-                        _decoder.Stop();
-                        // yt-dlp→ffmpeg pipe cannot apply FFmpeg -ss on pipe:0 for a mid-stream seek; only direct URL / disk slice supports that fallback.
-                        if (resolvedInput!.DecodeViaYtdlpStdoutPipe && _startOffsetSeconds > 0.01)
-                            throw;
-                        playbackTiming.Step("before_open_pcm_after_section_fail");
-                        pcmStream = await OpenYoutubePcmFallbackAsync(resolvedInput, ct, playbackTiming).ConfigureAwait(false);
-                        playbackTiming.Step("after_open_pcm_after_section_fail");
-                    }
-
-                    if (raiseNowPlayingChanged)
-                        StatusChanged?.Invoke(this, (entry, "BUFFERING", null));
-                }
-                else
-                {
-                    playbackTiming.Step("before_open_pcm_main_path");
-                    pcmStream = await OpenYoutubePcmFallbackAsync(resolvedInput!, ct, playbackTiming).ConfigureAwait(false);
-                    playbackTiming.Step("after_open_pcm_main_path");
-                }
-                playbackTiming.Step("after_pcm_stream_ready");
-                } // end of prefetch-miss else block
-
-                playbackTiming.Step("before_audio_out");
-
-                if (_audio is null)
-                {
-                    try
-                    {
-                        _audio = new AudioOut(_format, _audioDeviceNumber, _analyzer.ProcessPcmF32LeStereo);
-                        _audio.Volume = _volume;
-                    }
-                    catch (Exception ex)
-                    {
-                        LogPlaybackError(entry, $"Audio output init failed. {ex.Message}");
-                        Error?.Invoke(this, $"Audio output init failed. {ex.Message}");
-                        PlaybackStateChanged?.Invoke(this, false);
-                        AbortPlaybackPipelineAfterFailure();
-                        return false;
+                        _startOffsetSeconds = Math.Min(_startOffsetSeconds, Math.Max(0, Math.Min(durClamp - 1, SeekableBufferedSeconds)));
                     }
                 }
 
-                // Stop() clears the buffer; avoids rare WaveOut/BufferedWaveProvider stuck state across pipeline restarts (seek).
-                _audio.Stop();
-                if (!_audio.TryPlay() && !TryRecoverAudioOutput(leaveStoppedSinkOnTotalFailure: false))
-                {
-                    LogPlaybackError(entry, "Audio output failed to start (device may be disconnected).");
-                    Error?.Invoke(this, "Audio output failed to start. Check that an audio device is connected.");
-                    PlaybackStateChanged?.Invoke(this, false);
-                    AbortPlaybackPipelineAfterFailure();
+                if (!await PlayResolvedWithLibVlcAsync(entry, resolvedInput, playbackTiming, ct, playbackSessionCts, raiseNowPlayingChanged).ConfigureAwait(false))
                     return false;
-                }
-
-                playbackTiming.Step("after_waveout_tryplay");
-
-                PlaybackStateChanged?.Invoke(this, true);
-                StatusChanged?.Invoke(this, (entry, "BUFFERING", null));
-                playbackTiming.Step("after_buffering_status_reader_scheduled");
-                _pauseGate.Set();
-                // Start the position clock now so UI (seek/lyrics) can track time immediately on restore/resume.
-                // We still emit PLAYING only after the first real PCM chunk below.
-                try { _positionSw.Start(); } catch { /* ignore */ }
-                // Next-track disk cache / stream URL / PCM prefetch starts in RunDeferredWarmupsAfterFirstAudio
-                // only after the first real PCM chunk (PLAYING), so rapid Next during BUFFERING does not pile work.
-
-                // For yt-dlp pipe mode the C# reader, yt-dlp, and FFmpeg form a three-process chain
-                // connected by anonymous pipes.  If the reader pauses calling ReadAsync(FFmpeg pipe:1),
-                // FFmpeg fills its OS pipe buffer and blocks.  Blocked FFmpeg then stops reading from
-                // pipe:0, which blocks the pump writing to pipe:0, which starves yt-dlp stdout and
-                // triggers Windows EINVAL (errno 22) on yt-dlp's stdout write.
-                //
-                // Fix: move the decode-rate throttle to AFTER ReadAsync, not before it.  The pipe is
-                // always being drained (ReadAsync called continuously); we only pause before AddSamples
-                // when the audio buffer is nearly full.  The brief pause between ReadAsync and AddSamples
-                // is safe: we've already freed space in FFmpeg's pipe:1 by reading; FFmpeg may fill that
-                // space during our wait but will stall only briefly before the next ReadAsync.
-                //
-                // The same post-read approach is used for all inputs (local files, direct URLs) because
-                // it gives identical real-time throttling without any deadlock risk.
-
-                _readerTask = Task.Run(async () =>
-                {
-                    // Slightly larger reads = fewer wakeups feeding WaveOut (helps avoid underruns on bursty network decode).
-                    var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
-                    try
-                    {
-                        var sawAnyAudio = false;
-                        var loggedFirstPcmRead = false;
-                        var lastVuLogUtc = DateTime.UtcNow;
-                        while (!ct.IsCancellationRequested)
-                        {
-                            _pauseGate.Wait(ct);
-
-                            var read = await pcmStream.ReadAsync(buffer, 0, buffer.Length, ct);
-                            if (!loggedFirstPcmRead)
-                            {
-                                loggedFirstPcmRead = true;
-                                playbackTiming.Step("first_pcm_read_returned");
-                            }
-                            if (read <= 0)
-                                break;
-
-                            // If WaveOut was torn down (device unplug) and no fallback sink yet, block here (do not drop
-                            // PCM — that would stall FFmpeg's pipe) until cancel or a new AudioOut exists.
-                            while (_audio is null && !ct.IsCancellationRequested)
-                            {
-                                await Task.Delay(15, ct);
-                                _pauseGate.Wait(ct);
-                            }
-
-                            var sink = _audio;
-                            if (sink is null)
-                                continue;
-
-                            // Throttle to real-time AFTER the read so FFmpeg's pipe:1 is always drained.
-                            // Must stay below <see cref="AudioOut"/> BufferedWaveProvider capacity (3 s) so AddSamples
-                            // never overflows; leave headroom for bursty decode so WaveOut does not underrun.
-                            while (sink.BufferedSeconds > 2.0 && !ct.IsCancellationRequested)
-                            {
-                                await Task.Delay(10, ct);
-                                _pauseGate.Wait(ct);
-                                sink = _audio;
-                                if (sink is null)
-                                    break;
-                            }
-
-                            if (sink is null)
-                                continue;
-
-                            sink.AddSamples(buffer, 0, read);
-
-                            // On the very first PCM chunk: start the position clock so the progress bar
-                            // only advances once real audio data is actually flowing.  _audio.Play() and
-                            // PlaybackStateChanged were already raised before the reader task (see above).
-                            if (!sawAnyAudio)
-                            {
-                                sawAnyAudio = true;
-                                if (ReferenceEquals(_playCts, playbackSessionCts))
-                                {
-                                    // In normal play this may already be started above; Start() is idempotent.
-                                    _positionSw.Start();
-                                    StatusChanged?.Invoke(this, (entry, "PLAYING", null));
-                                    try { _firstAudioForCurrentPlayTcs?.TrySetResult(true); } catch { /* ignore */ }
-                                    RunDeferredWarmupsAfterFirstAudio(entry, resolvedInput, raiseNowPlayingChanged);
-                                }
-                            }
-
-                            // Debug: if VU never moves, something is wrong with analyzer feed.
-                            if ((DateTime.UtcNow - lastVuLogUtc).TotalSeconds >= 2)
-                            {
-                                lastVuLogUtc = DateTime.UtcNow;
-                                try
-                                {
-                                    var (vuL, vuR, _) = _analyzer.GetSnapshot();
-                                    // AppLog.Info($"Analyzer: vuL={vuL:0.000} vuR={vuR:0.000} buffered={_audio?.BufferedSeconds ?? 0:0.00}s", AppLogInfoTier.Diagnostic);
-                                }
-                                catch { /* ignore */ }
-                            }
-                        }
-
-                        if (ct.IsCancellationRequested)
-                            return;
-
-                        // Only the active session may tear down shared decoder/CTS. A late EOF from an old reader
-                        // must not run after a seek has already started a new FFmpeg process.
-                        if (!ReferenceEquals(_playCts, playbackSessionCts))
-                            return;
-
-                        // Decode has hit EOF, but BufferedWaveProvider may still hold seconds of PCM. Stopping
-                        // WaveOut immediately discards that tail (Repeat: Single then restarts while audio hadn't finished).
-                        if (!ct.IsCancellationRequested)
-                        {
-                            var drainDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(12);
-                            while (DateTime.UtcNow < drainDeadline
-                                   && !ct.IsCancellationRequested
-                                   && ReferenceEquals(_playCts, playbackSessionCts)
-                                   && _pauseGate.IsSet)
-                            {
-                                var sink = _audio;
-                                if (sink is null || sink.BufferedSeconds <= 0.05)
-                                    break;
-                                try
-                                {
-                                    await Task.Delay(20, ct).ConfigureAwait(false);
-                                }
-                                catch (OperationCanceledException)
-                                {
-                                    break;
-                                }
-                            }
-                        }
-
-                        // After drain we may have awaited while the user hit Next/seek — a new session owns
-                        // _playCts. Do not stop the position clock, WaveOut, or raise TrackEnded for this stale EOF
-                        // (that caused extra NextAsync calls and a "stuck" / replay-from-start queue).
-                        if (!ReferenceEquals(_playCts, playbackSessionCts))
-                            return;
-
-                        // End-of-stream: transition to a real stopped state (not "paused/resumable").
-                        try { _positionSw.Stop(); } catch { /* ignore */ }
-
-                        string? ffmpegStderrTail = null;
-                        if (!sawAnyAudio)
-                        {
-                            try { ffmpegStderrTail = _decoder.GetRecordedStderrTail(4000); } catch { /* ignore */ }
-                        }
-
-                        try { _audio?.Stop(); } catch { /* ignore */ }
-                        if (ReferenceEquals(_playCts, playbackSessionCts))
-                            _playCts = null;
-
-                        var dur = entry.DurationSeconds;
-                        var endedEarly = false;
-                        var skipTrackEndedHandledByPlaybackFailed = false;
-                        // Immediate EOF / no PCM (common when URL or demuxer fails silently): no duration-based early check runs.
-                        if (!sawAnyAudio)
-                        {
-                            try
-                            {
-                                var t = string.IsNullOrWhiteSpace(entry.Title) ? "" : $" Title=\"{entry.Title}\"";
-                                var tail = (ffmpegStderrTail ?? "").Trim();
-                                if (PlaybackFailureKindFromDiagnostics(tail, out var failMsg))
-                                {
-                                    TryMarkPrefetchSkipFromFailureMessage(entry.VideoId, failMsg);
-                                    PlaybackFailed?.Invoke(this, (entry, failMsg));
-                                    skipTrackEndedHandledByPlaybackFailed = true;
-                                }
-                                else
-                                {
-                                    var google403 = tail.Contains("403", StringComparison.OrdinalIgnoreCase)
-                                                    || tail.Contains("Forbidden", StringComparison.OrdinalIgnoreCase);
-                                    var tailForLog = ScrubPlaybackDiagForLog(tail);
-                                    var ff = string.IsNullOrWhiteSpace(tailForLog)
-                                        ? ""
-                                        : $"FFmpeg: {tailForLog.Replace("\r\n", " | ", StringComparison.Ordinal).Replace("\n", " | ")} ";
-                                    var hint = google403
-                                        ? "googlevideo returned HTTP 403 — YouTube denied this media URL (signature/n-token drift, missing session cookies, IP/geo, or expired URL). Try latest yt-dlp, Options → Advanced → cookies from browser if you use a signed-in session, and check regional blocks/VPN. "
-                                        : string.IsNullOrWhiteSpace(tailForLog)
-                                            ? "If yt-dlp stderr was not logged, check Advanced (EJS/Node), cookies, and yt-dlp version. "
-                                            : "";
-                                    AppLog.Warn(
-                                        $"Playback: decoder produced no PCM before EOF. VideoId={entry.VideoId}{t}. " +
-                                        hint +
-                                        ff +
-                                        "Advancing to next track.");
-                                }
-                            }
-                            catch { /* ignore */ }
-                            if (!skipTrackEndedHandledByPlaybackFailed)
-                                endedEarly = true;
-                        }
-                        else if (dur is int d && d > 0)
-                        {
-                            var pos = CurrentPositionSeconds;
-                            // YouTube / DASH streams often end a few–many seconds before playlist metadata duration.
-                            // Use a generous tail slack so normal completion is not treated as "early" (which skipped Repeat: Single).
-                            var slackSeconds = Math.Clamp((int)Math.Round(d * 0.08), 8, 45);
-                            if (pos > 0.5 && pos < Math.Max(0, d - slackSeconds))
-                            {
-                                try { AppLog.Warn($"Playback stopped early at {pos:0.0}s / {d}s (slack {slackSeconds}s). (VideoId={entry.VideoId}). Advancing to next track."); } catch { /* ignore */ }
-                                endedEarly = true;
-                            }
-                        }
-
-                        PlaybackStateChanged?.Invoke(this, false);
-                        if (!skipTrackEndedHandledByPlaybackFailed)
-                            TrackEnded?.Invoke(this, (entry, endedEarly));
-                    }
-                    catch (OperationCanceledException) { }
-                    catch (Exception ex)
-                    {
-                        LogPlaybackError(entry, ex.Message);
-                        Error?.Invoke(this, ex.Message);
-                    }
-                    finally
-                    {
-                        try { pcmStream.Dispose(); } catch { /* ignore */ }
-                        try { _activePrefetchDecoder?.Stop(); } catch { /* ignore */ }
-                        _activePrefetchDecoder = null;
-                        try { _decoder.Stop(); } catch { /* ignore */ }
-                        try { ArrayPool<byte>.Shared.Return(buffer); } catch { /* ignore */ }
-                    }
-                });
 
                 return true;
             }
             catch (OperationCanceledException)
             {
-                PlaybackStateChanged?.Invoke(this, false);
+                RaisePlaybackStateChanged(false);
                 AbortPlaybackPipelineAfterFailure();
                 return false;
             }
@@ -973,7 +625,7 @@ public sealed class PlaybackEngine : IDisposable
                 string? stderrTail = null;
                 try
                 {
-                    stderrTail = _decoder.GetRecordedStderrTail(8000);
+                    stderrTail = GetPlaybackDiagTail(8000);
                 }
                 catch
                 {
@@ -1008,6 +660,75 @@ public sealed class PlaybackEngine : IDisposable
                 // Should never happen; avoids wedging the semaphore if release logic drifts.
             }
         }
+    }
+
+    private void RaiseNowPlayingChanged(PlaylistEntry entry)
+    {
+        try
+        {
+            var disp = System.Windows.Application.Current?.Dispatcher;
+            if (disp is not null && !disp.CheckAccess())
+            {
+                disp.BeginInvoke(new Action(() =>
+                {
+                    try { NowPlayingChanged?.Invoke(this, entry); }
+                    catch (Exception ex)
+                    {
+                        try { AppLog.Exception(ex, "NowPlayingChanged(UI) handler failed"); } catch { /* ignore */ }
+                    }
+                }), DispatcherPriority.Render);
+                return;
+            }
+        }
+        catch { /* ignore */ }
+
+        NowPlayingChanged?.Invoke(this, entry);
+    }
+
+    private void RaisePlaybackStateChanged(bool isPlaying)
+    {
+        try
+        {
+            var disp = System.Windows.Application.Current?.Dispatcher;
+            if (disp is not null && !disp.CheckAccess())
+            {
+                disp.BeginInvoke(new Action(() =>
+                {
+                    try { PlaybackStateChanged?.Invoke(this, isPlaying); }
+                    catch (Exception ex)
+                    {
+                        try { AppLog.Exception(ex, "PlaybackStateChanged(UI) handler failed"); } catch { /* ignore */ }
+                    }
+                }), DispatcherPriority.Render);
+                return;
+            }
+        }
+        catch { /* ignore */ }
+
+        PlaybackStateChanged?.Invoke(this, isPlaying);
+    }
+
+    private void RaiseStatusChanged(PlaylistEntry entry, string status, string? detail)
+    {
+        try
+        {
+            var disp = System.Windows.Application.Current?.Dispatcher;
+            if (disp is not null && !disp.CheckAccess())
+            {
+                disp.BeginInvoke(new Action(() =>
+                {
+                    try { StatusChanged?.Invoke(this, (entry, status, detail)); }
+                    catch (Exception ex)
+                    {
+                        try { AppLog.Exception(ex, "StatusChanged(UI) handler failed"); } catch { /* ignore */ }
+                    }
+                }), DispatcherPriority.Render);
+                return;
+            }
+        }
+        catch { /* ignore */ }
+
+        StatusChanged?.Invoke(this, (entry, status, detail));
     }
 
     /// <summary>Redacts client IP from googlevideo query strings and truncates huge URLs for safer log pastes.</summary>
@@ -1210,37 +931,6 @@ public sealed class PlaybackEngine : IDisposable
         }
 
         _ = StartNextTrackWarmAfterAnchorFirstAudioAsync(anchor);
-    }
-
-    /// <summary>
-    /// YouTube + non-zero start + resolved input is an HTTP(S) media URL: use yt-dlp section download instead of FFmpeg <c>-ss</c>
-    /// (which often decodes silence on googlevideo/DASH). Local cache files still use FFmpeg <c>-ss</c> on disk.
-    /// </summary>
-    private static bool ShouldUseYtdlpDownloadSectionSeek(PlaylistEntry entry, double startOff, string? resolvedInput)
-    {
-        if (!EnableYtdlpDownloadSectionSeek || startOff <= 0.01)
-            return false;
-        if (!IsYoutubeDiskCacheEligible(entry))
-            return false;
-        if (TryGetLocalPath(entry.WebpageUrl, out _))
-            return false;
-        if (entry.VideoId.StartsWith("stream:", StringComparison.OrdinalIgnoreCase))
-            return false;
-        if (string.IsNullOrWhiteSpace(resolvedInput))
-            return false;
-        return resolvedInput.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-               || resolvedInput.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Bounded yt-dlp <c>--download-sections</c> when the global slice flag is on, or when using stdout-pipe decode with a non-zero
-    /// start (FFmpeg <c>-ss</c> before <c>-i pipe:0</c> cannot skip on a live pipe — session/cookie pipe would otherwise fail seeks).
-    /// </summary>
-    private static bool ShouldUseYtdlpSectionForPlayback(PlaylistEntry entry, double startOff, YoutubeStreamInput resolved)
-    {
-        if (ShouldUseYtdlpDownloadSectionSeek(entry, startOff, resolved.Url))
-            return true;
-        return resolved.DecodeViaYtdlpStdoutPipe && startOff > 0.01 && IsYoutubeDiskCacheEligible(entry);
     }
 
     /// <summary>
@@ -1606,8 +1296,6 @@ public sealed class PlaybackEngine : IDisposable
         _prefetchNextStreamUrlVideoId = null;
         _prefetchedStreamInput = null;
         _prefetchNextStreamUrlTask = null;
-        try { _pcmPrefetch?.Dispose(); } catch { /* ignore */ }
-        _pcmPrefetch = null;
     }
 
     private void ClearPrefetchIfStillForVideo(string videoId)
@@ -1843,66 +1531,9 @@ public sealed class PlaybackEngine : IDisposable
                 // ignore
             }
 
-            // ── PCM pipeline pre-start ──────────────────────────────────────────────
-            // Kick off yt-dlp + FFmpeg for the next track now so when Next fires we
-            // already have buffered audio — no yt-dlp startup or FFmpeg probe delay.
-            // Skip if disk cache already has this track (local file starts in < 100 ms).
+            // LibVLC path: next-track PCM prefetch removed — URL prefetch + disk cache warm remain.
             if (_cache.TryGetCachedPath(YoutubeDiskCacheStoreKey(vid)) is not null)
                 return;
-
-            // Don't clobber an existing session for the same track.
-            if (_pcmPrefetch?.VideoId == vid)
-                return;
-
-            try { _pcmPrefetch?.Dispose(); } catch { /* ignore */ }
-            _pcmPrefetch = null;
-
-            if (ct.IsCancellationRequested)
-                return;
-
-            var prefetchDecoder = new FfmpegDecoder(_ffmpegPath);
-            Stream pcmStream;
-            try
-            {
-                if (resolved.DecodeViaYtdlpStdoutPipe)
-                    pcmStream = await prefetchDecoder.StartPcmS16LeFromYtdlpStdoutPipeAsync(
-                        resolved.Url, startSeconds: 0,
-                        _ytDlp.YtDlpPath, psi => _ytDlp.ApplyLaunchPrefixTo(psi),
-                        ytdlpAudioFormat: _ytDlp.AudioQualityFormat,
-                        ytDlpUsesCookiesFromBrowser: _ytDlp.UsesCookiesFromBrowser,
-                        cancellationToken: ct).ConfigureAwait(false);
-                else
-                    pcmStream = prefetchDecoder.StartPcmS16LeStream(resolved.Url, startSeconds: 0, extraHttpHeaders: resolved.HttpHeaders);
-            }
-            catch (OperationCanceledException)
-            {
-                prefetchDecoder.Stop();
-                ClearPrefetchIfStillForVideo(vid);
-                return;
-            }
-            catch (Exception pcmStartEx)
-            {
-                prefetchDecoder.Stop();
-                if (TryMarkPrefetchSkipFromFailureMessage(vid, pcmStartEx.Message))
-                {
-                    ClearPrefetchIfStillForVideo(vid);
-                    TryBeginPrefetchForNextPlayableAfterMarkedSkip();
-                }
-                else
-                    ClearPrefetchIfStillForVideo(vid);
-                return;
-            }
-
-            // Final guard: next track may have changed while we were starting the pipeline.
-            if (!string.Equals(_prefetchNextStreamUrlVideoId, vid, StringComparison.Ordinal) ||
-                GetNextEntryForWarmPrefetch() is not { } guard || !string.Equals(guard.VideoId, vid, StringComparison.Ordinal))
-            {
-                prefetchDecoder.Stop();
-                return;
-            }
-
-            _pcmPrefetch = new PcmPrefetchSession(vid, prefetchDecoder, pcmStream);
-            try { AppLog.Info($"YouTube: PCM prefetch pipeline started for next track ({vid})", AppLogInfoTier.Crucial); } catch { /* ignore */ }
         }
         catch (OperationCanceledException)
         {
@@ -2066,7 +1697,7 @@ public sealed class PlaybackEngine : IDisposable
     {
         try { _playCts?.Cancel(); } catch { /* ignore */ }
         _playCts = null;
-        try { _decoder.Stop(); } catch { /* ignore */ }
+        try { TeardownVlcBestEffort(); } catch { /* ignore */ }
         ClearResolvedInputCache();
         ClearDeferredWarmState();
         CancelNextTrackWarmBestEffort();
@@ -2081,16 +1712,17 @@ public sealed class PlaybackEngine : IDisposable
         try { _positionSw.Stop(); } catch { /* ignore */ }
         try { _positionSw.Reset(); } catch { /* ignore */ }
         _startOffsetSeconds = 0;
+        try { _visualizerTap.Stop(); } catch { /* ignore */ }
+        try { _vlcVisualizerTap.Stop(); } catch { /* ignore */ }
         try { _analyzer.Reset(); } catch { /* ignore */ }
 
         _pauseGate.Set();
 
-        try { _decoder.Stop(); } catch { /* ignore */ }
-        try { _activePrefetchDecoder?.Stop(); _activePrefetchDecoder = null; } catch { /* ignore */ }
+        try { TeardownVlcBestEffort(); } catch { /* ignore */ }
         try { _audio?.Stop(); } catch { /* ignore */ }
         if (signalPlaybackStopped)
         {
-            PlaybackStateChanged?.Invoke(this, false);
+            RaisePlaybackStateChanged(false);
             ClearResolvedInputCache();
             CancelNextTrackWarmBestEffort();
         }
@@ -2103,8 +1735,12 @@ public sealed class PlaybackEngine : IDisposable
         _pauseGate.Dispose();
         _playExclusive.Dispose();
         _queueNavLock.Dispose();
-        _decoder.Dispose();
+        try { TeardownVlcBestEffort(); } catch { /* ignore */ }
+        try { _vlcMp?.Dispose(); } catch { /* ignore */ }
+        _vlcMp = null;
         _audio?.Dispose();
+        try { _visualizerTap.Dispose(); } catch { /* ignore */ }
+        try { _vlcVisualizerTap.Dispose(); } catch { /* ignore */ }
     }
 
     /// <summary>Optional buffering timeline; emits <c>[PlaybackTiming]</c> lines at diagnostic log level.</summary>
@@ -2132,162 +1768,6 @@ public sealed class PlaybackEngine : IDisposable
         }
     }
 
-    // ── PCM pre-fetch infrastructure ─────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Owns a dedicated <see cref="FfmpegDecoder"/> pipeline for the upcoming track and
-    /// reads its PCM output into a memory buffer so the Next transition can start instantly.
-    /// </summary>
-    private sealed class PcmPrefetchSession : IDisposable
-    {
-        public string VideoId { get; }
-
-        /// <summary>The decoder that owns yt-dlp + FFmpeg processes for this prefetch.</summary>
-        public FfmpegDecoder OwnedDecoder { get; }
-
-        private readonly CancellationTokenSource _cts = new();
-        private readonly List<byte[]> _chunks = new();
-        private long _totalBytes;
-        private readonly Stream _liveStream;
-        private bool _stolen;
-        private readonly Task _fillTask;
-
-        // Raw stereo float32 @ 48 kHz ≈ 384 kiB/s. Cap prefetch to limit RAM (was 96 MiB ≈ 4.2 min).
-        private const long MaxBufferBytes = 48L * 1024 * 1024;
-
-        public PcmPrefetchSession(string videoId, FfmpegDecoder decoder, Stream liveStream)
-        {
-            VideoId = videoId;
-            OwnedDecoder = decoder;
-            _liveStream = liveStream;
-            _fillTask = RunAsync();
-        }
-
-        private async Task RunAsync()
-        {
-            var buf = ArrayPool<byte>.Shared.Rent(32 * 1024);
-            try
-            {
-                while (_totalBytes < MaxBufferBytes)
-                {
-                    int read;
-                    try { read = await _liveStream.ReadAsync(buf, 0, buf.Length, _cts.Token).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { break; }
-                    if (read <= 0) break;
-                    var chunk = new byte[read];
-                    Array.Copy(buf, chunk, read);
-                    lock (_chunks) { _chunks.Add(chunk); _totalBytes += read; }
-                }
-            }
-            catch { /* ignore */ }
-            finally
-            {
-                try { ArrayPool<byte>.Shared.Return(buf); } catch { /* ignore */ }
-            }
-        }
-
-        /// <summary>
-        /// Stop background fill and return a stream that replays the buffered data
-        /// then continues from the live pipeline.
-        /// </summary>
-        public async ValueTask<Stream> StealAsync()
-        {
-            _stolen = true;
-            _cts.Cancel();
-            // Wait briefly so the current ReadAsync exits and the chunk list is consistent.
-            try { await _fillTask.WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false); } catch { }
-            List<byte[]> snap;
-            lock (_chunks)
-            {
-                snap = new List<byte[]>(_chunks);
-                _chunks.Clear();
-                _totalBytes = 0;
-            }
-
-            return new PrefetchedPcmStream(snap, _liveStream);
-        }
-
-        public void Dispose()
-        {
-            if (!_stolen)
-            {
-                _cts.Cancel();
-                OwnedDecoder.Stop();
-                try { _liveStream.Dispose(); } catch { /* ignore */ }
-            }
-            else
-            {
-                // StealAsync moved the live stream to PrefetchedPcmStream; only cancel the filler.
-                try { _cts.Cancel(); } catch { /* ignore */ }
-            }
-
-            lock (_chunks)
-            {
-                _chunks.Clear();
-                _totalBytes = 0;
-            }
-
-            try { _cts.Dispose(); } catch { /* ignore */ }
-        }
-    }
-
-    /// <summary>
-    /// A read-only stream that first replays <paramref name="buffered"/> chunks then falls
-    /// through to reading from <paramref name="live"/>.
-    /// </summary>
-    private sealed class PrefetchedPcmStream : Stream
-    {
-        private readonly List<byte[]> _buf;
-        private readonly Stream _live;
-        private int _ci, _co;
-
-        public PrefetchedPcmStream(List<byte[]> buf, Stream live) { _buf = buf; _live = live; }
-
-        public override bool CanRead => true;
-        public override bool CanSeek => false;
-        public override bool CanWrite => false;
-        public override long Length => throw new NotSupportedException();
-        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-        public override void Flush() { }
-        public override long Seek(long o, SeekOrigin r) => throw new NotSupportedException();
-        public override void SetLength(long v) => throw new NotSupportedException();
-        public override void Write(byte[] b, int o, int c) => throw new NotSupportedException();
-
-        public override int Read(byte[] b, int o, int c)
-        {
-            if (_ci < _buf.Count)
-            {
-                var chunk = _buf[_ci]; var avail = chunk.Length - _co; var n = Math.Min(avail, c);
-                Array.Copy(chunk, _co, b, o, n); _co += n;
-                if (_co >= chunk.Length) { _ci++; _co = 0; }
-                return n;
-            }
-            return _live.Read(b, o, c);
-        }
-
-        public override async Task<int> ReadAsync(byte[] b, int o, int c, CancellationToken ct)
-        {
-            if (_ci < _buf.Count)
-            {
-                var chunk = _buf[_ci]; var avail = chunk.Length - _co; var n = Math.Min(avail, c);
-                Array.Copy(chunk, _co, b, o, n); _co += n;
-                if (_co >= chunk.Length) { _ci++; _co = 0; }
-                return n;
-            }
-            return await _live.ReadAsync(b, o, c, ct).ConfigureAwait(false);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                try { _live.Dispose(); } catch { /* ignore */ }
-                _buf.Clear();
-            }
-
-            base.Dispose(disposing);
-        }
-    }
 }
 
 
