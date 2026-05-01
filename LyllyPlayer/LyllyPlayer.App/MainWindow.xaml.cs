@@ -369,6 +369,7 @@ public partial class MainWindow : Window
     private PlaylistService _playlistCore => _shell.Playlist;
     private PlayOrderService _playOrder => _shell.PlayOrder;
     private SettingsService _settingsService => _shell.Settings;
+
     private LyricsService _lyricsService => _shell.Lyrics;
     /// <summary>Stack of previously played track VideoIds for "Previous" button navigation.</summary>
     private readonly Stack<string> _previousTrackHistory = new();
@@ -505,7 +506,7 @@ public partial class MainWindow : Window
     private double _playlistDockXOffset;
     /// <summary>UI scale % that <see cref="_playlistWindow"/> outer Width/Height currently match (for proportional resize when scale changes).</summary>
     private int? _playlistWindowOuterAtUiScalePercent;
-    private enum OptionsSnapEdge { None, Left, Right, Bottom }
+    private enum OptionsSnapEdge { None, Left, Right, Bottom, Top }
     private bool _optionsSnapped;
     private OptionsSnapEdge _optionsSnapEdge = OptionsSnapEdge.None;
     private double _optionsDockYOffset;
@@ -1255,8 +1256,7 @@ public partial class MainWindow : Window
                         {
                             try
                             {
-                                if (_optionsSnapped && _optionsSnapEdge != OptionsSnapEdge.None)
-                                    SyncOptionsWindowToMain();
+                                // SyncOptionsWindowToMain removed; WindowSnapService handles interactive latching + cluster move.
                                 RequestPersistSnapshot();
                             }
                             catch { /* ignore */ }
@@ -1823,8 +1823,7 @@ public partial class MainWindow : Window
 
             try
             {
-                if (_optionsSnapped && _optionsSnapEdge != OptionsSnapEdge.None)
-                    SyncOptionsWindowToMain();
+                // SyncOptionsWindowToMain removed; WindowSnapService handles interactive latching + cluster move.
             }
             catch
             {
@@ -3217,460 +3216,27 @@ public partial class MainWindow : Window
 
                 // Capture before closing (the Closing event also captures, but don't rely on field state).
                 WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
-                if (_playlistWindow.IsVisible)
-                {
-                    _playlistWindow.Hide();
-                }
-                else
-                {
-                    EnsurePlaylistWindowOpen();
-                }
+                GetPlaylistHost().Toggle();
             }
             catch { /* ignore */ }
             try { SaveSettingsSnapshot(); } catch { /* ignore */ }
             return;
         }
 
-        EnsurePlaylistWindowOpen();
+        GetPlaylistHost().EnsureOpen();
     }
 
     private void EnsurePlaylistWindowOpen()
     {
         try
         {
-            if (_playlistWindow is not null)
-            {
-                // Window is warm-reused (Hide/Show). If it exists but is hidden, show it again.
-                try
-                {
-                    if (!_playlistWindow.IsVisible)
-                    {
-                        _playlistAuxCtl.ShowWarm(() =>
-                        {
-                            try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
-                            Dispatcher.BeginInvoke(new Action(() =>
-                            {
-                                try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                            }), DispatcherPriority.Background);
-                        });
-                    }
-                }
-                catch { /* ignore */ }
-                return;
-            }
-
-            // Always restore playlist window bounds from the latest saved settings.
-            // (_startupSettings is a startup snapshot and won't reflect changes made during this run.)
-            var latestSettings = _settingsService.LoadLatest();
-            AppLog.Info($"Playlist bounds (open) settings: L={latestSettings.PlaylistWindowLeft} T={latestSettings.PlaylistWindowTop} W={latestSettings.PlaylistWindowWidth} H={latestSettings.PlaylistWindowHeight} State={latestSettings.PlaylistWindowState}");
-            try
-            {
-                var path = _settingsService.GetSettingsPath();
-                if (File.Exists(path))
-                {
-                    var raw = SafeJson.ReadUtf8TextForJson(path, SafeJson.MaxAppSettingsFileBytes);
-                    using var doc = JsonDocument.Parse(raw, SafeJson.CreateDocumentOptions());
-                    var root = doc.RootElement;
-                    var rawL = root.TryGetProperty("PlaylistWindowLeft", out var l) ? l.ToString() : "(missing)";
-                    var rawT = root.TryGetProperty("PlaylistWindowTop", out var t) ? t.ToString() : "(missing)";
-                    AppLog.Info($"Playlist bounds (open) raw-json: path={path} L={rawL} T={rawT}");
-                }
-                else
-                {
-                    AppLog.Info($"Playlist bounds (open) raw-json: settings file missing at {path}");
-                }
-            }
-            catch (Exception ex)
-            {
-                AppLog.Exception(ex, "Playlist bounds raw-json read failed");
-            }
-
-            _playlistWindow = new PlaylistWindow(
-                loadUrlAsync: async (src) => await LoadUrlAsync(src, CancellationToken.None).ConfigureAwait(true),
-                getSearchDefaults: () => (_searchDefaultCount, _searchMinLengthSeconds),
-                setSearchDefaults: (count, minLenSeconds) =>
-                {
-                    _searchDefaultCount = Math.Clamp(count, 1, 200);
-                    _searchMinLengthSeconds = Math.Clamp(minLenSeconds, 0, 3600);
-                    RequestPersistSnapshot();
-                },
-                openYoutubeModalAsync: async (owner, ct) => await OpenYoutubeModalAsync(owner, ct).ConfigureAwait(true),
-                openLocalFilesModalAsync: async (owner, ct) => await OpenLocalFilesModalAsync(owner, ct).ConfigureAwait(true),
-                applySortAsync: async (spec, ct) => await ApplyPlaylistSortAsync(spec, ct).ConfigureAwait(true),
-                getIsYoutubeSource: () => IsYoutubeLikeSource(_lastPlaylistSourceType),
-                savePlaylistToFileAsync: async (path, displayName) =>
-                {
-                    try
-                    {
-                        var name = string.IsNullOrWhiteSpace(displayName) ? (_playlistTitle ?? "Playlist") : displayName.Trim();
-                        var ext = (Path.GetExtension(path) ?? "").Trim().ToLowerInvariant();
-                        if (ext is ".m3u" or ".m3u8")
-                        {
-                            var origin = _playlistCore.OriginByVideoId.ToDictionary(
-                                k => k.Key,
-                                v => new LyllyPlayer.Models.SavedPlaylistOrigin(v.Value.Label, v.Value.Source),
-                                StringComparer.OrdinalIgnoreCase);
-                            LyllyPlayer.Utils.M3uPlaylistFile.Save(
-                                path,
-                                name,
-                                _playlistCore.Entries,
-                                new LyllyPlayer.Utils.M3uPlaylistFile.ExportOptions(
-                                    IncludeYoutube: _exportM3uIncludeYoutube,
-                                    PreferRelativePaths: _exportM3uPreferRelativePaths,
-                                    IncludeLyllyMetadata: _exportM3uIncludeLyllyMetadata
-                                ),
-                                originInfoByVideoId: origin);
-                            ShowInfoToast($"Saved M3U: {Path.GetFileName(path)}");
-                        }
-                        else
-                        {
-                            var srcType = _lastPlaylistSourceType.ToString();
-                            var src = _playlistSourceText ?? "";
-                            var pl = SavedPlaylistFile.FromEntries(
-                                name,
-                                srcType,
-                                src,
-                                _playlistCore.Entries,
-                                originInfoByVideoId: _playlistCore.OriginByVideoId.ToDictionary(
-                                    k => k.Key,
-                                    v => new LyllyPlayer.Models.SavedPlaylistOrigin(v.Value.Label, v.Value.Source),
-                                    StringComparer.OrdinalIgnoreCase));
-                            SavedPlaylistFile.Save(path, pl);
-                            ShowInfoToast($"Saved playlist: {Path.GetFileName(path)}");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        AppLog.Exception(ex, "Save playlist failed");
-                        SetStatusMessage("ERROR", "Save playlist failed.");
-                    }
-                    await Task.CompletedTask;
-                },
-                loadPlaylistFromFileAsync: async (path) =>
-                {
-                    try
-                    {
-                        var result = SavedPlaylistFile.TryLoadPlaylist(path);
-                        if (!result.Success)
-                        {
-                            System.Windows.MessageBox.Show(
-                                this,
-                                result.ErrorMessage ?? "Could not load the playlist file.",
-                                "LyllyPlayer",
-                                MessageBoxButton.OK,
-                                MessageBoxImage.Warning);
-                            SetStatusMessage("ERROR", "Load saved playlist failed.");
-                            return;
-                        }
-
-                        var pl = result.Playlist!;
-                        if (result.Entries.Count == 0)
-                        {
-                            System.Windows.MessageBox.Show(
-                                this,
-                                "The playlist file is valid but contains no playable tracks.",
-                                "LyllyPlayer",
-                                MessageBoxButton.OK,
-                                MessageBoxImage.Information);
-                        }
-
-                        _lastPlaylistSourceType = ParsePlaylistSourceType(pl.SourceType);
-                        _lastLocalPlaylistPath = path;
-                        _playlistSourceText = path;
-                        _playlistWindow?.SetSourceText(path);
-
-                        await LoadPlaylistFromEntriesAsync(result.Entries, title: pl.Name, sourceKey: path, isStartupAutoLoad: false);
-                        ApplySavedPlaylistOriginsIfAny(pl, result.Entries);
-                        UpdateRefreshEnabled();
-                        UpdatePlaylistTitleDisplayForNowPlaying();
-                    }
-                    catch (Exception ex)
-                    {
-                        AppLog.Exception(ex, "Load saved playlist failed");
-                        SetStatusMessage("ERROR", "Load saved playlist failed.");
-                    }
-                },
-                loadEntriesAsync: async (entries, title, sourceKey, ct) =>
-                {
-                    // Infer type from source key; persisted separately.
-                    _lastPlaylistSourceType =
-                        Directory.Exists(sourceKey) ? PlaylistSourceType.Folder :
-                        (File.Exists(sourceKey) && Path.GetExtension(sourceKey).Equals(".m3u", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(sourceKey).Equals(".m3u8", StringComparison.OrdinalIgnoreCase))
-                            ? PlaylistSourceType.M3U
-                            : PlaylistSourceType.Folder;
-                    _lastLocalPlaylistPath = sourceKey;
-                    await LoadPlaylistFromEntriesAsync(entries, title, sourceKey, isStartupAutoLoad: false, ct);
-                },
-                refreshAsync: async (ct) =>
-                {
-                    try
-                    {
-                        if (_lastPlaylistSourceType == PlaylistSourceType.YouTube)
-                            _playlistWindow?.ReportBusyOverlayIndeterminate();
-                        else
-                            _playlistWindow?.ClearBusyOverlayProgress();
-                    }
-                    catch { /* ignore */ }
-                    await RefreshCurrentSourceAsync(preserveCurrentIfPossible: true, ct);
-                },
-                cleanInvalidItemsAsync: async (ct) => await CleanInvalidPlaylistItemsAsync(ct).ConfigureAwait(true),
-                capturePlaylistForCancelRestore: BeginCancelPlaylistSnapshot,
-                commitPlaylistCancelRestore: CommitCancelPlaylistSnapshot,
-                rollbackPlaylistCancelRestore: RollbackCancelPlaylistSnapshot,
-                sourceChanged: (src) => _playlistSourceText = src,
-                getSource: () => _playlistSourceText,
-                getLastYoutubeUrl: () => _lastYoutubeUrl,
-                setLastYoutubeUrl: (url) =>
-                {
-                    var t = PlaylistSourcePathHeuristics.SanitizePersistedLastYoutubeUrl(url);
-                    if (!string.IsNullOrEmpty(t))
-                        _lastYoutubeUrl = t;
-                },
-                getFfmpegPath: () => _savedFfmpegPath ?? "",
-                getIncludeSubfoldersOnFolderLoad: () => _includeSubfoldersOnFolderLoad,
-                getReadMetadataOnLoad: () => _readMetadataOnLoad,
-                getKeepIncompletePlaylistOnCancel: () => _keepIncompletePlaylistOnCancel,
-                getRefreshOffersMetadataSkip: () =>
-                    _readMetadataOnLoad &&
-                    (_lastPlaylistSourceType == PlaylistSourceType.Folder ||
-                     _lastPlaylistSourceType == PlaylistSourceType.M3U),
-                refreshLocalWithoutMetadataAsync: async (ct) =>
-                {
-                    await RefreshCurrentSourceAsync(
-                        preserveCurrentIfPossible: true,
-                        cancellationToken: ct,
-                        forceLocalNoMetadata: true).ConfigureAwait(true);
-                },
-                selectedVideoIdChanged: (videoId) =>
-                {
-                    if (_engine.PlayOrder.Count == 0) return;
-                    var playIdx = FindPlayOrderIndexByVideoId(videoId);
-                    if (playIdx < 0)
-                    {
-                        try { AppLog.Warn($"Playlist selection: VideoId not in current play order ({videoId})."); } catch { /* ignore */ }
-                        return;
-                    }
-                    _engine.SetQueue(_engine.PlayOrder, startIndex: playIdx, raiseNowPlayingChanged: false);
-                },
-                doubleClickPlayAsync: (videoId) =>
-                {
-                    try
-                    {
-                        try { AppLog.Warn($"DoubleClickPlay: enter videoId={videoId} playOrderCount={_engine.PlayOrder.Count}"); } catch { /* ignore */ }
-                        if (_engine.PlayOrder.Count == 0) return Task.CompletedTask;
-
-                        if (!string.IsNullOrWhiteSpace(videoId) &&
-                            videoId.StartsWith("queue:", StringComparison.OrdinalIgnoreCase) &&
-                            Guid.TryParse(videoId["queue:".Length..], out var qid))
-                        {
-                            try
-                            {
-                                var inst = _queuedNext.FirstOrDefault(q => q.Id == qid);
-                                if (inst is not null)
-                                {
-                                    _manualQueuedPlayInstanceId = qid;
-                                    var idxBase = _playlistCore.Entries.FindIndex(e => e.VideoId.Equals(inst.Entry.VideoId));
-                                    if (idxBase >= 0)
-                                        _engine.SetQueue(_playlistCore.Entries, startIndex: idxBase, raiseNowPlayingChanged: true);
-                                }
-                            }
-                            catch { /* ignore */ }
-                        }
-                        else
-                        {
-                            // Manual play from base playlist: align engine play order to the base list around the clicked row.
-                            var selectedEntry = _playlistCore.Entries.FirstOrDefault(e =>
-                                string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
-                            if (selectedEntry is not null)
-                            {
-                                _manualQueuedPlayInstanceId = null;
-                                var idxBase = _playlistCore.Entries.FindIndex(e => e.VideoId.Equals(selectedEntry.VideoId));
-                                if (idxBase < 0)
-                                    idxBase = FindIndexByVideoId(_playlistCore.Entries, selectedEntry.VideoId);
-                                if (idxBase >= 0)
-                                    _engine.SetQueue(_playlistCore.Entries, startIndex: idxBase, raiseNowPlayingChanged: true);
-                            }
-                        }
-
-                        // After any SetQueue call above, indices may have shifted; always resolve against the *current* engine order.
-                        var playIdx = FindPlayOrderIndexByVideoId(videoId);
-                        if (playIdx < 0)
-                        {
-                            try { AppLog.Warn($"Double-click play: VideoId not in current play order ({videoId})."); } catch { /* ignore */ }
-                            return Task.CompletedTask;
-                        }
-
-                        if (playIdx < 0 || playIdx >= _engine.PlayOrder.Count)
-                        {
-                            try { AppLog.Warn($"Double-click play: index out of range ({videoId}) idx={playIdx} count={_engine.PlayOrder.Count}."); } catch { /* ignore */ }
-                            return Task.CompletedTask;
-                        }
-
-                        var selected = _engine.PlayOrder[playIdx];
-                        try { AppLog.Warn($"DoubleClickPlay: resolved playIdx={playIdx} selected={selected.VideoId}"); } catch { /* ignore */ }
-                        _suppressAutoScrollVideoId = selected.VideoId;
-                        _suppressAutoScrollUntilUtc = DateTime.UtcNow.AddSeconds(2);
-                        // Same-track replay: clear resume override or UpdateTimelineUi keeps showing the saved position instead of 0.
-                        _pendingResumeSeconds = 0;
-                        _pendingResumeVideoId = null;
-                        _engine.SetQueue(_engine.PlayOrder, startIndex: playIdx, raiseNowPlayingChanged: true);
-                        UpdateTimelineUi();
-                        try { AppLog.Warn($"DoubleClickPlay: calling PlayCurrentAsync videoId={selected.VideoId}"); } catch { /* ignore */ }
-                        _ = Task.Run(async () =>
-                        {
-                            try
-                            {
-                                await _engine.PlayCurrentAsync().ConfigureAwait(false);
-                                try { AppLog.Warn($"DoubleClickPlay: PlayCurrentAsync returned videoId={selected.VideoId}"); } catch { /* ignore */ }
-                            }
-                            catch (Exception ex)
-                            {
-                                try { AppLog.Exception(ex, "DoubleClickPlay PlayCurrentAsync failed"); } catch { /* ignore */ }
-                            }
-                        });
-                        return Task.CompletedTask;
-                    }
-                    catch (Exception ex)
-                    {
-                        try { AppLog.Exception(ex, "Double-click play failed"); } catch { /* ignore */ }
-                        try { System.Windows.MessageBox.Show(this, $"Play failed:\n\n{ex.GetType().Name}: {ex.Message}", GetAppTitleBase(), MessageBoxButton.OK, MessageBoxImage.Error); } catch { /* ignore */ }
-                    }
-                    return Task.CompletedTask;
-                },
-                addToQueueAsync: (entry) =>
-                {
-                    try
-                    {
-                        AddToQueue(entry);
-                        // NO rebuild needed - queue is handled separately
-                        RequestPersistSnapshot();
-                    }
-                    catch { /* ignore */ }
-                    return Task.CompletedTask;
-                },
-                removeQueuedInstanceAsync: (id) =>
-                {
-                    try
-                    {
-                        if (RemoveQueuedInstance(id))
-                        {
-                            // NO rebuild needed
-                            RequestPersistSnapshot();
-                        }
-                    }
-                    catch { /* ignore */ }
-                    return Task.CompletedTask;
-                }
-            )
-            {
-                Owner = null,
-            };
-            try { _playlistWindow.Title = $"{GetAppTitleBase()} — Playlist"; } catch { /* ignore */ }
-
-            try
-            {
-                var sortModeRaw = (latestSettings.PlaylistWindowSortMode ?? "None").Trim();
-                var sortDirRaw = (latestSettings.PlaylistWindowSortDirection ?? "Asc").Trim();
-                _ = Enum.TryParse<PlaylistSortMode>(sortModeRaw, ignoreCase: true, out var sm);
-                _ = Enum.TryParse<PlaylistSortDirection>(sortDirRaw, ignoreCase: true, out var sd);
-                var spec = new PlaylistSortSpec(sm, sd);
-                _playlistWindow.SetSortSpec(spec);
-                if (spec.Mode != PlaylistSortMode.None && _playlistCore.Entries.Count > 1)
-                    _ = ApplyPlaylistSortAsync(spec, CancellationToken.None);
-            }
-            catch { /* ignore */ }
-
-            // Center on now-playing during Loaded (sync + first center pass on UI thread) so we do not paint the
-            // top of the list for a frame before ContextIdle scroll. Queue list opacity is suppressed until then.
-            _playlistWindow.Loaded += (_, _) =>
-            {
-                try { FocusPlaylistOnNowPlaying(); }
-                catch { /* ignore */ }
-            };
-
-            _playlistWindow.Closing += (_, _) =>
-            {
-                if (_isShuttingDown)
-                    return;
-                if (_playlistWindow is not null)
-                    WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
-                try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                // Persist bounds/state when the playlist window is closed.
-                SaveSettingsSnapshot();
-            };
-            _playlistWindow.LocationChanged += (_, _) =>
-            {
-                if (_syncingWindowMove || _restoringAuxFromMinimize) return;
-                if (_playlistWindow is not null)
-                    WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
-                try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                // Legacy "dock to main" snapping fights the new snap service.
-                // Let WM_MOVING-based snapping control interactive positioning.
-                RequestPersistSnapshot();
-            };
-            _playlistWindow.SizeChanged += (_, _) =>
-            {
-                if (_syncingWindowMove || _restoringAuxFromMinimize) return;
-                if (_playlistWindow is not null)
-                    WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState);
-                try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
-                RequestPersistSnapshot();
-            };
-            _playlistWindow.IsVisibleChanged += (_, _) =>
-            {
-                if (_isShuttingDown || _syncingWindowMove || _restoringAuxFromMinimize)
-                    return;
-                if (_playlistWindow is not null && !_playlistWindow.IsVisible)
-                {
-                    try { WindowCoordinator.CaptureWindowBounds(_playlistWindow, out _lastPlaylistBounds, out _lastPlaylistWindowState); } catch { /* ignore */ }
-                    try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                    try { SaveSettingsSnapshot(); } catch { /* ignore */ }
-                }
-            };
-            _playlistWindow.Closed += (_, _) =>
-            {
-                _playlistWindow = null;
-                _playlistAuxCtl.Clear();
-                _playlistWindowOuterAtUiScalePercent = null;
-                // If user closes Playlist, clear the compact "pin open" override.
-                _compactUserOpenedPlaylistWindow = false;
-            };
-            _playlistAuxCtl.Register(_playlistWindow);
-            try { WindowCoordinator.RegisterSnapping(_playlistWindow); } catch { /* ignore */ }
-            _playlistWindow.SetItemsSource(_queueItems, _playlistItems);
-            UpdateRefreshEnabled();
-            try { _playlistWindow.ApplyPersistedPlaylistFilter(latestSettings.PlaylistWindowFilter); } catch { /* ignore */ }
-            ApplyPlaylistWindowSettings(latestSettings, _playlistWindow);
-            NormalizePlaylistWindowOuterForUiScale(latestSettings, _playlistWindow);
-            var plS = UiScale;
-            _playlistWindow.MinWidth = 560.0 * plS;
-            _playlistWindow.MinHeight = 320.0 * plS;
-            _playlistWindowOuterAtUiScalePercent = _uiScalePercent;
-            AppLog.Info($"Playlist bounds (open) pre-show: L={_playlistWindow.Left} T={_playlistWindow.Top} W={_playlistWindow.Width} H={_playlistWindow.Height} State={_playlistWindow.WindowState}");
-            try { _playlistWindow.BeginSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
-            _playlistWindow.Show();
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-            }), DispatcherPriority.Background);
-            try
-            {
-                var current = _engine.GetCurrent();
-                if (current is not null)
-                {
-                    _playlistWindow.CenterNowPlaying(current);
-                }
-            }
-            catch { /* ignore */ }
-            ApplyAlwaysOnTopFromSettings();
-            // NOTE: We intentionally avoid delayed re-application of bounds here.
-            // It caused snapping to break by moving the window back to its persisted position.
+            GetPlaylistHost().EnsureOpen();
         }
         catch (Exception ex)
         {
             AppLog.Exception(ex, "Open playlist window failed");
             try { _playlistWindow = null; } catch { /* ignore */ }
+            try { _playlistAuxCtl.Clear(); } catch { /* ignore */ }
             try
             {
                 System.Windows.MessageBox.Show(
@@ -3801,14 +3367,14 @@ public partial class MainWindow : Window
                     if (_lyricsWindow.IsVisible)
                     {
                         _compactUserOpenedLyricsWindow = false;
-                        _lyricsWindow.Hide();
+                        GetLyricsHost().Hide();
                     }
                     else
                     {
                         if (_mainWindowCompact && _compactModeHidesAuxWindows)
                             _lyricsWindowWasOpenBeforeCompact = true;
                         _compactUserOpenedLyricsWindow = true;
-                        EnsureLyricsWindowOpen();
+                        GetLyricsHost().EnsureOpen();
                     }
                 }
                 catch { /* ignore */ }
@@ -3820,7 +3386,7 @@ public partial class MainWindow : Window
                 _compactUserOpenedLyricsWindow = true;
                 _lyricsWindowWasOpenBeforeCompact = true;
             }
-            EnsureLyricsWindowOpen();
+            GetLyricsHost().EnsureOpen();
         }
         catch { /* ignore */ }
     }
@@ -3834,114 +3400,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (_lyricsWindow is not null)
-            {
-                if (!_lyricsWindow.IsVisible)
-                {
-                    _lyricsAuxCtl.ShowWarm(() =>
-                    {
-                        try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
-                        Dispatcher.BeginInvoke(new Action(() =>
-                        {
-                            try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                        }), DispatcherPriority.Background);
-                    });
-                }
-                return;
-            }
-
-            var latestSettings = _settingsService.LoadLatest();
-
-            // Fast path: if we have cached lyrics for the current track, load them before showing the window
-            // so the initial render isn't blank while other startup work is happening.
-            try { TryLoadLyricsFromCacheForCurrentBestEffort(); } catch { /* ignore */ }
-
-            _lyricsWindow = new LyricsWindow(
-                lyricsEnabled: () => _lyricsEnabled,
-                hasLyrics: () => _lyricsService.Manager.HasLyrics,
-                lyricsTitle: () => _lyricsService.Manager.ResolvedTitleDisplay,
-                lyricsLines: () => _lyricsService.Manager.HasLyrics ? _lyricsService.Manager.GetLineTexts() : Array.Empty<string>(),
-                isPlainLyrics: () => _lyricsService.Manager.IsPlainLyrics,
-                getCurrentLineIndex: () => _lyricsService.Manager.GetCurrentLineIndex(_engine.CurrentPositionSeconds)
-            )
-            {
-                Owner = null,
-            };
-            try { _lyricsWindow.Title = $"{GetAppTitleBase()} — Lyrics"; } catch { /* ignore */ }
-
-            _lyricsWindow.Closing += (_, _) =>
-            {
-                if (_isShuttingDown)
-                    return;
-                if (_lyricsWindow is not null)
-                    WindowCoordinator.CaptureWindowBounds(_lyricsWindow, out _lastLyricsBounds, out _lastLyricsWindowState);
-                try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                SaveSettingsSnapshot();
-            };
-            _lyricsWindow.LocationChanged += (_, _) =>
-            {
-                if (_syncingWindowMove || _restoringAuxFromMinimize) return;
-                if (_lyricsWindow is not null)
-                    WindowCoordinator.CaptureWindowBounds(_lyricsWindow, out var lastLyricsBounds, out var lastLyricsState);
-                try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                // Legacy "dock to main" snapping fights the new snap service.
-                RequestPersistSnapshot();
-            };
-            _lyricsWindow.SizeChanged += (_, _) =>
-            {
-                if (_syncingWindowMove || _restoringAuxFromMinimize) return;
-                if (_lyricsWindow is not null)
-                    WindowCoordinator.CaptureWindowBounds(_lyricsWindow, out var lastLyricsBounds, out var lastLyricsState);
-                try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
-                RequestPersistSnapshot();
-            };
-            _lyricsWindow.IsVisibleChanged += (_, _) =>
-            {
-                if (_isShuttingDown || _syncingWindowMove || _restoringAuxFromMinimize)
-                    return;
-                if (_lyricsWindow is not null && !_lyricsWindow.IsVisible)
-                {
-                    try { WindowCoordinator.CaptureWindowBounds(_lyricsWindow, out _lastLyricsBounds, out _lastLyricsWindowState); } catch { /* ignore */ }
-                    try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                    try { SaveSettingsSnapshot(); } catch { /* ignore */ }
-                    try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
-                }
-            };
-            _lyricsWindow.Closed += (_, _) =>
-            {
-                _lyricsWindow = null;
-                _lyricsAuxCtl.Clear();
-                // Ultra-compact title bar shows lyric line only when the lyrics window is closed.
-                // Force a refresh on close (even when paused) so the title bar switches immediately.
-                try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
-            };
-            _lyricsAuxCtl.Register(_lyricsWindow);
-            try { WindowCoordinator.RegisterSnapping(_lyricsWindow); } catch { /* ignore */ }
-
-            ApplyLyricsWindowSettings(latestSettings, _lyricsWindow);
-            _lyricsWindow.MinWidth = 400.0 * UiScale;
-            _lyricsWindow.MinHeight = 300.0 * UiScale;
-
-            _lyricsWindow.Show();
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-            }), DispatcherPriority.Background);
-            try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
-            // Ultra-compact title bar shows lyric line only when the lyrics window is closed.
-            // Force a refresh on open so the title switches immediately (even if the lyric line hasn't changed yet).
-            try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
-            // Startup restore can open the lyrics window before lyrics resolution runs; kick a refresh/resolve so
-            // cached lyrics appear immediately when available.
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                try { TryLoadLyricsFromCacheForCurrentBestEffort(); } catch { /* ignore */ }
-                try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
-                try { _ = TryResolveLyricsAsync(); } catch { /* ignore */ }
-            }), DispatcherPriority.Background);
-
-            ApplyAlwaysOnTopFromSettings();
+            GetLyricsHost().EnsureOpen();
         }
         catch (Exception ex)
         {
@@ -4589,10 +4048,7 @@ public partial class MainWindow : Window
                     _optionsWindowWasOpenBeforeCompact = false;
 
                 WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
-                if (_optionsWindow.IsVisible)
-                    _optionsWindow.Hide();
-                else
-                    EnsureOptionsWindowOpen();
+                GetOptionsHost().Toggle();
             }
             catch { /* ignore */ }
             try { SaveSettingsSnapshot(); } catch { /* ignore */ }
@@ -4601,414 +4057,12 @@ public partial class MainWindow : Window
 
         if (_mainWindowCompact && _compactModeHidesAuxWindows)
             _optionsWindowWasOpenBeforeCompact = true;
-        EnsureOptionsWindowOpen();
+        GetOptionsHost().EnsureOpen();
     }
 
     private void EnsureOptionsWindowOpen()
     {
-        if (_optionsWindow is not null)
-        {
-            if (!_optionsWindow.IsVisible)
-            {
-                _optionsAuxCtl.ShowWarm(() =>
-                {
-                    try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
-                    Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                    }), DispatcherPriority.Background);
-                });
-            }
-            return;
-        }
-
-        var latestSettings = _settingsService.LoadLatest();
-        AppLog.Info($"Options bounds (open) settings: L={latestSettings.OptionsWindowLeft} T={latestSettings.OptionsWindowTop} W={latestSettings.OptionsWindowWidth} H={latestSettings.OptionsWindowHeight} State={latestSettings.OptionsWindowState}");
-        try
-        {
-            var path = _settingsService.GetSettingsPath();
-            if (File.Exists(path))
-            {
-                var raw = SafeJson.ReadUtf8TextForJson(path, SafeJson.MaxAppSettingsFileBytes);
-                using var doc = JsonDocument.Parse(raw, SafeJson.CreateDocumentOptions());
-                var root = doc.RootElement;
-                var rawL = root.TryGetProperty("OptionsWindowLeft", out var l) ? l.ToString() : "(missing)";
-                var rawT = root.TryGetProperty("OptionsWindowTop", out var t) ? t.ToString() : "(missing)";
-                AppLog.Info($"Options bounds (open) raw-json: path={path} L={rawL} T={rawT}");
-            }
-            else
-            {
-                AppLog.Info($"Options bounds (open) raw-json: settings file missing at {path}");
-            }
-        }
-        catch (Exception ex)
-        {
-            AppLog.Exception(ex, "Options bounds raw-json read failed");
-        }
-        _optionsWindow = new OptionsWindow(
-                getYtDlpPath: () => _savedYtDlpPath ?? "",
-                setYtDlpPath: (p) =>
-                {
-                    _savedYtDlpPath = string.IsNullOrWhiteSpace(p) ? null : p.Trim();
-                    ApplyResolvedToolPaths();
-                    ApplyYtdlpPlaybackOptions();
-                    RequestPersistSnapshot();
-                },
-                getInternalYtDlpUpdateCheckEnabled: () => _internalYtDlpUpdateCheckEnabled,
-                setInternalYtDlpUpdateCheckEnabled: (v) =>
-                {
-                    _internalYtDlpUpdateCheckEnabled = v;
-                    RequestPersistSnapshot();
-                },
-                checkInternalYtDlpNowAsync: async () => await CheckInternalYtDlpNowAsync().ConfigureAwait(true),
-                getLyricsEnabled: () => _lyricsEnabled,
-                setLyricsEnabled: (v) =>
-                {
-                    _lyricsEnabled = v;
-                    if (!v)
-                        _stopLyricsTimer();
-                    else if (_engine.IsPlaying)
-                        _startLyricsTimer();
-                    try { UpdateLyricsDisplay(force: true); } catch { /* ignore */ }
-                    RequestPersistSnapshot();
-                },
-                getLyricsLocalFilesEnabled: () => _lyricsLocalFilesEnabled,
-                setLyricsLocalFilesEnabled: (v) =>
-                {
-                    _lyricsLocalFilesEnabled = v;
-                    // if (v)
-                    //     _startLyricsTimer();
-                    // else
-                    //     _lyricsTimer?.Stop();
-                    RequestPersistSnapshot();
-                },
-
-                getFfmpegPath: () => _savedFfmpegPath ?? "",
-                setFfmpegPath: (p) =>
-                {
-                    _savedFfmpegPath = string.IsNullOrWhiteSpace(p) ? null : p.Trim();
-                    ApplyResolvedToolPaths();
-                    RequestPersistSnapshot();
-                },
-                getNodeJsPath: () => _savedNodePath ?? "",
-                setNodeJsPath: (p) =>
-                {
-                    _savedNodePath = string.IsNullOrWhiteSpace(p) ? null : p.Trim();
-                    ApplyYtdlpPlaybackOptions();
-                    RequestPersistSnapshot();
-                },
-                getYtdlpEjsComponentSource: () => _ytdlpEjsComponentSource,
-                setYtdlpEjsComponentSource: (s) =>
-                {
-                    var t = (s ?? "").Trim();
-                    _ytdlpEjsComponentSource = string.Equals(t, "bundled", StringComparison.OrdinalIgnoreCase) ? "bundled" : "github";
-                    ApplyYtdlpPlaybackOptions();
-                    RequestPersistSnapshot();
-                },
-                getYoutubeCookiesFromBrowserEnabled: () => _youtubeCookiesFromBrowserEnabled,
-                setYoutubeCookiesFromBrowserEnabled: (v) =>
-                {
-                    _youtubeCookiesFromBrowserEnabled = v;
-                    ApplyYtdlpPlaybackOptions();
-                    RequestPersistSnapshot();
-                },
-                getYoutubeCookiesFromBrowser: () => _youtubeCookiesFromBrowser,
-                setYoutubeCookiesFromBrowser: (t) =>
-                {
-                    _youtubeCookiesFromBrowser = t ?? "";
-                    ApplyYtdlpPlaybackOptions();
-                    RequestPersistSnapshot();
-                },
-                getCacheMaxMb: () => _cacheMaxMb,
-                setCacheMaxMb: (mb) =>
-                {
-                    _cacheMaxMb = Math.Clamp(mb, 16, 102400);
-                    try { _engine.SetCacheMaxBytes((long)_cacheMaxMb * 1024L * 1024L); } catch { /* ignore */ }
-                    RequestPersistSnapshot();
-                },
-                getPlaylistAutoRefreshMinutes: () => _autoRefreshMinutes,
-                setPlaylistAutoRefreshMinutes: (m) =>
-                {
-                    _autoRefreshMinutes = m;
-                    ApplyAutoRefreshSelection();
-                    RequestPersistSnapshot();
-                },
-                getGlobalMediaKeysEnabled: () => _globalMediaKeysEnabled,
-                setGlobalMediaKeysEnabled: (v) => SetGlobalMediaKeysEnabled(v),
-                getBackgroundMode: () => _backgroundMode,
-                setBackgroundMode: (m) =>
-                {
-                    _backgroundMode = SettingsStore.NormalizeBackgroundMode(m);
-                    ApplyBackgroundFromSettings();
-                    ApplyBackgroundColorsFromSettings();
-                    RequestPersistSnapshot();
-                },
-                getCustomBackgroundImagePath: () => _customBackgroundImagePath,
-                setCustomBackgroundImagePath: (p) =>
-                {
-                    _customBackgroundImagePath = p ?? "";
-                    ApplyBackgroundFromSettings();
-                    ApplyBackgroundColorsFromSettings();
-                    RequestPersistSnapshot();
-                },
-                getBackgroundColorMode: () => _backgroundColorMode,
-                setBackgroundColorMode: (m) =>
-                {
-                    _backgroundColorMode = SettingsStore.NormalizeBackgroundColorMode(m);
-                    ApplyBackgroundColorsFromSettings();
-                    RequestPersistSnapshot();
-                },
-                getCustomBackgroundColor: () => _customBackgroundColor,
-                setCustomBackgroundColor: (hex) =>
-                {
-                    _customBackgroundColor = hex ?? "";
-                    ApplyBackgroundColorsFromSettings();
-                    RequestPersistSnapshot();
-                },
-                getBackgroundAlpha: () => _backgroundAlpha,
-                setBackgroundAlpha: (a) =>
-                {
-                    _backgroundAlpha = Math.Clamp(a, 0, 255);
-                    ApplyBackgroundColorsFromSettings();
-                    RequestPersistSnapshot();
-                },
-                getBackgroundScrimPercent: () => _backgroundScrimPercent,
-                setBackgroundScrimPercent: (p) =>
-                {
-                    _backgroundScrimPercent = Math.Clamp(p, 0, 80);
-                    ApplyBackgroundFromSettings();
-                    RequestPersistSnapshot();
-                },
-                getBackgroundImageStretch: () => _backgroundImageStretch,
-                setBackgroundImageStretch: (s) =>
-                {
-                    _backgroundImageStretch = SettingsStore.NormalizeBackgroundImageStretch(s);
-                    ApplyBackgroundFromSettings();
-                    RequestPersistSnapshot();
-                },
-                getBackgroundUserDefinedMainNormal: () => _backgroundUserDefinedMainNormal,
-                setBackgroundUserDefinedMainNormal: (r) => { _backgroundUserDefinedMainNormal = r; },
-                getBackgroundUserDefinedMainCompact: () => _backgroundUserDefinedMainCompact,
-                setBackgroundUserDefinedMainCompact: (r) => { _backgroundUserDefinedMainCompact = r; },
-                getBackgroundUserDefinedMainUltra: () => _backgroundUserDefinedMainUltra,
-                setBackgroundUserDefinedMainUltra: (r) => { _backgroundUserDefinedMainUltra = r; },
-                getBackgroundUserDefinedPlaylist: () => _backgroundUserDefinedPlaylist,
-                setBackgroundUserDefinedPlaylist: (r) => { _backgroundUserDefinedPlaylist = r; },
-                getBackgroundUserDefinedOptionsLog: () => _backgroundUserDefinedOptionsLog,
-                setBackgroundUserDefinedOptionsLog: (r) => { _backgroundUserDefinedOptionsLog = r; },
-                getBackgroundUserDefinedLyrics: () => _backgroundUserDefinedLyrics,
-                setBackgroundUserDefinedLyrics: (r) => { _backgroundUserDefinedLyrics = r; },
-                openBackgroundDesigner: () => OpenBackgroundDesigner(),
-                getAppTitleMode: () => _appTitleMode,
-                setAppTitleMode: (m) =>
-                {
-                    _appTitleMode = SettingsStore.NormalizeAppTitleMode(m);
-                    ApplyAppTitleFromSettings();
-                    RequestPersistSnapshot();
-                },
-                getCustomAppTitle: () => _customAppTitle,
-                setCustomAppTitle: (t) =>
-                {
-                    _customAppTitle = t ?? "";
-                    ApplyAppTitleFromSettings();
-                    RequestPersistSnapshot();
-                },
-                getUiScalePercent: () => _uiScalePercent,
-                setUiScalePercent: (p) =>
-                {
-                    var v = Math.Clamp(p, 50, 200);
-                    if (v == _uiScalePercent)
-                        return;
-                    _uiScalePercent = v;
-                    ApplyUiScale();
-                    RequestPersistSnapshot();
-                },
-                getWindowBorderMode: () => _windowBorderMode,
-                setWindowBorderMode: (m) =>
-                {
-                    _windowBorderMode = NormalizeWindowBorderMode(m);
-                    ApplyWindowBorderFromSettings();
-                    RequestPersistSnapshot();
-                },
-                getWindowBorderCustomPx: () => _windowBorderCustomPx,
-                setWindowBorderCustomPx: (px) =>
-                {
-                    _windowBorderCustomPx = Math.Clamp(px, 1, 24);
-                    ApplyWindowBorderFromSettings();
-                    RequestPersistSnapshot();
-                },
-                getTheme: () => GetCurrentThemeSettings(),
-                applyTheme: (t) => ApplyThemeSettings(t),
-                getSearchDefaults: () => (_searchDefaultCount, _searchMinLengthSeconds),
-                setSearchDefaults: (count, minLen) =>
-                {
-                    _searchDefaultCount = Math.Clamp(count, 1, 200);
-                    _searchMinLengthSeconds = Math.Clamp(minLen, 0, 3600);
-                    RequestPersistSnapshot();
-                },
-                getIncludeSubfoldersOnFolderLoad: () => _includeSubfoldersOnFolderLoad,
-                setIncludeSubfoldersOnFolderLoad: (v) =>
-                {
-                    _includeSubfoldersOnFolderLoad = v;
-                    RequestPersistSnapshot();
-                },
-                getReadMetadataOnLoad: () => _readMetadataOnLoad,
-                setReadMetadataOnLoad: (v) =>
-                {
-                    _readMetadataOnLoad = v;
-                    RequestPersistSnapshot();
-                },
-                getAlwaysOnTopPlaylistWindow: () => _alwaysOnTopPlaylistWindow,
-                setAlwaysOnTopPlaylistWindow: (v) => SetAlwaysOnTopPlaylistWindow(v),
-                getAlwaysOnTopOptionsWindow: () => _alwaysOnTopOptionsWindow,
-                setAlwaysOnTopOptionsWindow: (v) => SetAlwaysOnTopOptionsWindow(v),
-                getAlwaysOnTopLyricsWindow: () => _alwaysOnTopLyricsWindow,
-                setAlwaysOnTopLyricsWindow: (v) => SetAlwaysOnTopLyricsWindow(v),
-                getCompactModeHidesAuxWindows: () => _compactModeHidesAuxWindows,
-                setCompactModeHidesAuxWindows: (v) => SetCompactModeHidesAuxWindows(v),
-                getCompactModeLayout: () => _compactModeLayout,
-                setCompactModeLayout: (v) => SetCompactModeLayout(v),
-                getKeepIncompletePlaylistOnCancel: () => _keepIncompletePlaylistOnCancel,
-                setKeepIncompletePlaylistOnCancel: (v) =>
-                {
-                    _keepIncompletePlaylistOnCancel = v;
-                    RequestPersistSnapshot();
-                },
-                getExportM3uIncludeYoutube: () => _exportM3uIncludeYoutube,
-                setExportM3uIncludeYoutube: (v) =>
-                {
-                    _exportM3uIncludeYoutube = v;
-                    RequestPersistSnapshot();
-                },
-                getExportM3uPreferRelativePaths: () => _exportM3uPreferRelativePaths,
-                setExportM3uPreferRelativePaths: (v) =>
-                {
-                    _exportM3uPreferRelativePaths = v;
-                    RequestPersistSnapshot();
-                },
-                getExportM3uIncludeLyllyMetadata: () => _exportM3uIncludeLyllyMetadata,
-                setExportM3uIncludeLyllyMetadata: (v) =>
-                {
-                    _exportM3uIncludeLyllyMetadata = v;
-                    RequestPersistSnapshot();
-                },
-                getAppIconVisibility: () => _appIconVisibility,
-                setAppIconVisibility: (v) =>
-                {
-                    _appIconVisibility = SettingsStore.NormalizeAppIconVisibility(v);
-                    ApplyAppIconVisibilityFromSettings();
-                    RequestPersistSnapshot();
-                },
-                showLog: () => LogButton_OnClick(sender: this, e: new RoutedEventArgs()),
-                getAppLogLevel: () => _appLogLevel,
-                setAppLogLevel: (v) =>
-                {
-                    _appLogLevel = AppLog.NormalizeLevelString(v);
-                    try { AppLog.SetLevel(_appLogLevel); } catch { /* ignore */ }
-                    RequestPersistSnapshot();
-                },
-                getAppLogMaxMb: () => _appLogMaxMb,
-                setAppLogMaxMb: (mb) =>
-                {
-                    _appLogMaxMb = Math.Clamp(mb, 1, 200);
-                    try { AppLog.SetMaxDiskMegabytes(_appLogMaxMb); } catch { /* ignore */ }
-                    RequestPersistSnapshot();
-                },
-                getAudioQuality: () => _audioQuality,
-                setAudioQuality: (q) =>
-                {
-                    _audioQuality = q ?? "Auto";
-                    try { _ytDlp.SetAudioQuality(_audioQuality); } catch { /* ignore */ }
-                    try { _engine.NotifyYoutubeAudioQualityChanged(); } catch { /* ignore */ }
-                    RequestPersistSnapshot();
-                },
-                getAudioOutputDevice: () => _audioOutputDevice,
-                setAudioOutputDevice: (d) =>
-                {
-                    _audioOutputDevice = string.IsNullOrWhiteSpace(d) ? null : d;
-                    try { _engine.SetAudioOutputDevice(ResolveAudioDeviceNumber(_audioOutputDevice)); } catch { /* ignore */ }
-                    RequestPersistSnapshot();
-                },
-                getOptionsSelectedTab: () => _optionsSelectedTab,
-                setOptionsSelectedTab: (tab) =>
-                {
-                    _optionsSelectedTab = SettingsStore.NormalizeOptionsWindowSelectedTab(tab);
-                    RequestPersistSnapshot();
-                },
-                getThemeMode: () => _themeMode,
-                setThemeMode: (m) =>
-                {
-                    _themeMode = SettingsStore.NormalizeThemeMode(m);
-                    ApplyBackgroundFromSettings();
-                    ApplyBackgroundColorsFromSettings();
-                    RequestPersistSnapshot();
-                },
-                persistSettingsNow: () =>
-                {
-                    try { _persistTimer.Stop(); } catch { /* ignore */ }
-                    try { SaveSettingsSnapshot(); } catch { /* ignore */ }
-                }
-            )
-        {
-            Owner = null,
-        };
-        try { _optionsWindow.Title = $"{GetAppTitleBase()} — Options"; } catch { /* ignore */ }
-        _optionsWindow.Closing += (_, _) =>
-        {
-            if (_isShuttingDown)
-                return;
-            if (_optionsWindow is not null)
-                WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
-            try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-            SaveSettingsSnapshot();
-        };
-        _optionsWindow.LocationChanged += (_, _) =>
-        {
-            if (_syncingWindowMove || _restoringAuxFromMinimize) return;
-            if (_optionsWindow is not null)
-                WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
-            try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-            // Legacy "dock to main" snapping fights the new snap service.
-            RequestPersistSnapshot();
-        };
-        _optionsWindow.SizeChanged += (_, _) =>
-        {
-            if (_syncingWindowMove || _restoringAuxFromMinimize) return;
-            if (_optionsWindow is not null)
-                WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState);
-            try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-            // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
-            RequestPersistSnapshot();
-        };
-        _optionsWindow.IsVisibleChanged += (_, _) =>
-        {
-            if (_isShuttingDown || _syncingWindowMove || _restoringAuxFromMinimize)
-                return;
-            if (_optionsWindow is not null && !_optionsWindow.IsVisible)
-            {
-                try { WindowCoordinator.CaptureWindowBounds(_optionsWindow, out _lastOptionsBounds, out _lastOptionsWindowState); } catch { /* ignore */ }
-                try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                try { SaveSettingsSnapshot(); } catch { /* ignore */ }
-            }
-        };
-        _optionsWindow.Closed += (_, _) =>
-        {
-            _optionsWindow = null;
-            _optionsAuxCtl.Clear();
-        };
-        _optionsAuxCtl.Register(_optionsWindow);
-        try { WindowCoordinator.RegisterSnapping(_optionsWindow); } catch { /* ignore */ }
-        ApplyOptionsWindowScaledChromeSize(_optionsWindow);
-        ApplyOptionsWindowSettings(latestSettings, _optionsWindow);
-        try { _optionsWindow.SetLogPopoutOpen(_logWindow is not null); } catch { /* ignore */ }
-        _optionsWindow.Show();
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-        }), DispatcherPriority.Background);
-        try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
-        ApplyAlwaysOnTopFromSettings();
-        // NOTE: avoid delayed bounds re-apply; it races with snapping.
+        GetOptionsHost().EnsureOpen();
     }
 
     private void SyncPlaylistWindowToMain()
@@ -5142,6 +4196,25 @@ public partial class MainWindow : Window
             LyricsSnapEdge.Top => SnapSide.Top,
             _ => SnapSide.Right
         }, left, top, lwW, lwH, main, works);
+    }
+
+    private static (double left, double top) ClampSnappedToWorkAreasAvoidOverlap(
+        OptionsSnapEdge snap,
+        double left,
+        double top,
+        double owW,
+        double owH,
+        Rect main,
+        IReadOnlyList<Rect> works)
+    {
+        return ClampSnappedToWorkAreasAvoidOverlapCore(snap switch
+        {
+            OptionsSnapEdge.Right => SnapSide.Right,
+            OptionsSnapEdge.Left => SnapSide.Left,
+            OptionsSnapEdge.Bottom => SnapSide.Bottom,
+            OptionsSnapEdge.Top => SnapSide.Top,
+            _ => SnapSide.Right
+        }, left, top, owW, owH, main, works);
     }
 
     private static (double left, double top) ClampSnappedToWorkAreasAvoidOverlapCore(
@@ -5317,9 +4390,7 @@ public partial class MainWindow : Window
                             }
                             catch { /* ignore */ }
 
-                            try { if (_playlistSnapped) SyncPlaylistWindowToMain(); } catch { /* ignore */ }
-                            try { if (_optionsSnapped) SyncOptionsWindowToMain(); } catch { /* ignore */ }
-                            try { if (_lyricsSnapped) SyncLyricsWindowToMain(); } catch { /* ignore */ }
+                            // Legacy sync-to-main removed; WindowSnapService handles interactive latching + cluster move.
                         }
                         catch { /* ignore */ }
                         finally
@@ -5348,9 +4419,7 @@ public partial class MainWindow : Window
                     }
                     catch { /* ignore */ }
 
-                    try { if (_playlistSnapped) SyncPlaylistWindowToMain(); } catch { /* ignore */ }
-                    try { if (_optionsSnapped) SyncOptionsWindowToMain(); } catch { /* ignore */ }
-                    try { if (_lyricsSnapped) SyncLyricsWindowToMain(); } catch { /* ignore */ }
+                    // Legacy sync-to-main removed; WindowSnapService handles interactive latching + cluster move.
                     try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
                 };
                 _auxSnapSyncDebounceTimer.Start();
@@ -5616,14 +4685,23 @@ public partial class MainWindow : Window
             var desiredTop = _optionsSnapEdge switch
             {
                 OptionsSnapEdge.Bottom => mainBottom + SnapGapPx,
+                OptionsSnapEdge.Top => mainTop - ow.Height - SnapGapPx,
                 _ => mainTop + _optionsDockYOffset
             };
 
-            if (_optionsSnapEdge == OptionsSnapEdge.Bottom)
+            if (_optionsSnapEdge == OptionsSnapEdge.Bottom || _optionsSnapEdge == OptionsSnapEdge.Top)
                 desiredLeft = AuxWindowSnapHelper.ClampOptionsBottomSnapLeft(mainLeft, mainRight, ow.Width, _optionsDockXOffset);
 
-            _optionsWindow.Left = SnapRound(desiredLeft);
-            _optionsWindow.Top = SnapRound(desiredTop);
+            var clamped = ClampSnappedToWorkAreasAvoidOverlap(
+                _optionsSnapEdge,
+                desiredLeft,
+                desiredTop,
+                ow.Width,
+                ow.Height,
+                GetOuterBounds(this),
+                GetAllWorkAreasDips(this));
+            _optionsWindow.Left = SnapRound(clamped.left);
+            _optionsWindow.Top = SnapRound(clamped.top);
         }
         catch
         {
@@ -5678,10 +4756,12 @@ public partial class MainWindow : Window
             var desiredRightLeft = mainRight + SnapGapPx;
             var desiredLeftLeft = mainLeft - ow.Width - SnapGapPx;
             var desiredBottomTop = mainBottom + SnapGapPx;
+            var desiredTopTop = mainTop - ow.Height - SnapGapPx;
 
             var distToRight = Math.Abs(owLeft - desiredRightLeft);
             var distToLeft = Math.Abs(owLeft - desiredLeftLeft);
             var distToBottom = Math.Abs(owTop - desiredBottomTop);
+            var distToTop = Math.Abs(owTop - desiredTopTop);
 
             if (_optionsSnapped)
             {
@@ -5696,12 +4776,14 @@ public partial class MainWindow : Window
                     OptionsSnapEdge.Right => desiredRightLeft,
                     OptionsSnapEdge.Left => desiredLeftLeft,
                     OptionsSnapEdge.Bottom => desiredBottomTop,
+                    OptionsSnapEdge.Top => desiredTopTop,
                     _ => double.NaN
                 };
 
                 var movedFar = _optionsSnapEdge switch
                 {
                     OptionsSnapEdge.Bottom => Math.Abs(owTop - desired) > OptionsSnapUnsnapPx || !hasHOverlap,
+                    OptionsSnapEdge.Top => Math.Abs(owTop - desired) > OptionsSnapUnsnapPx || !hasHOverlap,
                     _ => Math.Abs(owLeft - desired) > OptionsSnapUnsnapPx || !hasOverlap
                 };
 
@@ -5712,7 +4794,7 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                if (_optionsSnapEdge == OptionsSnapEdge.Bottom)
+                if (_optionsSnapEdge == OptionsSnapEdge.Bottom || _optionsSnapEdge == OptionsSnapEdge.Top)
                     _optionsDockXOffset = owLeft - mainLeft;
                 else
                     _optionsDockYOffset = owTop - mainTop;
@@ -5748,6 +4830,17 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (hasHOverlap && distToTop <= OptionsSnapThresholdPx)
+            {
+                _optionsSnapped = true;
+                _optionsSnapEdge = OptionsSnapEdge.Top;
+                _optionsDockXOffset = owLeft - mainLeft;
+                var topLeft = AuxWindowSnapHelper.ClampOptionsBottomSnapLeft(mainLeft, mainRight, ow.Width, _optionsDockXOffset);
+                _optionsDockXOffset = topLeft - mainLeft;
+                SnapOptionsToEdge(topLeft, desiredTopTop);
+                return;
+            }
+
             _optionsSnapped = false;
             _optionsSnapEdge = OptionsSnapEdge.None;
         }
@@ -5766,11 +4859,16 @@ public partial class MainWindow : Window
         try
         {
             _syncingWindowMove = true;
-            _optionsWindow.Left = left;
-            _optionsWindow.Top = top;
-            _syncingWindowMove = false;
+            var ob = GetOuterBounds(_optionsWindow);
+            var clamped = ClampSnappedToWorkAreasAvoidOverlap(_optionsSnapEdge, left, top, ob.Width, ob.Height, GetOuterBounds(this), GetAllWorkAreasDips(this));
+            _optionsWindow.Left = SnapRound(clamped.left);
+            _optionsWindow.Top = SnapRound(clamped.top);
         }
         catch
+        {
+            // ignore
+        }
+        finally
         {
             _syncingWindowMove = false;
         }

@@ -28,10 +28,7 @@ public partial class OptionsWindow : Window
     private bool _suppressAutoRefreshEvent;
     private bool _suppressOptionsTabSelection;
     private bool _suppressBackgroundUiEvents;
-    private bool _chromeDragging;
-    private System.Windows.Point _chromeDragStartScreen;
-    private double _chromeDragStartLeft;
-    private double _chromeDragStartTop;
+    // DragMove() is used for chrome dragging (WM_MOVING-based snapping).
 
     private readonly Func<string> _getYtDlpPath;
     private readonly Action<string> _setYtDlpPath;
@@ -2280,58 +2277,17 @@ public partial class OptionsWindow : Window
 
         try
         {
-            _chromeDragging = true;
-            _chromeDragStartLeft = Left;
-            _chromeDragStartTop = Top;
-            _chromeDragStartScreen = PointToScreen(e.GetPosition(this));
-
-            CaptureMouse();
-            MouseMove -= ChromeDrag_MouseMove;
-            MouseLeftButtonUp -= ChromeDrag_MouseLeftButtonUp;
-            MouseMove += ChromeDrag_MouseMove;
-            MouseLeftButtonUp += ChromeDrag_MouseLeftButtonUp;
-
+            // Use OS-driven dragging so WM_MOVING-based snapping can engage (consistent with Playlist/Lyrics).
+            if (e.ClickCount == 2)
+                return;
+            DragMove();
             e.Handled = true;
         }
         catch
         {
-            _chromeDragging = false;
+            // ignore
         }
     }
 
-    private void ChromeDrag_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
-    {
-        if (!_chromeDragging)
-            return;
-        if (e.LeftButton != MouseButtonState.Pressed)
-        {
-            EndChromeDrag();
-            return;
-        }
-
-        try
-        {
-            var cur = PointToScreen(e.GetPosition(this));
-            var dx = cur.X - _chromeDragStartScreen.X;
-            var dy = cur.Y - _chromeDragStartScreen.Y;
-            Left = _chromeDragStartLeft + dx;
-            Top = _chromeDragStartTop + dy;
-        }
-        catch
-        {
-            EndChromeDrag();
-        }
-    }
-
-    private void ChromeDrag_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => EndChromeDrag();
-
-    private void EndChromeDrag()
-    {
-        if (!_chromeDragging)
-            return;
-        _chromeDragging = false;
-        try { ReleaseMouseCapture(); } catch { }
-        MouseMove -= ChromeDrag_MouseMove;
-        MouseLeftButtonUp -= ChromeDrag_MouseLeftButtonUp;
-    }
+    // Legacy manual drag helpers removed; DragMove() uses WM_MOVING so snap service works reliably.
 }

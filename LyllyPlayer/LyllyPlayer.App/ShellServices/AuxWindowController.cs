@@ -4,7 +4,7 @@ using System.Windows;
 namespace LyllyPlayer.ShellServices;
 
 /// <summary>
-/// Which auxiliary window — drives small differences in snap inference (Options has no top snap).
+/// Which auxiliary window — drives small differences in snap inference/placement.
 /// </summary>
 public enum AuxSnapWindowKind
 {
@@ -85,8 +85,7 @@ public static class AuxWindowSnapHelper
             };
         }
 
-        if (kind != AuxSnapWindowKind.Options &&
-            Math.Abs(auxBottom - (mainOuter.Top - snapGapPx)) <= persistAdjacencyPx && hOverlap >= minOverlapPx)
+        if (Math.Abs(auxBottom - (mainOuter.Top - snapGapPx)) <= persistAdjacencyPx && hOverlap >= minOverlapPx)
         {
             return new AuxSnapPersistResult
             {

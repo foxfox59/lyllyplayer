@@ -88,6 +88,14 @@ public sealed class VlcVisualizerTap : IDisposable
         }
     }
 
+    public void SetPaused(bool paused)
+    {
+        lock (_gate)
+        {
+            try { _mp?.SetPause(paused); } catch { /* ignore */ }
+        }
+    }
+
     private void OnAudioPlay(IntPtr data, IntPtr samples, uint count, long pts)
     {
         // "count" is frames per channel. Format = S16N stereo @ 48k.

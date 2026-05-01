@@ -17,8 +17,19 @@ public sealed class VisualizerTap : IDisposable
     private readonly AudioAnalyzer _analyzer;
     private CancellationTokenSource? _cts;
     private Task? _task;
+    private readonly ManualResetEventSlim _pauseGate = new(initialState: true);
 
     public VisualizerTap(AudioAnalyzer analyzer) => _analyzer = analyzer;
+
+    public void SetPaused(bool paused)
+    {
+        try
+        {
+            if (paused) _pauseGate.Reset();
+            else _pauseGate.Set();
+        }
+        catch { /* ignore */ }
+    }
 
     public void Stop()
     {
@@ -70,6 +81,8 @@ public sealed class VisualizerTap : IDisposable
 
             while (!ct.IsCancellationRequested)
             {
+                try { _pauseGate.Wait(ct); } catch { break; }
+
                 var read = sp.Read(floatBuf, 0, floatsPerChunk);
                 if (read <= 0)
                     break;

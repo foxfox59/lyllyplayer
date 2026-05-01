@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Windows;
 using LyllyPlayer.Models;
+using LyllyPlayer.ShellServices;
 using LyllyPlayer.Settings;
 using LyllyPlayer.Utils;
 
@@ -97,27 +98,58 @@ public partial class MainWindow
 
         var lastYtUrlMem = PlaylistSourcePathHeuristics.SanitizePersistedLastYoutubeUrl(_lastYoutubeUrl);
 
+        // IMPORTANT:
+        // When an aux window is hidden, we only have its last absolute bounds. If Main moved since then,
+        // adjacency inference will (correctly) say "not snapped", but that's NOT what we want to persist.
+        //
+        // Rule:
+        // - If the aux window is visible, infer snap from current geometry (ground truth).
+        // - If the aux window is hidden, persist the last-known snap relation from settings (edge + offsets).
+        var mainOuterForPersist = bounds;
+
+        var playlistVisible = _playlistWindow is not null && _playlistWindow.IsVisible;
+        var optionsVisible = _optionsWindow is not null && _optionsWindow.IsVisible;
+        var lyricsVisible = _lyricsWindow is not null && _lyricsWindow.IsVisible;
+
+        var inferredPlaylist = AuxWindowSnapHelper.InferPersistedSnap(mainOuterForPersist, savePBounds, SnapGapPx, SnapPersistAdjacencyPx, SnapPersistMinOverlapPx, AuxSnapWindowKind.Playlist);
+        var inferredOptions = AuxWindowSnapHelper.InferPersistedSnap(mainOuterForPersist, saveOBounds, SnapGapPx, SnapPersistAdjacencyPx, SnapPersistMinOverlapPx, AuxSnapWindowKind.Options);
+        var inferredLyrics = AuxWindowSnapHelper.InferPersistedSnap(mainOuterForPersist, saveLBounds, SnapGapPx, SnapPersistAdjacencyPx, SnapPersistMinOverlapPx, AuxSnapWindowKind.Lyrics);
+
+        var persistPlaylistSnap = playlistVisible ? inferredPlaylist : new AuxSnapPersistResult
+        {
+            Snapped = cur.PlaylistWindowSnapped ?? false,
+            Edge = string.IsNullOrWhiteSpace(cur.PlaylistWindowSnapEdge) ? "None" : cur.PlaylistWindowSnapEdge!,
+            DockXOffset = cur.PlaylistWindowDockXOffset ?? 0,
+            DockYOffset = cur.PlaylistWindowDockYOffset ?? 0,
+        };
+        var persistOptionsSnap = optionsVisible ? inferredOptions : new AuxSnapPersistResult
+        {
+            Snapped = cur.OptionsWindowSnapped ?? false,
+            Edge = string.IsNullOrWhiteSpace(cur.OptionsWindowSnapEdge) ? "None" : cur.OptionsWindowSnapEdge!,
+            DockXOffset = cur.OptionsWindowDockXOffset ?? 0,
+            DockYOffset = cur.OptionsWindowDockYOffset ?? 0,
+        };
+        var persistLyricsSnap = lyricsVisible ? inferredLyrics : new AuxSnapPersistResult
+        {
+            Snapped = cur.LyricsWindowSnapped ?? false,
+            Edge = string.IsNullOrWhiteSpace(cur.LyricsWindowSnapEdge) ? "None" : cur.LyricsWindowSnapEdge!,
+            DockXOffset = cur.LyricsWindowDockXOffset ?? 0,
+            DockYOffset = cur.LyricsWindowDockYOffset ?? 0,
+        };
+
+        var playlistSnappedNow = persistPlaylistSnap.Snapped;
+        var optionsSnappedNow = persistOptionsSnap.Snapped;
+        var lyricsSnappedNow = persistLyricsSnap.Snapped;
+
         // Snap persistence: keep only the offset that matters for the snapped edge.
-        var playlistDockX = _playlistSnapped && _playlistSnapEdge is PlaylistSnapEdge.Bottom or PlaylistSnapEdge.Top
-            ? (FiniteOrNull(_playlistDockXOffset) ?? 0)
-            : 0;
-        var playlistDockY = _playlistSnapped && _playlistSnapEdge is PlaylistSnapEdge.Left or PlaylistSnapEdge.Right
-            ? (FiniteOrNull(_playlistDockYOffset) ?? 0)
-            : 0;
+        var playlistDockX = playlistSnappedNow ? (FiniteOrNull(persistPlaylistSnap.DockXOffset) ?? 0) : 0;
+        var playlistDockY = playlistSnappedNow ? (FiniteOrNull(persistPlaylistSnap.DockYOffset) ?? 0) : 0;
 
-        var optionsDockX = _optionsSnapped && _optionsSnapEdge is OptionsSnapEdge.Bottom
-            ? (FiniteOrNull(_optionsDockXOffset) ?? 0)
-            : 0;
-        var optionsDockY = _optionsSnapped && _optionsSnapEdge is OptionsSnapEdge.Left or OptionsSnapEdge.Right
-            ? (FiniteOrNull(_optionsDockYOffset) ?? 0)
-            : 0;
+        var optionsDockX = optionsSnappedNow ? (FiniteOrNull(persistOptionsSnap.DockXOffset) ?? 0) : 0;
+        var optionsDockY = optionsSnappedNow ? (FiniteOrNull(persistOptionsSnap.DockYOffset) ?? 0) : 0;
 
-        var lyricsDockX = _lyricsSnapped && _lyricsSnapEdge is LyricsSnapEdge.Bottom or LyricsSnapEdge.Top
-            ? (FiniteOrNull(_lyricsDockXOffset) ?? 0)
-            : 0;
-        var lyricsDockY = _lyricsSnapped && _lyricsSnapEdge is LyricsSnapEdge.Left or LyricsSnapEdge.Right
-            ? (FiniteOrNull(_lyricsDockYOffset) ?? 0)
-            : 0;
+        var lyricsDockX = lyricsSnappedNow ? (FiniteOrNull(persistLyricsSnap.DockXOffset) ?? 0) : 0;
+        var lyricsDockY = lyricsSnappedNow ? (FiniteOrNull(persistLyricsSnap.DockYOffset) ?? 0) : 0;
 
         _settingsService.Save(new AppSettings(
             YtDlpPath: _savedYtDlpPath,
@@ -151,8 +183,8 @@ public partial class MainWindow
             WindowState: state.ToString(),
             // When snapped, persist edge + offset (relative) and avoid rewriting absolute screen coordinates.
             // This prevents "closed snapped aux" from drifting to stale absolute Left/Top after main moves.
-            PlaylistWindowLeft: _playlistSnapped ? cur.PlaylistWindowLeft : (FiniteOrNull(savePBounds.Left) ?? cur.PlaylistWindowLeft),
-            PlaylistWindowTop: _playlistSnapped ? cur.PlaylistWindowTop : (FiniteOrNull(savePBounds.Top) ?? cur.PlaylistWindowTop),
+            PlaylistWindowLeft: playlistSnappedNow ? null : (FiniteOrNull(savePBounds.Left) ?? cur.PlaylistWindowLeft),
+            PlaylistWindowTop: playlistSnappedNow ? null : (FiniteOrNull(savePBounds.Top) ?? cur.PlaylistWindowTop),
             PlaylistWindowWidth: FiniteOrNull(savePBounds.Width) ?? cur.PlaylistWindowWidth,
             PlaylistWindowHeight: FiniteOrNull(savePBounds.Height) ?? cur.PlaylistWindowHeight,
             PlaylistWindowState: savePState.ToString(),
@@ -162,29 +194,29 @@ public partial class MainWindow
                 : cur.PlaylistWindowFilter,
             PlaylistWindowSortMode: _playlistWindow is not null && _playlistWindow.IsVisible ? _playlistWindow.GetSortSpec().Mode.ToString() : cur.PlaylistWindowSortMode,
             PlaylistWindowSortDirection: _playlistWindow is not null && _playlistWindow.IsVisible ? _playlistWindow.GetSortSpec().Direction.ToString() : cur.PlaylistWindowSortDirection,
-            OptionsWindowLeft: _optionsSnapped ? cur.OptionsWindowLeft : (FiniteOrNull(saveOBounds.Left) ?? cur.OptionsWindowLeft),
-            OptionsWindowTop: _optionsSnapped ? cur.OptionsWindowTop : (FiniteOrNull(saveOBounds.Top) ?? cur.OptionsWindowTop),
+            OptionsWindowLeft: optionsSnappedNow ? null : (FiniteOrNull(saveOBounds.Left) ?? cur.OptionsWindowLeft),
+            OptionsWindowTop: optionsSnappedNow ? null : (FiniteOrNull(saveOBounds.Top) ?? cur.OptionsWindowTop),
             OptionsWindowWidth: FiniteOrNull(saveOBounds.Width) ?? cur.OptionsWindowWidth,
             OptionsWindowHeight: FiniteOrNull(saveOBounds.Height) ?? cur.OptionsWindowHeight,
             OptionsWindowState: saveOState.ToString(),
             OptionsWindowOpen: (_optionsWindow is not null && _optionsWindow.IsVisible) || (_mainWindowCompact && _compactModeHidesAuxWindows && _optionsWindowWasOpenBeforeCompact),
-            PlaylistWindowSnapped: _playlistSnapped,
-            PlaylistWindowSnapEdge: _playlistSnapEdge.ToString(),
+            PlaylistWindowSnapped: playlistSnappedNow,
+            PlaylistWindowSnapEdge: persistPlaylistSnap.Edge,
             PlaylistWindowDockYOffset: playlistDockY,
             PlaylistWindowDockXOffset: playlistDockX,
             PlaylistWindowBoundsUiScalePercent: _uiScalePercent,
-            OptionsWindowSnapped: _optionsSnapped,
-            OptionsWindowSnapEdge: _optionsSnapEdge.ToString(),
+            OptionsWindowSnapped: optionsSnappedNow,
+            OptionsWindowSnapEdge: persistOptionsSnap.Edge,
             OptionsWindowDockYOffset: optionsDockY,
             OptionsWindowDockXOffset: optionsDockX,
             OptionsWindowBottomAlignToPlaylist: false,
             OptionsWindowSelectedTab: _optionsSelectedTab,
-            LyricsWindowSnapped: _lyricsSnapped,
-            LyricsWindowSnapEdge: _lyricsSnapEdge.ToString(),
+            LyricsWindowSnapped: lyricsSnappedNow,
+            LyricsWindowSnapEdge: persistLyricsSnap.Edge,
             LyricsWindowDockYOffset: lyricsDockY,
             LyricsWindowDockXOffset: lyricsDockX,
-            LyricsWindowLeft: _lyricsSnapped ? cur.LyricsWindowLeft : (FiniteOrNull(saveLBounds.Left) ?? cur.LyricsWindowLeft),
-            LyricsWindowTop: _lyricsSnapped ? cur.LyricsWindowTop : (FiniteOrNull(saveLBounds.Top) ?? cur.LyricsWindowTop),
+            LyricsWindowLeft: lyricsSnappedNow ? null : (FiniteOrNull(saveLBounds.Left) ?? cur.LyricsWindowLeft),
+            LyricsWindowTop: lyricsSnappedNow ? null : (FiniteOrNull(saveLBounds.Top) ?? cur.LyricsWindowTop),
             LyricsWindowWidth: FiniteOrNull(saveLBounds.Width) ?? cur.LyricsWindowWidth,
             LyricsWindowHeight: FiniteOrNull(saveLBounds.Height) ?? cur.LyricsWindowHeight,
             LyricsWindowState: saveLState.ToString(),

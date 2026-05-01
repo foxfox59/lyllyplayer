@@ -422,6 +422,8 @@ public sealed partial class PlaybackEngine : IDisposable
         if (IsPlaying)
         {
             _pauseGate.Reset();
+            try { _visualizerTap.SetPaused(true); } catch { /* ignore */ }
+            try { _vlcVisualizerTap.SetPaused(true); } catch { /* ignore */ }
             try { _vlcMp?.SetPause(true); } catch { /* ignore */ }
             try { _audio?.Pause(); } catch { /* ignore */ }
             try { _positionSw.Stop(); } catch { /* ignore */ }
@@ -430,6 +432,8 @@ public sealed partial class PlaybackEngine : IDisposable
         else
         {
             _pauseGate.Set();
+            try { _visualizerTap.SetPaused(false); } catch { /* ignore */ }
+            try { _vlcVisualizerTap.SetPaused(false); } catch { /* ignore */ }
             try { _vlcMp?.SetPause(false); } catch { /* ignore */ }
             if (_audio is not null && !_audio.TryPlay() && !TryRecoverAudioOutput(leaveStoppedSinkOnTotalFailure: true))
             {
