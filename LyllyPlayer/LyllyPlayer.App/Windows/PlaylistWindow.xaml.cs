@@ -24,6 +24,46 @@ namespace LyllyPlayer.Windows;
 
 public partial class PlaylistWindow : Window
 {
+    private static bool LooksLikeYoutubeVideoId(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return false;
+        var t = s.Trim();
+        if (t.Length != 11)
+            return false;
+        for (var i = 0; i < t.Length; i++)
+        {
+            var c = t[i];
+            var ok = (c >= 'a' && c <= 'z') ||
+                     (c >= 'A' && c <= 'Z') ||
+                     (c >= '0' && c <= '9') ||
+                     c == '_' || c == '-';
+            if (!ok) return false;
+        }
+        return true;
+    }
+
+    private static string? NormalizeOpenUrlOrNull(QueueItem qi)
+    {
+        try
+        {
+            var url = (qi.WebpageUrl ?? "").Trim();
+            if (Uri.TryCreate(url, UriKind.Absolute, out var u) &&
+                (string.Equals(u.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(u.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+                return u.ToString();
+        }
+        catch { /* ignore */ }
+
+        // Some code paths store a bare YouTube id; synthesize a watch URL.
+        var vid = (qi.VideoId ?? "").Trim();
+        if (LooksLikeYoutubeVideoId(vid))
+            return $"https://www.youtube.com/watch?v={Uri.EscapeDataString(vid)}";
+
+        // If WebpageUrl isn't a valid absolute URL, don't try to open it as a browser URL.
+        return null;
+    }
+
     private sealed class Win32OwnerWrapper : Forms.IWin32Window
     {
         public IntPtr Handle { get; }
@@ -1106,9 +1146,12 @@ public partial class PlaylistWindow : Window
             if (qi is null)
                 return;
 
-            openMi.Header = TryGetLocalPath(qi.WebpageUrl, out _)
-                ? "Open file location"
-                : "Open in browser";
+            if (TryGetLocalPath(qi.WebpageUrl, out _))
+                openMi.Header = "Open file location";
+            else if (!string.IsNullOrWhiteSpace(NormalizeOpenUrlOrNull(qi)))
+                openMi.Header = "Open source";
+            else
+                openMi.Header = "Open";
 
             // Menu visibility rules:
             // - Base playlist rows: only "Add to queue"
@@ -1201,10 +1244,9 @@ public partial class PlaylistWindow : Window
                 return;
             }
 
-            var url = qi.WebpageUrl;
+            var url = NormalizeOpenUrlOrNull(qi);
             if (string.IsNullOrWhiteSpace(url))
                 return;
-
             Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
         }
         catch

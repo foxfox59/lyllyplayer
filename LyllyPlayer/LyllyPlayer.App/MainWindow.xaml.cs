@@ -3687,6 +3687,37 @@ public partial class MainWindow : Window
 
         try
         {
+            static bool TryGetLocalPathLoose(string? webpageUrlOrPath, out string path)
+            {
+                path = "";
+                if (string.IsNullOrWhiteSpace(webpageUrlOrPath))
+                    return false;
+                var s = webpageUrlOrPath.Trim();
+                try
+                {
+                    if (Uri.TryCreate(s, UriKind.Absolute, out var uri) &&
+                        uri.IsFile &&
+                        !string.IsNullOrWhiteSpace(uri.LocalPath))
+                    {
+                        path = uri.LocalPath;
+                        return true;
+                    }
+                }
+                catch { /* ignore */ }
+
+                try
+                {
+                    if (Path.IsPathRooted(s))
+                    {
+                        path = s;
+                        return true;
+                    }
+                }
+                catch { /* ignore */ }
+
+                return false;
+            }
+
             // Identify invalid items based on current UI flags + local file existence.
             var invalidIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -3699,7 +3730,8 @@ public partial class MainWindow : Window
                 var id = qi.Entry.VideoId;
                 var urlOrPath = qi.Entry.WebpageUrl ?? "";
 
-                if (LocalPlaylistLoader.TryGetLocalPath(urlOrPath, out var p))
+                // For cleaning: detect "local-ness" even if the file is missing.
+                if (TryGetLocalPathLoose(urlOrPath, out var p))
                 {
                     if (!File.Exists(p))
                         invalidIds.Add(id);
