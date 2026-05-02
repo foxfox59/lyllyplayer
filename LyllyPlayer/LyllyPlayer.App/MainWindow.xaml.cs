@@ -759,6 +759,7 @@ public partial class MainWindow : Window
     private double UiScale => Math.Clamp(_uiScalePercent / 100.0, 0.5, 2.0);
 
     private int _statusToastRequestId;
+    private bool _bringingAuxToFrontOnActivate;
 
     public MainWindow()
     {
@@ -798,6 +799,7 @@ public partial class MainWindow : Window
 
         // Universal gapless snapping between LyllyPlayer windows.
         try { WindowCoordinator.RegisterSnapping(this); } catch { /* ignore */ }
+        try { Activated += MainWindow_Activated; } catch { /* ignore */ }
 
         _appLogLevel = AppLog.NormalizeLevelString(_startupSettings.AppLogLevel);
         try { AppLog.SetLevel(_appLogLevel); } catch { /* ignore */ }
@@ -6119,6 +6121,69 @@ public partial class MainWindow : Window
         {
             return false;
         }
+    }
+
+    private void MainWindow_Activated(object? sender, EventArgs e)
+    {
+        // Aux windows are deliberately not owned (Owner=null) so they can appear separately in Alt+Tab.
+        // That means Windows won't automatically raise them when the main window is activated.
+        // Bring any visible aux windows forward so "focus main" also surfaces the currently open auxes.
+        try { BringOpenAuxWindowsToFrontBestEffort(); } catch { /* ignore */ }
+    }
+
+    private void BringOpenAuxWindowsToFrontBestEffort()
+    {
+        if (_bringingAuxToFrontOnActivate)
+            return;
+
+        _bringingAuxToFrontOnActivate = true;
+        try
+        {
+            // Defer slightly to let the activation settle; avoids flicker/races with restore/minimize flows.
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    BringWindowForwardBestEffort(_playlistWindow);
+                    BringWindowForwardBestEffort(_optionsWindow);
+                    BringWindowForwardBestEffort(_lyricsWindow);
+                    BringWindowForwardBestEffort(_logWindow);
+                }
+                finally
+                {
+                    _bringingAuxToFrontOnActivate = false;
+                }
+            }), DispatcherPriority.Background);
+        }
+        catch
+        {
+            _bringingAuxToFrontOnActivate = false;
+        }
+    }
+
+    private static void BringWindowForwardBestEffort(Window? w)
+    {
+        if (w is null)
+            return;
+        if (!w.IsVisible)
+            return;
+
+        try
+        {
+            if (w.WindowState == WindowState.Minimized)
+                w.WindowState = WindowState.Normal;
+        }
+        catch { /* ignore */ }
+
+        // "Topmost toggle" is the least invasive way to raise a window without stealing keyboard focus
+        // from the main window (calling Activate() would move focus to that window).
+        try
+        {
+            var wasTopmost = w.Topmost;
+            w.Topmost = true;
+            w.Topmost = wasTopmost;
+        }
+        catch { /* ignore */ }
     }
 
     private async void RefreshButton_OnClick(object sender, RoutedEventArgs e)
