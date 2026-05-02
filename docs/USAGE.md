@@ -128,6 +128,7 @@ If you don’t care about those, you can ignore Node completely.
 
 - **Output device** — pick **Default** or a specific **WaveOut** device. Changing device and clicking **Apply** hot-swaps output while playing when the selection actually changes (same device does nothing).
 - **YouTube stream quality** — **Auto** (best available), **High** (prefers WebM/Opus-style streams), **Medium** / **Low** (bitrate caps for slower links). Passed to yt-dlp as the format selector; takes effect on the **next** track (not mid-track).
+- **AGC** — **Automatic gain control** (real-time). Reduces loudness jumps without needing the full file cached. This is **not** “peak normalize”; it continuously adjusts gain while playing.
 
 ### Theme
 

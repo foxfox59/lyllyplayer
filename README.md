@@ -30,6 +30,7 @@ Support for basic custom theming with a default, automatic, custom or Windows th
 **Compact** and **Ultra compact** main layouts; auxiliary **Playlist**, **Options**, and **Lyrics** windows can snap to the main window and restore after compact mode.  
 Simple visualizer: off, VU bars, or a frequency spectrum (in Ultra compact the strip can double as a seek surface).  
 **Lyrics** (best-effort): separate **Lyrics** window plus optional title-bar line; sources include yt-dlp metadata and LRCLIB.  
+**AGC** (optional): lightweight real-time **automatic gain control** under **Options → Audio** to reduce loudness jumps (not peak normalization).  
 **Export to MP3** (YouTube): when a track has a **finished on-disk cache**, right-click the **main playback/info** area — encoding via **LAME** (`libmp3lame`), settings under **Options → Export** (see below).
 
 **and so much more!** (not really that much, those were the main features :D)  
