@@ -751,6 +751,7 @@ public partial class MainWindow : Window
     private bool _mp3ExportReplacePlaylistEntryAfterExport;
     private string _audioQuality = "Auto";
     private string? _audioOutputDevice;
+    private bool _audioNormalizeEnabled;
     private string _appLogLevel = "ErrorsAndWarnings";
     private int _appLogMaxMb = 2;
     private int _uiScalePercent = 100;
@@ -883,6 +884,7 @@ public partial class MainWindow : Window
         _mp3ExportReplacePlaylistEntryAfterExport = _startupSettings.Mp3ExportReplacePlaylistEntryAfterExport ?? false;
         _audioQuality = _startupSettings.AudioQuality ?? "Auto";
         _audioOutputDevice = string.IsNullOrWhiteSpace(_startupSettings.AudioOutputDevice) ? null : _startupSettings.AudioOutputDevice;
+        _audioNormalizeEnabled = _startupSettings.AudioNormalize ?? false;
         _uiScalePercent = _startupSettings.UiScalePercent is >= 50 and <= 200 ? _startupSettings.UiScalePercent.Value : 100;
         _windowBorderMode = NormalizeWindowBorderMode(_startupSettings.WindowBorderMode);
         _windowBorderCustomPx = Math.Clamp(_startupSettings.WindowBorderCustomPx ?? 2, 1, 24);
@@ -924,6 +926,7 @@ public partial class MainWindow : Window
         try { _ytDlp.SetAudioQuality(_audioQuality); } catch { /* ignore */ }
         try { _engine.NotifyYoutubeAudioQualityChanged(); } catch { /* ignore */ }
         try { _engine.SetAudioOutputDevice(ResolveAudioDeviceNumber(_audioOutputDevice)); } catch { /* ignore */ }
+        try { _engine.SetAudioNormalizeEnabled(_audioNormalizeEnabled); } catch { /* ignore */ }
         try
         {
             _engine.SetCacheMaxBytes(Math.Max(0, (long)_cacheMaxMb) * 1024L * 1024L);

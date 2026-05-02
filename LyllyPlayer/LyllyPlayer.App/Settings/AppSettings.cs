@@ -128,6 +128,8 @@ public sealed record AppSettings(
     bool? LocalImportRemoveDuplicates,
     string? AudioQuality,
     string? AudioOutputDevice,
+    /// <summary>When true, applies lightweight real-time AGC (NAudio path). (Stored setting name kept for backward compatibility.)</summary>
+    bool? AudioNormalize,
     /// <summary>ErrorsAndWarnings | Basic | Verbose — controls INFO lines in app.log.</summary>
     string? AppLogLevel,
     /// <summary>Maximum on-disk size for <c>app.log</c> before older content is dropped (megabytes).</summary>

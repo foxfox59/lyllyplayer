@@ -56,7 +56,11 @@ public partial class MainWindow
                     var metadata = LrcParser.TryExtractMetadata(cached);
                     var cacheArtist = metadata?.Artist ?? play.Channel;
                     var cacheTitle = metadata?.Title ?? play.Title;
-                    _lyricsService.Manager.Parse(cached, artist: cacheArtist, title: cacheTitle);
+                    // Preserve plain (non-synced) lyrics across export-replace.
+                    // The cache can hold either timed LRC or LRCLIB plain lyrics; detect by timed-line parse.
+                    var isPlain = false;
+                    try { isPlain = LrcParser.Parse(cached).Count == 0; } catch { isPlain = false; }
+                    _lyricsService.Manager.Parse(cached, artist: cacheArtist, title: cacheTitle, isPlainLyrics: isPlain);
                     _lyricsService.ResolvedVideoId = play.VideoId;
                     try { UpdateNowPlayingText(); } catch { /* ignore */ }
                     try { UpdatePlaylistTitleDisplayForNowPlaying(); } catch { /* ignore */ }

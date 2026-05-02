@@ -759,6 +759,13 @@ public partial class MainWindow
                 try { _engine.SetAudioOutputDevice(ResolveAudioDeviceNumber(_audioOutputDevice)); } catch { /* ignore */ }
                 RequestPersistSnapshot();
             },
+            getAudioNormalize: () => _audioNormalizeEnabled,
+            setAudioNormalize: (v) =>
+            {
+                _audioNormalizeEnabled = v;
+                try { _engine.SetAudioNormalizeEnabled(_audioNormalizeEnabled); } catch { /* ignore */ }
+                RequestPersistSnapshot();
+            },
             getOptionsSelectedTab: () => _optionsSelectedTab,
             setOptionsSelectedTab: (tab) =>
             {

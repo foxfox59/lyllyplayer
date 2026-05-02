@@ -146,6 +146,10 @@ public sealed partial class PlaybackEngine : IDisposable
     /// <summary>Raised when a YouTube disk cache entry is fully written and indexed (export MP3 can proceed).</summary>
     public event EventHandler? YoutubeDiskCacheReady;
 
+    private bool _audioNormalizeEnabled;
+
+    public void SetAudioNormalizeEnabled(bool enabled) => _audioNormalizeEnabled = enabled;
+
     [Obsolete("FFmpeg is no longer used; call is ignored.")]
     public void SetFfmpegPath(string ffmpegPath)
     {
@@ -206,7 +210,7 @@ public sealed partial class PlaybackEngine : IDisposable
 
         try
         {
-            var next = new AudioOut(_format, deviceNumber, onSamplesRead: null);
+            var next = new AudioOut(_format, deviceNumber, onSamplesRead: null, normalize: _audioNormalizeEnabled);
             next.Volume = _volume;
             if (!next.TryPlay())
             {
@@ -476,7 +480,7 @@ public sealed partial class PlaybackEngine : IDisposable
         {
             try
             {
-                var a = new AudioOut(_format, deviceNumber, onSamplesRead: null);
+                var a = new AudioOut(_format, deviceNumber, onSamplesRead: null, normalize: _audioNormalizeEnabled);
                 a.Volume = _volume;
                 if (!a.TryPlay())
                 {
@@ -511,7 +515,7 @@ public sealed partial class PlaybackEngine : IDisposable
         {
             try
             {
-                var a = new AudioOut(_format, -1, onSamplesRead: null);
+                var a = new AudioOut(_format, -1, onSamplesRead: null, normalize: _audioNormalizeEnabled);
                 a.Volume = _volume;
                 _audio = a;
             }

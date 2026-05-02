@@ -389,7 +389,7 @@ public sealed partial class PlaybackEngine
             try
             {
                 try { AppLog.Warn($"AudioOut: creating sink videoId={entry.VideoId} dev={_audioDeviceNumber}"); } catch { /* ignore */ }
-                _audio = new AudioOut(_format, _audioDeviceNumber, onSamplesRead: null);
+                _audio = new AudioOut(_format, _audioDeviceNumber, onSamplesRead: null, normalize: _audioNormalizeEnabled);
                 _audio.Volume = _volume;
                 try { AppLog.Warn($"AudioOut: sink created videoId={entry.VideoId}"); } catch { /* ignore */ }
             }

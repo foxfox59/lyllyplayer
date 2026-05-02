@@ -258,6 +258,7 @@ public partial class MainWindow
             LocalImportRemoveDuplicates: _localImportRemoveDuplicates,
             AudioQuality: _audioQuality,
             AudioOutputDevice: string.IsNullOrWhiteSpace(_audioOutputDevice) ? null : _audioOutputDevice,
+            AudioNormalize: _audioNormalizeEnabled,
             AppLogLevel: _appLogLevel,
             AppLogMaxMb: _appLogMaxMb,
             MainWindowCompact: _mainWindowCompact,

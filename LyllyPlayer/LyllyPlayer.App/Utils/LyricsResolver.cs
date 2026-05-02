@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 
 namespace LyllyPlayer.Utils;
@@ -420,9 +421,10 @@ public static class LyricsResolver
             return Array.Empty<string>();
 
         // Preserve the raw for structural split, but normalize common separators and feature markers first.
-        var s = raw.Trim();
+        var s = NormalizeUnicodeStylizedLetters(raw).Trim();
         s = StripBracketedJunk(s);
         s = NormalizeFeatureMarkers(s);
+        s = StripFeaturedArtistsTail(s);
         s = NormalizeLooseTitleSeparators(s);
 
         // Prefer safe separators with spaces to avoid splitting hyphenated words.
@@ -463,6 +465,29 @@ public static class LyricsResolver
         }
 
         return tokens;
+    }
+
+    private static string StripFeaturedArtistsTail(string s)
+    {
+        // For search, featured artists tend to reduce hit rate (especially when tags are messy).
+        // Keep the primary artist/title part and drop trailing "feat ..." clause.
+        try
+        {
+            if (string.IsNullOrWhiteSpace(s))
+                return s ?? "";
+            // Only strip when "feat" occurs as a word.
+            var cut = System.Text.RegularExpressions.Regex.Replace(
+                s,
+                @"\s+\bfeat\b\s+.*$",
+                "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            cut = System.Text.RegularExpressions.Regex.Replace(cut, @"\s+", " ").Trim();
+            return string.IsNullOrWhiteSpace(cut) ? s : cut;
+        }
+        catch
+        {
+            return s;
+        }
     }
 
     private static string NormalizeLooseTitleSeparators(string s)
@@ -1097,7 +1122,9 @@ public static class LyricsResolver
         if (string.IsNullOrWhiteSpace(rawTitle))
             return rawTitle ?? "";
 
-        var result = rawTitle.Trim();
+        // Normalize stylized Unicode (e.g. mathematical italic/bold letters) to improve tokenization/search.
+        // NFKC converts many "fancy" alphabets into regular letters (e.g. 𝘭 → l).
+        var result = NormalizeUnicodeStylizedLetters(rawTitle).Trim();
 
         // 1. Remove bracketed content: [4K], [HD], [Ultra HD], [4K Ultra HD], [8K], etc.
         result = System.Text.RegularExpressions.Regex.Replace(result, @"\s*\[[^\]]*\]\s*", " ");
@@ -1137,13 +1164,28 @@ public static class LyricsResolver
         result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+x\s+", " ", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         // 3.5. Split camelCase concatenated words (e.g., "ArtistName" → "Artist Name")
-        // This helps LRCLIB match against properly spaced artist/track names in its database.
-        result = System.Text.RegularExpressions.Regex.Replace(result, @"([a-z])([A-Z])", "$1 $2");
+        // Avoid splitting trailing single-letter suffixes like "PinocchioP" (would lose the "P").
+        // Only split when the uppercase begins a multi-letter segment (Uppercase followed by lowercase).
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"(?<=[a-z])(?=[A-Z][a-z])", " ");
 
         // 4. Normalize whitespace
         result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+", " ").Trim();
 
         return result;
+    }
+
+    private static string NormalizeUnicodeStylizedLetters(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return s ?? "";
+        try
+        {
+            return s.Normalize(NormalizationForm.FormKC);
+        }
+        catch
+        {
+            return s;
+        }
     }
 
     /// <summary>

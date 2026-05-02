@@ -24,7 +24,66 @@ public sealed class AudioOut : IDisposable
         }
     }
 
-    public AudioOut(WaveFormat format, int deviceNumber = -1, Action<byte[], int, int>? onSamplesRead = null)
+    /// <summary>Simple AGC/normalizer for float PCM. Keeps loudness steadier without pre-scanning.</summary>
+    private sealed class NormalizingWaveProvider(IWaveProvider source) : IWaveProvider
+    {
+        public WaveFormat WaveFormat => source.WaveFormat;
+
+        private const float TargetRms = 0.125f; // ~ -18 dBFS
+        private const float MinGain = 0.35f;
+        private const float MaxGain = 3.0f;
+        private float _gain = 1.0f;
+
+        public int Read(byte[] buffer, int offset, int count)
+        {
+            var read = source.Read(buffer, offset, count);
+            if (read <= 0)
+                return read;
+
+            if (WaveFormat.Encoding != WaveFormatEncoding.IeeeFloat || WaveFormat.BitsPerSample != 32)
+                return read;
+
+            var sampleCount = read / 4;
+            if (sampleCount <= 0)
+                return read;
+
+            double sumSq = 0;
+            for (var i = 0; i < sampleCount; i++)
+            {
+                var idx = offset + i * 4;
+                var f = BitConverter.ToSingle(buffer, idx);
+                sumSq += f * f;
+            }
+
+            var rms = (float)Math.Sqrt(sumSq / sampleCount);
+            if (rms > 1e-6f)
+            {
+                var desired = Math.Clamp(TargetRms / rms, MinGain, MaxGain);
+                var attack = 0.25f;  // faster when reducing gain
+                var release = 0.04f; // slower when increasing gain
+                var a = desired < _gain ? attack : release;
+                _gain = _gain + (desired - _gain) * a;
+            }
+
+            var g = _gain;
+            for (var i = 0; i < sampleCount; i++)
+            {
+                var idx = offset + i * 4;
+                var f = BitConverter.ToSingle(buffer, idx) * g;
+                if (f > 1f) f = 1f;
+                else if (f < -1f) f = -1f;
+                var bytes = BitConverter.GetBytes(f);
+                buffer[idx + 0] = bytes[0];
+                buffer[idx + 1] = bytes[1];
+                buffer[idx + 2] = bytes[2];
+                buffer[idx + 3] = bytes[3];
+            }
+
+            return read;
+        }
+    }
+
+    public AudioOut(WaveFormat format, int deviceNumber = -1, Action<byte[], int, int>? onSamplesRead = null, bool normalize = false)
     {
         _format = format;
         // Larger buffer than default 1 s: network decode is bursty; too small + aggressive WaveOut latency causes
@@ -42,9 +101,11 @@ public sealed class AudioOut : IDisposable
             NumberOfBuffers = 3,
         };
 
-        IWaveProvider source = onSamplesRead is not null
-            ? new AnalyzingWaveProvider(_buffer, onSamplesRead)
-            : _buffer;
+        IWaveProvider source = _buffer;
+        if (normalize)
+            source = new NormalizingWaveProvider(source);
+        if (onSamplesRead is not null)
+            source = new AnalyzingWaveProvider(source, onSamplesRead);
         _output.Init(source);
     }
 

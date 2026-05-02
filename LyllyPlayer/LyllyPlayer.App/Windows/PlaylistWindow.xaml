@@ -271,6 +271,8 @@
                                     <Setter.Value>
                                         <ControlTemplate TargetType="ListBoxItem">
                                             <Border Background="{TemplateBinding Background}"
+                                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                                    BorderThickness="{TemplateBinding BorderThickness}"
                                                     SnapsToDevicePixels="True">
                                                 <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                                                   VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
@@ -287,10 +289,14 @@
                                     <Trigger Property="IsSelected" Value="True">
                                         <Setter Property="Background" Value="{DynamicResource App.Theme.Selection}"/>
                                         <Setter Property="Foreground" Value="{DynamicResource App.Theme.SelectionText}"/>
+                                        <Setter Property="BorderThickness" Value="0,1,0,1"/>
+                                        <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Foreground}"/>
                                     </Trigger>
                                     <DataTrigger Binding="{Binding IsNowPlaying}" Value="True">
                                         <Setter Property="Background" Value="{DynamicResource App.Theme.Pressed}"/>
                                         <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+                                        <Setter Property="BorderThickness" Value="0,1,0,1"/>
+                                        <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Foreground}"/>
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
@@ -404,14 +410,16 @@
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter Property="Background" Value="{DynamicResource App.Theme.Selection}"/>
-                                <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.SelectionBorder}"/>
+                                <Setter Property="BorderThickness" Value="0,1,0,1"/>
+                                <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Foreground}"/>
                                 <Setter Property="Foreground" Value="{DynamicResource App.Theme.SelectionText}"/>
                             </Trigger>
 
                             <!-- Current track: neutral pressed surface (not Selection blue) -->
                             <DataTrigger Binding="{Binding IsNowPlaying}" Value="True">
                                 <Setter Property="Background" Value="{DynamicResource App.Theme.Pressed}"/>
-                                <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
+                                <Setter Property="BorderThickness" Value="0,1,0,1"/>
+                                <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Foreground}"/>                                
                                 <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
                                 <Setter Property="Opacity" Value="1"/>
                             </DataTrigger>

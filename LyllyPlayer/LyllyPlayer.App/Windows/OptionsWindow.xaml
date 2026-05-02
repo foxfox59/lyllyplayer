@@ -550,6 +550,20 @@
                                     <ComboBoxItem Content="Medium (≤ 128 kbps)" Tag="Medium"/>
                                     <ComboBoxItem Content="Low (≤ 64 kbps)" Tag="Low"/>
                                 </ComboBox>
+
+                                <TextBlock Text="AGC"
+                                           FontWeight="SemiBold"
+                                           Margin="0,16,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Automatic gain control (real-time). Reduces loudness jumps without needing the full file cached. Default off."/>
+                                <CheckBox x:Name="AudioNormalizeCheckBox"
+                                          Content="Enable AGC"
+                                          Checked="AudioNormalizeCheckBox_OnChecked"
+                                          Unchecked="AudioNormalizeCheckBox_OnUnchecked"/>
                             </StackPanel>
                         </ScrollViewer>
                     </TabItem>

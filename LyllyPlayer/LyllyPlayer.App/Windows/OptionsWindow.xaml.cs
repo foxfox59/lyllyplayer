@@ -121,6 +121,8 @@ public partial class OptionsWindow : Window
     private readonly Action<string> _setAudioQuality;
     private readonly Func<string?> _getAudioOutputDevice;
     private readonly Action<string?> _setAudioOutputDevice;
+    private readonly Func<bool> _getAudioNormalize;
+    private readonly Action<bool> _setAudioNormalize;
     private readonly Func<string> _getOptionsSelectedTab;
     private readonly Action<string> _setOptionsSelectedTab;
     private readonly Func<string> _getLameEncoderPath;
@@ -252,6 +254,8 @@ public partial class OptionsWindow : Window
         Action<string> setAudioQuality,
         Func<string?> getAudioOutputDevice,
         Action<string?> setAudioOutputDevice,
+        Func<bool> getAudioNormalize,
+        Action<bool> setAudioNormalize,
         Func<string> getOptionsSelectedTab,
         Action<string> setOptionsSelectedTab,
         Func<string> getLameEncoderPath,
@@ -365,6 +369,8 @@ public partial class OptionsWindow : Window
         _setAudioQuality = setAudioQuality;
         _getAudioOutputDevice = getAudioOutputDevice;
         _setAudioOutputDevice = setAudioOutputDevice;
+        _getAudioNormalize = getAudioNormalize;
+        _setAudioNormalize = setAudioNormalize;
         _getOptionsSelectedTab = getOptionsSelectedTab;
         _setOptionsSelectedTab = setOptionsSelectedTab;
         _getLameEncoderPath = getLameEncoderPath;
@@ -470,6 +476,7 @@ public partial class OptionsWindow : Window
             _getAppIconVisibility,
             _getAudioQuality,
             _getAudioOutputDevice,
+            _getAudioNormalize,
             _getAppLogLevel,
             _getAppLogMaxMb,
             _getOptionsSelectedTab,
@@ -659,6 +666,7 @@ public partial class OptionsWindow : Window
         catch { /* ignore */ }
 
         try { RefreshAudioDeviceList(); } catch { /* ignore */ }
+        try { AudioNormalizeCheckBox.IsChecked = _draft.AudioNormalize; } catch { /* ignore */ }
 
         try
         {
@@ -1991,6 +1999,20 @@ public partial class OptionsWindow : Window
             _draft.AudioOutputDevice = item.Tag as string; // null = Default
     }
 
+    private void AudioNormalizeCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.AudioNormalize = true;
+    }
+
+    private void AudioNormalizeCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.AudioNormalize = false;
+    }
+
     private void BackgroundModeComboBox_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressBackgroundUiEvents)
@@ -2422,6 +2444,7 @@ public partial class OptionsWindow : Window
         try { _setAppIconVisibility(SettingsStore.NormalizeAppIconVisibility(_draft.AppIconVisibility)); } catch { /* ignore */ }
         try { _setAudioQuality(_draft.AudioQuality ?? "Auto"); } catch { /* ignore */ }
         try { _setAudioOutputDevice(string.IsNullOrWhiteSpace(_draft.AudioOutputDevice) ? null : _draft.AudioOutputDevice); } catch { /* ignore */ }
+        try { _setAudioNormalize(_draft.AudioNormalize); } catch { /* ignore */ }
         try { _setAppLogLevel(_draft.AppLogLevel ?? "ErrorsAndWarnings"); } catch { /* ignore */ }
         try { _setAppLogMaxMb(Math.Clamp(_draft.AppLogMaxMb, 1, 200)); } catch { /* ignore */ }
         try { _setOptionsSelectedTab(SettingsStore.NormalizeOptionsWindowSelectedTab(_draft.OptionsSelectedTab)); } catch { /* ignore */ }

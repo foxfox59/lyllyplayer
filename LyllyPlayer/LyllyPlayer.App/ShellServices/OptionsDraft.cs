@@ -60,6 +60,7 @@ public sealed class OptionsDraft
 
     public string AudioQuality = "Auto";
     public string? AudioOutputDevice; // null = Default (WAVE_MAPPER)
+    public bool AudioNormalize;
     public string AppLogLevel = "ErrorsAndWarnings";
     public int AppLogMaxMb = SettingsStore.DefaultAppLogMaxMb;
     public string OptionsSelectedTab = "Tools";
