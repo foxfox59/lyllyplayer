@@ -211,14 +211,26 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <Button x:Name="OptionsButton"
-                    Grid.Column="0"
-                    Content="options&#x2026;"
-                    MinWidth="70"
-                    Padding="10,2"
-                    HorizontalAlignment="Left"
-                    VerticalAlignment="Top"
-                    Click="OptionsButton_OnClick"/>
+            <StackPanel Grid.Column="0"
+                        Orientation="Vertical"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Top">
+                <Button x:Name="OptionsButton"
+                        Content="options&#x2026;"
+                        MinWidth="70"
+                        Padding="10,2"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Top"
+                        Click="OptionsButton_OnClick"/>
+                <Button x:Name="ExportMp3Button"
+                        Content="export mp3&#x2026;"
+                        MinWidth="70"
+                        Margin="0,6,0,0"
+                        Padding="10,2"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Top"
+                        Click="ExportCurrentTrackToMp3_OnClick"/>
+            </StackPanel>
 
             <StackPanel Grid.Column="2" Orientation="Vertical" HorizontalAlignment="Right" VerticalAlignment="Top">
                 <Button x:Name="PlaylistToolsButton"
@@ -373,7 +385,17 @@
                     <Border x:Name="CardDividerAboveInfoBorder"
                             Grid.Row="1" Height="1" VerticalAlignment="Center" Background="{DynamicResource App.Theme.Border}" Margin="10,0,10,0" SnapsToDevicePixels="True"/>
 
-                    <StackPanel x:Name="MainPlaybackInfoStack" Grid.Row="2" Margin="10,8,10,8">
+                    <StackPanel x:Name="MainPlaybackInfoStack"
+                                Grid.Row="2"
+                                Margin="10,8,10,8"
+                                ContextMenuOpening="MainPlaybackInfoStack_ContextMenuOpening">
+                        <StackPanel.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem x:Name="MainExportToMp3MenuItem"
+                                          Header="Export to MP3…"
+                                          Click="ExportCurrentTrackToMp3_OnClick"/>
+                            </ContextMenu>
+                        </StackPanel.ContextMenu>
                         <TextBlock x:Name="PlaylistTitleTextBlock"
                                    Text="(no playlist)"
                                    FontSize="12"
@@ -401,18 +423,44 @@
                                 <Run x:Name="NowPlayingStatusRun" Text="[STOPPED] " Foreground="{DynamicResource App.Theme.ForegroundSubtle}"/>
                                 <Run x:Name="NowPlayingTitleRun" Text="Not playing"/>
                             </TextBlock>
-                            <Button x:Name="CompactPlaylistButton"
-                                    Grid.Column="1"
-                                    Width="34"
-                                    Height="22"
-                                    Margin="8,0,0,0"
-                                    Padding="0"
-                                    Content="PL"
-                                    FontFamily="{StaticResource App.MonoFont}"
-                                    FontSize="12"
-                                    VerticalAlignment="Center"
-                                    Visibility="Collapsed"
-                                    Click="CompactPlaylistButton_OnClick"/>
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        VerticalAlignment="Center"
+                                        Margin="8,0,0,0">
+                                <Button x:Name="CompactLyricsButton"
+                                        Width="34"
+                                        Height="22"
+                                        Margin="0,0,4,0"
+                                        Padding="0"
+                                        Content="L"
+                                        FontFamily="{StaticResource App.MonoFont}"
+                                        FontSize="12"
+                                        VerticalAlignment="Center"
+                                        Visibility="Collapsed"
+                                        Click="LyricsUltraButtonInline_OnClick"/>
+                                <Button x:Name="CompactPlaylistButton"
+                                        Width="34"
+                                        Height="22"
+                                        Margin="0,0,4,0"
+                                        Padding="0"
+                                        Content="PL"
+                                        FontFamily="{StaticResource App.MonoFont}"
+                                        FontSize="12"
+                                        VerticalAlignment="Center"
+                                        Visibility="Collapsed"
+                                        Click="CompactPlaylistButton_OnClick"/>
+                                <Button x:Name="CompactExportMp3Button"
+                                        Width="34"
+                                        Height="22"
+                                        Margin="0,0,0,0"
+                                        Padding="0"
+                                        Content="MP3"
+                                        FontFamily="{StaticResource App.MonoFont}"
+                                        FontSize="12"
+                                        VerticalAlignment="Center"
+                                        Visibility="Collapsed"
+                                        Click="ExportCurrentTrackToMp3_OnClick"/>
+                            </StackPanel>
                         </Grid>
 
                         <Grid x:Name="SeekTimeRowGrid" Margin="0,8,0,0">
@@ -609,7 +657,7 @@
                             <Button x:Name="CompactPlaylistButtonInline"
                                     Width="34"
                                     Height="22"
-                                    Margin="0,0,0,0"
+                                    Margin="0,0,4,0"
                                     Padding="0"
                                     Content="PL"
                                     FontFamily="{StaticResource App.MonoFont}"
@@ -617,6 +665,17 @@
                                     VerticalAlignment="Center"
                                     Visibility="Collapsed"
                                     Click="CompactPlaylistButton_OnClick"/>
+                            <Button x:Name="ExportMp3UltraButtonInline"
+                                    Width="34"
+                                    Height="22"
+                                    Margin="0,0,0,0"
+                                    Padding="0"
+                                    Content="MP3"
+                                    FontFamily="{StaticResource App.MonoFont}"
+                                    FontSize="12"
+                                    VerticalAlignment="Center"
+                                    Visibility="Collapsed"
+                                    Click="ExportCurrentTrackToMp3_OnClick"/>
                         </StackPanel>
                     </Grid>
                 </Grid>

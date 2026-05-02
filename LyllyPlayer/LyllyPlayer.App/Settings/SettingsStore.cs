@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using LyllyPlayer.Services;
 using LyllyPlayer.Utils;
 
 namespace LyllyPlayer.Settings;
@@ -332,6 +333,11 @@ public static class SettingsStore
             CompactModeHidesAuxWindows = loaded.CompactModeHidesAuxWindows ?? GetBool(nameof(AppSettings.CompactModeHidesAuxWindows)),
             KeepIncompletePlaylistOnCancel = loaded.KeepIncompletePlaylistOnCancel ?? GetBool(nameof(AppSettings.KeepIncompletePlaylistOnCancel)),
             LastSavedByAppVersion = loaded.LastSavedByAppVersion ?? GetString(nameof(AppSettings.LastSavedByAppVersion)),
+            LameEncoderPath = loaded.LameEncoderPath ?? GetString(nameof(AppSettings.LameEncoderPath)),
+            Mp3ExportEncodingMode = loaded.Mp3ExportEncodingMode ?? GetString(nameof(AppSettings.Mp3ExportEncodingMode)),
+            Mp3ExportCbrQualityIndex = loaded.Mp3ExportCbrQualityIndex ?? GetInt(nameof(AppSettings.Mp3ExportCbrQualityIndex)),
+            Mp3ExportVbrQualityIndex = loaded.Mp3ExportVbrQualityIndex ?? GetInt(nameof(AppSettings.Mp3ExportVbrQualityIndex)),
+            Mp3ExportReplacePlaylistEntryAfterExport = loaded.Mp3ExportReplacePlaylistEntryAfterExport ?? GetBool(nameof(AppSettings.Mp3ExportReplacePlaylistEntryAfterExport)),
             LyricsEnabled = loaded.LyricsEnabled ?? GetBool(nameof(AppSettings.LyricsEnabled)),
 
             AlwaysOnTop = loaded.AlwaysOnTop ?? GetBool(nameof(AppSettings.AlwaysOnTop)),
@@ -618,7 +624,12 @@ public static class SettingsStore
         KeepIncompletePlaylistOnCancel: null,
         LastSavedByAppVersion: null,
         LyricsEnabled: null,
-        LyricsLocalFilesEnabled: null);
+        LyricsLocalFilesEnabled: null,
+        LameEncoderPath: null,
+        Mp3ExportEncodingMode: null,
+        Mp3ExportCbrQualityIndex: null,
+        Mp3ExportVbrQualityIndex: null,
+        Mp3ExportReplacePlaylistEntryAfterExport: null);
 
     private static AppSettings AllNullSettings() => AllNullSettingsInstance;
 
@@ -739,7 +750,12 @@ public static class SettingsStore
             KeepIncompletePlaylistOnCancel: DefaultKeepIncompletePlaylistOnCancel,
             LastSavedByAppVersion: null,
             LyricsEnabled: false,
-            LyricsLocalFilesEnabled: false
+            LyricsLocalFilesEnabled: false,
+            LameEncoderPath: null,
+            Mp3ExportEncodingMode: "Vbr",
+            Mp3ExportCbrQualityIndex: Mp3QualityMaps.DefaultCbrSliderIndex,
+            Mp3ExportVbrQualityIndex: Mp3QualityMaps.DefaultVbrSliderIndex,
+            Mp3ExportReplacePlaylistEntryAfterExport: false
         );
 
     private static AppSettings ApplyDefaults(AppSettings s)
@@ -797,6 +813,11 @@ public static class SettingsStore
             LastSavedByAppVersion = string.IsNullOrWhiteSpace(s.LastSavedByAppVersion) ? null : s.LastSavedByAppVersion.Trim(),
             LyricsEnabled = s.LyricsEnabled ?? false,
             LyricsLocalFilesEnabled = s.LyricsLocalFilesEnabled ?? false,
+            LameEncoderPath = string.IsNullOrWhiteSpace(s.LameEncoderPath) ? null : s.LameEncoderPath.Trim(),
+            Mp3ExportEncodingMode = NormalizeMp3ExportEncodingMode(s.Mp3ExportEncodingMode),
+            Mp3ExportCbrQualityIndex = NormalizeMp3QualitySliderIndex(s.Mp3ExportCbrQualityIndex, Mp3QualityMaps.DefaultCbrSliderIndex),
+            Mp3ExportVbrQualityIndex = NormalizeMp3QualitySliderIndex(s.Mp3ExportVbrQualityIndex, Mp3QualityMaps.DefaultVbrSliderIndex),
+            Mp3ExportReplacePlaylistEntryAfterExport = s.Mp3ExportReplacePlaylistEntryAfterExport ?? false,
             AlwaysOnTopLyricsWindow = s.AlwaysOnTopLyricsWindow ?? false,
             LyricsWindowOpen = s.LyricsWindowOpen ?? false,
             PlaylistWindowBoundsUiScalePercent = s.PlaylistWindowBoundsUiScalePercent is >= 50 and <= 200
@@ -856,6 +877,22 @@ public static class SettingsStore
         return t is "Auto" or "High" or "Medium" or "Low" ? t : DefaultAudioQuality;
     }
 
+    public static string NormalizeMp3ExportEncodingMode(string? m)
+    {
+        var t = string.IsNullOrWhiteSpace(m) ? "Vbr" : m.Trim();
+        return string.Equals(t, "Cbr", StringComparison.OrdinalIgnoreCase) ? "Cbr" : "Vbr";
+    }
+
+    public static int ClampMp3SliderIndex(int? idx, int defaultIdx)
+        => NormalizeMp3QualitySliderIndex(idx, defaultIdx);
+
+    private static int NormalizeMp3QualitySliderIndex(int? idx, int defaultIdx)
+    {
+        if (idx is null or < 0 or > 9)
+            return defaultIdx;
+        return idx.Value;
+    }
+
     private const string DefaultOptionsWindowSelectedTab = "Tools";
 
     public static string NormalizeOptionsWindowSelectedTab(string? v)
@@ -868,6 +905,7 @@ public static class SettingsStore
         if (string.Equals(t, "Theme", StringComparison.OrdinalIgnoreCase)) return "Theme";
         if (string.Equals(t, "Lyrics", StringComparison.OrdinalIgnoreCase)) return "Lyrics";
         if (string.Equals(t, "Log", StringComparison.OrdinalIgnoreCase)) return "Log";
+        if (string.Equals(t, "Export", StringComparison.OrdinalIgnoreCase)) return "Export";
 
         // Backwards compatibility: older builds stored these tabs which are now grouped into Playlist/Tools.
         if (string.Equals(t, "Search", StringComparison.OrdinalIgnoreCase)) return "Playlist";

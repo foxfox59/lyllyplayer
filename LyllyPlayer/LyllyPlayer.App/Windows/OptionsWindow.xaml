@@ -554,6 +554,124 @@
                         </ScrollViewer>
                     </TabItem>
 
+                    <TabItem Header="Export">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="6" Background="Transparent">
+                                <TextBlock Text="YouTube to MP3 (LAME)"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock x:Name="Mp3ExportUnavailableNoticeTextBlock"
+                                           TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Visibility="Collapsed"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"
+                                           Text="LAME (libmp3lame) was not found. Place libmp3lame.64.dll next to the app or browse to your DLL."/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,10"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Exports use the completed on-disk cache for the current quality (not the live buffer). Right-click the playback area on the main window to export the current track."/>
+
+                                <TextBlock Text="libmp3lame.dll"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="LameEncoderPathTextBox"
+                                             Grid.Column="0"
+                                             Height="30"
+                                             Margin="0,0,8,0"
+                                             IsReadOnly="True"
+                                             VerticalContentAlignment="Center"/>
+                                    <Button x:Name="LameEncoderBrowseButton"
+                                            Grid.Column="1"
+                                            Content="Browse…"
+                                            MinWidth="88"
+                                            Height="30"
+                                            Margin="0,0,8,0"
+                                            Click="LameEncoderBrowseButton_OnClick"/>
+                                    <Button x:Name="LameEncoderClearButton"
+                                            Grid.Column="2"
+                                            Content="Use bundled"
+                                            MinWidth="96"
+                                            Height="30"
+                                            Click="LameEncoderClearButton_OnClick"/>
+                                </Grid>
+
+                                <TextBlock Text="Encoding"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <StackPanel x:Name="Mp3ExportEncodingPanel" Margin="0,0,0,10" Background="Transparent">
+                                    <RadioButton x:Name="Mp3ExportVbrRadio"
+                                                 GroupName="Mp3ExportEncoding"
+                                                 Margin="0,0,0,4"
+                                                 Content="Variable bitrate (VBR, −V9 … −V0)"
+                                                 Checked="Mp3ExportVbrRadio_OnChecked"/>
+                                    <RadioButton x:Name="Mp3ExportCbrRadio"
+                                                 GroupName="Mp3ExportEncoding"
+                                                 Content="Constant bitrate (CBR)"
+                                                 Checked="Mp3ExportCbrRadio_OnChecked"/>
+                                </StackPanel>
+
+                                <TextBlock Text="Quality (0–9)"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,4"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock x:Name="Mp3ExportQualityHintTextBlock"
+                                           TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Left is smaller files; right is higher quality. CBR uses fixed kb/s steps; VBR maps to LAME −V levels."/>
+                                <DockPanel Margin="0,0,0,4" LastChildFill="True">
+                                    <TextBlock DockPanel.Dock="Left"
+                                               x:Name="Mp3ExportQualityEndLeftTextBlock"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,8,0"
+                                               Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                               Text="0"/>
+                                    <TextBlock DockPanel.Dock="Right"
+                                               x:Name="Mp3ExportQualityEndRightTextBlock"
+                                               VerticalAlignment="Center"
+                                               Margin="8,0,0,0"
+                                               Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                               Text="9"/>
+                                    <Slider x:Name="Mp3ExportQualitySlider"
+                                            Minimum="0"
+                                            Maximum="9"
+                                            IsSnapToTickEnabled="True"
+                                            TickFrequency="1"
+                                            VerticalAlignment="Center"
+                                            ValueChanged="Mp3ExportQualitySlider_OnValueChanged"/>
+                                </DockPanel>
+                                <TextBlock x:Name="Mp3ExportQualityDescriptionTextBlock"
+                                           FontSize="11"
+                                           Margin="0,0,0,12"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"
+                                           TextWrapping="Wrap"/>
+
+                                <TextBlock Text="After export"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <CheckBox x:Name="Mp3ExportReplacePlaylistCheckBox"
+                                          Content="Replace matching playlist row(s) with the saved .mp3 (advanced)"
+                                          Margin="0,0,0,0"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="Mp3ExportReplacePlaylistCheckBox_OnChecked"
+                                          Unchecked="Mp3ExportReplacePlaylistCheckBox_OnUnchecked"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+
                     <TabItem Header="Theme">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <Grid Margin="6">

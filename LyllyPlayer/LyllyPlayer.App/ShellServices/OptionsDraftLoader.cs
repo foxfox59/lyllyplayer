@@ -1,4 +1,5 @@
 using System;
+using LyllyPlayer.Services;
 using LyllyPlayer.Settings;
 using LyllyPlayer.Utils;
 
@@ -55,7 +56,12 @@ public static class OptionsDraftLoader
         Func<int> getAppLogMaxMb,
         Func<string> getOptionsSelectedTab,
         Func<bool> getLyricsEnabled,
-        Func<bool> getLyricsLocalFilesEnabled)
+        Func<bool> getLyricsLocalFilesEnabled,
+        Func<string> getLameEncoderPath,
+        Func<string> getMp3ExportEncodingMode,
+        Func<int> getMp3ExportCbrQualityIndex,
+        Func<int> getMp3ExportVbrQualityIndex,
+        Func<bool> getMp3ExportReplacePlaylistEntryAfterExport)
     {
         var d = new OptionsDraft();
 
@@ -136,6 +142,12 @@ public static class OptionsDraftLoader
         try { d.OptionsSelectedTab = SettingsStore.NormalizeOptionsWindowSelectedTab(getOptionsSelectedTab()); } catch { d.OptionsSelectedTab = "Tools"; }
         try { d.LyricsEnabled = getLyricsEnabled(); } catch { d.LyricsEnabled = false; }
         try { d.LyricsLocalFilesEnabled = getLyricsLocalFilesEnabled(); } catch { d.LyricsLocalFilesEnabled = false; }
+
+        try { d.LameEncoderPath = getLameEncoderPath() ?? ""; } catch { d.LameEncoderPath = ""; }
+        try { d.Mp3ExportEncodingMode = SettingsStore.NormalizeMp3ExportEncodingMode(getMp3ExportEncodingMode()); } catch { d.Mp3ExportEncodingMode = "Vbr"; }
+        try { d.Mp3ExportCbrQualityIndex = SettingsStore.ClampMp3SliderIndex(getMp3ExportCbrQualityIndex(), Mp3QualityMaps.DefaultCbrSliderIndex); } catch { d.Mp3ExportCbrQualityIndex = Mp3QualityMaps.DefaultCbrSliderIndex; }
+        try { d.Mp3ExportVbrQualityIndex = SettingsStore.ClampMp3SliderIndex(getMp3ExportVbrQualityIndex(), Mp3QualityMaps.DefaultVbrSliderIndex); } catch { d.Mp3ExportVbrQualityIndex = Mp3QualityMaps.DefaultVbrSliderIndex; }
+        try { d.Mp3ExportReplacePlaylistEntryAfterExport = getMp3ExportReplacePlaylistEntryAfterExport(); } catch { d.Mp3ExportReplacePlaylistEntryAfterExport = false; }
 
         return d;
     }

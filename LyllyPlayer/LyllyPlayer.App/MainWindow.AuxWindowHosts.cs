@@ -765,6 +765,36 @@ public partial class MainWindow
                 _optionsSelectedTab = SettingsStore.NormalizeOptionsWindowSelectedTab(tab);
                 RequestPersistSnapshot();
             },
+            getLameEncoderPath: () => _lameEncoderPath ?? "",
+            setLameEncoderPath: (p) =>
+            {
+                _lameEncoderPath = string.IsNullOrWhiteSpace(p) ? null : p.Trim();
+                RequestPersistSnapshot();
+            },
+            getMp3ExportEncodingMode: () => _mp3ExportEncodingMode,
+            setMp3ExportEncodingMode: (m) =>
+            {
+                _mp3ExportEncodingMode = SettingsStore.NormalizeMp3ExportEncodingMode(m);
+                RequestPersistSnapshot();
+            },
+            getMp3ExportCbrQualityIndex: () => _mp3ExportCbrQualityIndex,
+            setMp3ExportCbrQualityIndex: (i) =>
+            {
+                _mp3ExportCbrQualityIndex = SettingsStore.ClampMp3SliderIndex(i, Mp3QualityMaps.DefaultCbrSliderIndex);
+                RequestPersistSnapshot();
+            },
+            getMp3ExportVbrQualityIndex: () => _mp3ExportVbrQualityIndex,
+            setMp3ExportVbrQualityIndex: (i) =>
+            {
+                _mp3ExportVbrQualityIndex = SettingsStore.ClampMp3SliderIndex(i, Mp3QualityMaps.DefaultVbrSliderIndex);
+                RequestPersistSnapshot();
+            },
+            getMp3ExportReplacePlaylistEntryAfterExport: () => _mp3ExportReplacePlaylistEntryAfterExport,
+            setMp3ExportReplacePlaylistEntryAfterExport: (v) =>
+            {
+                _mp3ExportReplacePlaylistEntryAfterExport = v;
+                RequestPersistSnapshot();
+            },
             getThemeMode: () => _themeMode,
             setThemeMode: (m) =>
             {

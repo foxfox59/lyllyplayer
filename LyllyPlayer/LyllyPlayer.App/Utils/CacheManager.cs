@@ -34,6 +34,9 @@ public sealed class CacheManager
 
     public void SetMaxBytes(long maxBytes) => _maxBytes = Math.Max(0, maxBytes);
 
+    /// <summary>Fired when a new file is indexed under the same key as <see cref="TryGetCachedPath"/> (the string passed to <see cref="EnsureCachedAsync"/>).</summary>
+    public event EventHandler<string>? CacheEntryAdded;
+
     public string? TryGetCachedPath(string videoId)
     {
         if (string.IsNullOrWhiteSpace(videoId))
@@ -150,6 +153,7 @@ public sealed class CacheManager
                 _gate.Release();
             }
             try { AppLog.Info($"Cache: stored {videoId} ({fi.Length / 1024 / 1024} MB) -> {fi.FullName}", AppLogInfoTier.Crucial); } catch { /* ignore */ }
+            try { CacheEntryAdded?.Invoke(this, videoId); } catch { /* ignore */ }
         }
         catch (Exception ex)
         {

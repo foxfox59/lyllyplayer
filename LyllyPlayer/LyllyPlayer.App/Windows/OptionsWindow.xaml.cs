@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using LyllyPlayer.Services;
 using LyllyPlayer.Settings;
 using LyllyPlayer.Utils;
 using LyllyPlayer.ShellServices;
@@ -28,6 +29,7 @@ public partial class OptionsWindow : Window
     private bool _suppressAutoRefreshEvent;
     private bool _suppressOptionsTabSelection;
     private bool _suppressBackgroundUiEvents;
+    private bool _suppressMp3ExportUiEvents;
     // DragMove() is used for chrome dragging (WM_MOVING-based snapping).
 
     private readonly Func<string> _getYtDlpPath;
@@ -121,6 +123,16 @@ public partial class OptionsWindow : Window
     private readonly Action<string?> _setAudioOutputDevice;
     private readonly Func<string> _getOptionsSelectedTab;
     private readonly Action<string> _setOptionsSelectedTab;
+    private readonly Func<string> _getLameEncoderPath;
+    private readonly Action<string> _setLameEncoderPath;
+    private readonly Func<string> _getMp3ExportEncodingMode;
+    private readonly Action<string> _setMp3ExportEncodingMode;
+    private readonly Func<int> _getMp3ExportCbrQualityIndex;
+    private readonly Action<int> _setMp3ExportCbrQualityIndex;
+    private readonly Func<int> _getMp3ExportVbrQualityIndex;
+    private readonly Action<int> _setMp3ExportVbrQualityIndex;
+    private readonly Func<bool> _getMp3ExportReplacePlaylistEntryAfterExport;
+    private readonly Action<bool> _setMp3ExportReplacePlaylistEntryAfterExport;
     private readonly Func<string> _getThemeMode;
     private readonly Action<string> _setThemeMode;
     private readonly Func<LyllyPlayer.Settings.RectN?> _getBackgroundUserDefinedMainNormal;
@@ -242,6 +254,16 @@ public partial class OptionsWindow : Window
         Action<string?> setAudioOutputDevice,
         Func<string> getOptionsSelectedTab,
         Action<string> setOptionsSelectedTab,
+        Func<string> getLameEncoderPath,
+        Action<string> setLameEncoderPath,
+        Func<string> getMp3ExportEncodingMode,
+        Action<string> setMp3ExportEncodingMode,
+        Func<int> getMp3ExportCbrQualityIndex,
+        Action<int> setMp3ExportCbrQualityIndex,
+        Func<int> getMp3ExportVbrQualityIndex,
+        Action<int> setMp3ExportVbrQualityIndex,
+        Func<bool> getMp3ExportReplacePlaylistEntryAfterExport,
+        Action<bool> setMp3ExportReplacePlaylistEntryAfterExport,
         Action? persistSettingsNow = null)
     {
         _getYtDlpPath = getYtDlpPath;
@@ -345,6 +367,16 @@ public partial class OptionsWindow : Window
         _setAudioOutputDevice = setAudioOutputDevice;
         _getOptionsSelectedTab = getOptionsSelectedTab;
         _setOptionsSelectedTab = setOptionsSelectedTab;
+        _getLameEncoderPath = getLameEncoderPath;
+        _setLameEncoderPath = setLameEncoderPath;
+        _getMp3ExportEncodingMode = getMp3ExportEncodingMode;
+        _setMp3ExportEncodingMode = setMp3ExportEncodingMode;
+        _getMp3ExportCbrQualityIndex = getMp3ExportCbrQualityIndex;
+        _setMp3ExportCbrQualityIndex = setMp3ExportCbrQualityIndex;
+        _getMp3ExportVbrQualityIndex = getMp3ExportVbrQualityIndex;
+        _setMp3ExportVbrQualityIndex = setMp3ExportVbrQualityIndex;
+        _getMp3ExportReplacePlaylistEntryAfterExport = getMp3ExportReplacePlaylistEntryAfterExport;
+        _setMp3ExportReplacePlaylistEntryAfterExport = setMp3ExportReplacePlaylistEntryAfterExport;
         _getThemeMode = getThemeMode;
         _setThemeMode = setThemeMode;
         _persistSettingsNow = persistSettingsNow;
@@ -442,7 +474,12 @@ public partial class OptionsWindow : Window
             _getAppLogMaxMb,
             _getOptionsSelectedTab,
             _getLyricsEnabled,
-            _getLyricsLocalFilesEnabled);
+            _getLyricsLocalFilesEnabled,
+            _getLameEncoderPath,
+            _getMp3ExportEncodingMode,
+            _getMp3ExportCbrQualityIndex,
+            _getMp3ExportVbrQualityIndex,
+            _getMp3ExportReplacePlaylistEntryAfterExport);
     }
 
     private void RefreshUi()
@@ -633,7 +670,164 @@ public partial class OptionsWindow : Window
 
         try { AppLogMaxMbTextBox.Text = Math.Clamp(_draft.AppLogMaxMb, 1, 200).ToString(); } catch { /* ignore */ }
 
+        try { RefreshMp3ExportUi(); } catch { /* ignore */ }
+
         try { _suppressBackgroundUiEvents = false; } catch { /* ignore */ }
+    }
+
+    private void RefreshMp3ExportUi()
+    {
+        var pathDraft = (_draft.LameEncoderPath ?? "").Trim();
+        try { LameEncoderPathTextBox.Text = string.IsNullOrEmpty(pathDraft) ? "(bundled next to app)" : pathDraft; } catch { /* ignore */ }
+
+        var lameOk = LameEncoderLocator.TryResolve(string.IsNullOrEmpty(pathDraft) ? null : pathDraft, out _);
+        try { Mp3ExportUnavailableNoticeTextBlock.Visibility = lameOk ? Visibility.Collapsed : Visibility.Visible; } catch { /* ignore */ }
+
+        try
+        {
+            _suppressMp3ExportUiEvents = true;
+            var mode = SettingsStore.NormalizeMp3ExportEncodingMode(_draft.Mp3ExportEncodingMode);
+            _draft.Mp3ExportEncodingMode = mode;
+            Mp3ExportCbrRadio.IsChecked = string.Equals(mode, "Cbr", StringComparison.OrdinalIgnoreCase);
+            Mp3ExportVbrRadio.IsChecked = !string.Equals(mode, "Cbr", StringComparison.OrdinalIgnoreCase);
+            var idx = string.Equals(mode, "Cbr", StringComparison.OrdinalIgnoreCase)
+                ? SettingsStore.ClampMp3SliderIndex(_draft.Mp3ExportCbrQualityIndex, Mp3QualityMaps.DefaultCbrSliderIndex)
+                : SettingsStore.ClampMp3SliderIndex(_draft.Mp3ExportVbrQualityIndex, Mp3QualityMaps.DefaultVbrSliderIndex);
+            Mp3ExportQualitySlider.Value = idx;
+        }
+        catch { /* ignore */ }
+        finally
+        {
+            try { _suppressMp3ExportUiEvents = false; } catch { /* ignore */ }
+        }
+
+        try { Mp3ExportReplacePlaylistCheckBox.IsChecked = _draft.Mp3ExportReplacePlaylistEntryAfterExport; } catch { /* ignore */ }
+
+        try
+        {
+            var enableControls = lameOk;
+            Mp3ExportEncodingPanel.IsEnabled = enableControls;
+            Mp3ExportQualitySlider.IsEnabled = enableControls;
+            Mp3ExportQualityHintTextBlock.IsEnabled = enableControls;
+            Mp3ExportQualityDescriptionTextBlock.IsEnabled = enableControls;
+            Mp3ExportReplacePlaylistCheckBox.IsEnabled = enableControls;
+            LameEncoderBrowseButton.IsEnabled = true;
+            LameEncoderClearButton.IsEnabled = !string.IsNullOrEmpty(pathDraft);
+        }
+        catch { /* ignore */ }
+
+        UpdateMp3ExportQualityDescription();
+    }
+
+    private void UpdateMp3ExportQualityDescription()
+    {
+        try
+        {
+            var mode = SettingsStore.NormalizeMp3ExportEncodingMode(_draft.Mp3ExportEncodingMode);
+            var idx = (int)Math.Round(Mp3ExportQualitySlider.Value);
+            idx = Math.Clamp(idx, 0, 9);
+            Mp3ExportQualityDescriptionTextBlock.Text = string.Equals(mode, "Cbr", StringComparison.OrdinalIgnoreCase)
+                ? Mp3QualityMaps.DescribeCbr(idx)
+                : Mp3QualityMaps.DescribeVbr(idx);
+        }
+        catch { /* ignore */ }
+    }
+
+    private void LameEncoderBrowseButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Select libmp3lame DLL",
+            Filter = "LAME DLL (libmp3lame*.dll)|libmp3lame*.dll|DLL (*.dll)|*.dll|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+
+        try
+        {
+            var current = (_draft.LameEncoderPath ?? "").Trim();
+            if (!string.IsNullOrEmpty(current) && (current.Contains('\\') || current.Contains('/')) && File.Exists(current))
+                dlg.InitialDirectory = Path.GetDirectoryName(current);
+        }
+        catch { /* ignore */ }
+
+        if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
+            return;
+
+        _draft.LameEncoderPath = dlg.FileName;
+        RefreshUi();
+    }
+
+    private void LameEncoderClearButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        _draft.LameEncoderPath = "";
+        RefreshUi();
+    }
+
+    private void Mp3ExportCbrRadio_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressMp3ExportUiEvents)
+            return;
+        if (Mp3ExportCbrRadio.IsChecked != true)
+            return;
+        _draft.Mp3ExportEncodingMode = "Cbr";
+        try
+        {
+            _suppressMp3ExportUiEvents = true;
+            Mp3ExportQualitySlider.Value = SettingsStore.ClampMp3SliderIndex(_draft.Mp3ExportCbrQualityIndex, Mp3QualityMaps.DefaultCbrSliderIndex);
+        }
+        catch { /* ignore */ }
+        finally { try { _suppressMp3ExportUiEvents = false; } catch { /* ignore */ } }
+        UpdateMp3ExportQualityDescription();
+    }
+
+    private void Mp3ExportVbrRadio_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressMp3ExportUiEvents)
+            return;
+        if (Mp3ExportVbrRadio.IsChecked != true)
+            return;
+        _draft.Mp3ExportEncodingMode = "Vbr";
+        try
+        {
+            _suppressMp3ExportUiEvents = true;
+            Mp3ExportQualitySlider.Value = SettingsStore.ClampMp3SliderIndex(_draft.Mp3ExportVbrQualityIndex, Mp3QualityMaps.DefaultVbrSliderIndex);
+        }
+        catch { /* ignore */ }
+        finally { try { _suppressMp3ExportUiEvents = false; } catch { /* ignore */ } }
+        UpdateMp3ExportQualityDescription();
+    }
+
+    private void Mp3ExportQualitySlider_OnValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_suppressMp3ExportUiEvents)
+            return;
+        try
+        {
+            var idx = (int)Math.Round(Mp3ExportQualitySlider.Value);
+            idx = Math.Clamp(idx, 0, 9);
+            var mode = SettingsStore.NormalizeMp3ExportEncodingMode(_draft.Mp3ExportEncodingMode);
+            if (string.Equals(mode, "Cbr", StringComparison.OrdinalIgnoreCase))
+                _draft.Mp3ExportCbrQualityIndex = idx;
+            else
+                _draft.Mp3ExportVbrQualityIndex = idx;
+            UpdateMp3ExportQualityDescription();
+        }
+        catch { /* ignore */ }
+    }
+
+    private void Mp3ExportReplacePlaylistCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressMp3ExportUiEvents)
+            return;
+        _draft.Mp3ExportReplacePlaylistEntryAfterExport = true;
+    }
+
+    private void Mp3ExportReplacePlaylistCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressMp3ExportUiEvents)
+            return;
+        _draft.Mp3ExportReplacePlaylistEntryAfterExport = false;
     }
 
     private void ApplyThemeModeSelection(string? mode)
@@ -2231,6 +2425,28 @@ public partial class OptionsWindow : Window
         try { _setAppLogLevel(_draft.AppLogLevel ?? "ErrorsAndWarnings"); } catch { /* ignore */ }
         try { _setAppLogMaxMb(Math.Clamp(_draft.AppLogMaxMb, 1, 200)); } catch { /* ignore */ }
         try { _setOptionsSelectedTab(SettingsStore.NormalizeOptionsWindowSelectedTab(_draft.OptionsSelectedTab)); } catch { /* ignore */ }
+
+        try
+        {
+            _setLameEncoderPath((_draft.LameEncoderPath ?? "").Trim());
+        }
+        catch { /* ignore */ }
+        try
+        {
+            _setMp3ExportEncodingMode(SettingsStore.NormalizeMp3ExportEncodingMode(_draft.Mp3ExportEncodingMode));
+        }
+        catch { /* ignore */ }
+        try
+        {
+            _setMp3ExportCbrQualityIndex(SettingsStore.ClampMp3SliderIndex(_draft.Mp3ExportCbrQualityIndex, Mp3QualityMaps.DefaultCbrSliderIndex));
+        }
+        catch { /* ignore */ }
+        try
+        {
+            _setMp3ExportVbrQualityIndex(SettingsStore.ClampMp3SliderIndex(_draft.Mp3ExportVbrQualityIndex, Mp3QualityMaps.DefaultVbrSliderIndex));
+        }
+        catch { /* ignore */ }
+        try { _setMp3ExportReplacePlaylistEntryAfterExport(_draft.Mp3ExportReplacePlaylistEntryAfterExport); } catch { /* ignore */ }
 
         // Save the current tab so RefreshUi() doesn't jump away from it.
         var savedTab = _draft.OptionsSelectedTab;

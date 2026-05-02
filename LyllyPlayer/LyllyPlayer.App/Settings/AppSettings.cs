@@ -145,5 +145,12 @@ public sealed record AppSettings(
     /// <summary>When true, LRCLIB search is attempted for local files (VideoId starting with "local:") to resolve lyrics.</summary>
     bool? LyricsLocalFilesEnabled,
     /// <summary>App build that last wrote this file; used for upgrade / load-failure messaging.</summary>
-    string? LastSavedByAppVersion
+    string? LastSavedByAppVersion,
+    /// <summary>Optional full path to libmp3lame.32/64.dll; when null, use bundled DLL next to the app.</summary>
+    string? LameEncoderPath,
+    /// <summary>MP3 export: Cbr | Vbr.</summary>
+    string? Mp3ExportEncodingMode,
+    int? Mp3ExportCbrQualityIndex,
+    int? Mp3ExportVbrQualityIndex,
+    bool? Mp3ExportReplacePlaylistEntryAfterExport
 );

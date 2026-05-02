@@ -103,6 +103,10 @@ public sealed partial class PlaybackEngine : IDisposable
         _cacheMaxBytes = 512L * 1024 * 1024;
         var cacheDir = Path.Combine(Path.GetTempPath(), "LyllyPlayer", "cache");
         _cache = new CacheManager(cacheDir, _cacheMaxBytes);
+        _cache.CacheEntryAdded += (_, _) =>
+        {
+            try { YoutubeDiskCacheReady?.Invoke(this, EventArgs.Empty); } catch { /* ignore */ }
+        };
     }
 
     public IReadOnlyList<PlaylistEntry> PlayOrder { get; private set; } = Array.Empty<PlaylistEntry>();
@@ -139,6 +143,8 @@ public sealed partial class PlaybackEngine : IDisposable
     public event EventHandler<string>? Error;
     public event EventHandler<(PlaylistEntry entry, bool endedEarly)>? TrackEnded;
     public event EventHandler<PlaybackPrefetchTag>? PrefetchTagged;
+    /// <summary>Raised when a YouTube disk cache entry is fully written and indexed (export MP3 can proceed).</summary>
+    public event EventHandler? YoutubeDiskCacheReady;
 
     [Obsolete("FFmpeg is no longer used; call is ignored.")]
     public void SetFfmpegPath(string ffmpegPath)
@@ -1688,6 +1694,20 @@ public sealed partial class PlaybackEngine : IDisposable
         }
 
         return false;
+    }
+
+    /// <summary>Returns the completed on-disk cache file for a YouTube entry (same key as playback), or null when missing or ineligible.</summary>
+    public bool TryGetYoutubeDiskCachePath(PlaylistEntry entry, out string? path)
+    {
+        path = null;
+        if (!IsYoutubeDiskCacheEligible(entry))
+            return false;
+        var key = YoutubeDiskCacheStoreKey(entry.VideoId);
+        var p = _cache.TryGetCachedPath(key);
+        if (string.IsNullOrWhiteSpace(p) || !File.Exists(p))
+            return false;
+        path = p;
+        return true;
     }
 
     public void Stop()

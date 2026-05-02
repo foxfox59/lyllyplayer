@@ -109,6 +109,39 @@ public static class LyricsCache
         SaveBestEffort();
     }
 
+    /// <summary>
+    /// Copies a cached entry (LRC text or explicit miss) to another key if the destination is missing or expired.
+    /// Used when a YouTube row is replaced by a local file: <c>yt_…</c> → <c>lyr_…</c> (local id).
+    /// </summary>
+    public static void TryMigrateLyricsEntry(string? fromKey, string toKey)
+    {
+        if (string.IsNullOrWhiteSpace(toKey))
+            return;
+        if (string.IsNullOrWhiteSpace(fromKey) || string.Equals(fromKey, toKey, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        lock (_gate)
+        {
+            if (_entries.TryGetValue(toKey, out var dest) && !dest.IsExpired())
+                return;
+
+            if (!_entries.TryGetValue(fromKey, out var src) || src.IsExpired())
+                return;
+
+            _entries[toKey] = new CacheEntry(src.LrcText, src.FetchedAtUtc, src.IsMiss);
+        }
+
+        SaveBestEffort();
+    }
+
+    /// <summary>Migrates lyrics stored under the YouTube cache key to the local playlist entry key.</summary>
+    public static void TryMigrateYoutubeLyricsToLocalEntry(string youtubeVideoId, string localPlaylistVideoId)
+    {
+        if (string.IsNullOrWhiteSpace(youtubeVideoId) || string.IsNullOrWhiteSpace(localPlaylistVideoId))
+            return;
+        TryMigrateLyricsEntry($"yt_{youtubeVideoId}", $"lyr_{localPlaylistVideoId}");
+    }
+
     /// <summary>Removes the lyrics entry for the given key.</summary>
     public static void Remove(string key)
     {

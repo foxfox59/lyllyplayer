@@ -744,6 +744,11 @@ public partial class MainWindow : Window
     private Rect? _optionsBoundsBeforeTopTaskbarMinimize;
     private bool _restoringAuxFromMinimize;
     private bool _keepIncompletePlaylistOnCancel;
+    private string? _lameEncoderPath;
+    private string _mp3ExportEncodingMode = "Vbr";
+    private int _mp3ExportCbrQualityIndex = Mp3QualityMaps.DefaultCbrSliderIndex;
+    private int _mp3ExportVbrQualityIndex = Mp3QualityMaps.DefaultVbrSliderIndex;
+    private bool _mp3ExportReplacePlaylistEntryAfterExport;
     private string _audioQuality = "Auto";
     private string? _audioOutputDevice;
     private string _appLogLevel = "ErrorsAndWarnings";
@@ -863,6 +868,17 @@ public partial class MainWindow : Window
         _alwaysOnTopOptionsWindow = _startupSettings.AlwaysOnTopOptionsWindow ?? false;
         _alwaysOnTopLyricsWindow = _startupSettings.AlwaysOnTopLyricsWindow ?? false;
         _keepIncompletePlaylistOnCancel = _startupSettings.KeepIncompletePlaylistOnCancel ?? false;
+        _lameEncoderPath = string.IsNullOrWhiteSpace(_startupSettings.LameEncoderPath)
+            ? null
+            : _startupSettings.LameEncoderPath.Trim();
+        _mp3ExportEncodingMode = SettingsStore.NormalizeMp3ExportEncodingMode(_startupSettings.Mp3ExportEncodingMode);
+        _mp3ExportCbrQualityIndex = SettingsStore.ClampMp3SliderIndex(
+            _startupSettings.Mp3ExportCbrQualityIndex,
+            Mp3QualityMaps.DefaultCbrSliderIndex);
+        _mp3ExportVbrQualityIndex = SettingsStore.ClampMp3SliderIndex(
+            _startupSettings.Mp3ExportVbrQualityIndex,
+            Mp3QualityMaps.DefaultVbrSliderIndex);
+        _mp3ExportReplacePlaylistEntryAfterExport = _startupSettings.Mp3ExportReplacePlaylistEntryAfterExport ?? false;
         _audioQuality = _startupSettings.AudioQuality ?? "Auto";
         _audioOutputDevice = string.IsNullOrWhiteSpace(_startupSettings.AudioOutputDevice) ? null : _startupSettings.AudioOutputDevice;
         _uiScalePercent = _startupSettings.UiScalePercent is >= 50 and <= 200 ? _startupSettings.UiScalePercent.Value : 100;
@@ -1060,6 +1076,11 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(() => HandlePlaybackFailed(payload.entry, payload.message));
         _engine.PrefetchTagged += (_, tag) =>
             Dispatcher.Invoke(() => HandlePrefetchTagged(tag));
+        _engine.YoutubeDiskCacheReady += (_, _) =>
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try { UpdateExportMp3ControlsEnabled(); } catch { /* ignore */ }
+            }), DispatcherPriority.Render);
         _engine.StatusChanged += (_, payload) =>
             Dispatcher.Invoke(() =>
             {
@@ -1780,10 +1801,16 @@ public partial class MainWindow : Window
             RepeatButton.Visibility = fullChromeVis;
             try { CompactShuffleToggleButton.Visibility = (_mainWindowCompact && !ultra) ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
             try { CompactRepeatButton.Visibility = (_mainWindowCompact && !ultra) ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
+            try { CompactLyricsButton.Visibility = (_mainWindowCompact && !ultra) ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
             try { CompactPlaylistButton.Visibility = (_mainWindowCompact && !ultra) ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
+            try { CompactExportMp3Button.Visibility = (_mainWindowCompact && !ultra) ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
             try { CompactPlaylistButtonInline.Visibility = ultra ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
             try { LyricsButton.Visibility = ultra ? Visibility.Collapsed : Visibility.Visible; } catch { /* ignore */ }
             try { LyricsUltraButtonInline.Visibility = ultra ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
+            try { ExportMp3UltraButtonInline.Visibility = ultra ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
+            try { ExportMp3Button.Visibility = _mainWindowCompact ? Visibility.Collapsed : Visibility.Visible; } catch { /* ignore */ }
+
+            try { UpdateExportMp3ControlsEnabled(); } catch { /* ignore */ }
 
             ChromeCompactLayoutButton.Content = _mainWindowCompact ? "[+]" : "[-]";
 
@@ -7689,6 +7716,33 @@ public partial class MainWindow : Window
             }
             catch { /* ignore */ }
         }
+
+        try { UpdateExportMp3ControlsEnabled(); } catch { /* ignore */ }
+    }
+
+    private static bool CanExportCurrentTrackToMp3(PlaybackEngine engine, string? lameEncoderPath)
+    {
+        try
+        {
+            if (engine.GetCurrent() is not PlaylistEntry cur)
+                return false;
+            if (!engine.TryGetYoutubeDiskCachePath(cur, out _))
+                return false;
+            return LameEncoderLocator.TryResolve(lameEncoderPath, out _);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void UpdateExportMp3ControlsEnabled()
+    {
+        var can = CanExportCurrentTrackToMp3(_engine, _lameEncoderPath);
+        try { MainExportToMp3MenuItem.IsEnabled = can; } catch { /* ignore */ }
+        try { ExportMp3Button.IsEnabled = can; } catch { /* ignore */ }
+        try { CompactExportMp3Button.IsEnabled = can; } catch { /* ignore */ }
+        try { ExportMp3UltraButtonInline.IsEnabled = can; } catch { /* ignore */ }
     }
 
     private void SelectAndScrollToNowPlaying(PlaylistEntry? entry)
@@ -7843,6 +7897,139 @@ public partial class MainWindow : Window
             }
         }
         catch { /* ignore */ }
+    }
+
+    private void MainPlaybackInfoStack_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        try { UpdateExportMp3ControlsEnabled(); } catch { /* ignore */ }
+    }
+
+    private async void ExportCurrentTrackToMp3_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_engine.GetCurrent() is not PlaylistEntry cur)
+                return;
+
+            if (!_engine.TryGetYoutubeDiskCachePath(cur, out var cachePath) || string.IsNullOrWhiteSpace(cachePath))
+            {
+                System.Windows.MessageBox.Show(
+                    this,
+                    "There is no finished on-disk cache for this track yet. Let playback finish caching, then try again.",
+                    GetAppTitleBase(),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            if (!LameEncoderLocator.TryResolve(_lameEncoderPath, out _))
+            {
+                System.Windows.MessageBox.Show(
+                    this,
+                    "LAME (libmp3lame) was not found.\n\nPlace libmp3lame.64.dll next to the app or set a custom DLL under Options → Export.",
+                    GetAppTitleBase(),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+
+            var defaultName = FileNameSanitizer.MakeSafeFileName(cur.Title, "track") + ".mp3";
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Export to MP3",
+                Filter = "MP3 (*.mp3)|*.mp3|All files (*.*)|*.*",
+                DefaultExt = ".mp3",
+                AddExtension = true,
+                FileName = defaultName,
+                OverwritePrompt = true,
+            };
+
+            if (dlg.ShowDialog(this) != true)
+                return;
+
+            var destPath = dlg.FileName;
+            var modeNorm = SettingsStore.NormalizeMp3ExportEncodingMode(_mp3ExportEncodingMode);
+            var req = new Mp3ExportRequest(
+                string.Equals(modeNorm, "Cbr", StringComparison.OrdinalIgnoreCase) ? Mp3ExportEncodingMode.Cbr : Mp3ExportEncodingMode.Vbr,
+                _mp3ExportCbrQualityIndex,
+                _mp3ExportVbrQualityIndex);
+
+            var title = cur.Title;
+            var channel = cur.Channel;
+            var videoId = cur.VideoId;
+            var lamePath = _lameEncoderPath;
+
+            ShowInfoToast("Exporting MP3…", ms: 2000);
+            await Task.Run(() =>
+                    Mp3ExportService.ExportFileToMp3(cachePath, destPath, title, channel, req, lamePath))
+                .ConfigureAwait(true);
+
+            ShowInfoToast($"Exported: {Path.GetFileName(destPath)}");
+
+            if (_mp3ExportReplacePlaylistEntryAfterExport)
+                ReplaceYoutubePlaylistRowsWithLocalMp3(videoId, destPath, cur);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                System.Windows.MessageBox.Show(
+                    this,
+                    ex.Message,
+                    "Export to MP3",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            catch { /* ignore */ }
+        }
+    }
+
+    private void ReplaceYoutubePlaylistRowsWithLocalMp3(string oldVideoId, string mp3Path, PlaylistEntry sourceEntry)
+    {
+        if (string.IsNullOrWhiteSpace(oldVideoId))
+            return;
+
+        string full;
+        try { full = Path.GetFullPath(mp3Path); }
+        catch { return; }
+
+        var newEntry = new PlaylistEntry(
+            VideoId: LocalPlaylistLoader.CreateLocalIdFromPath(full),
+            Title: sourceEntry.Title,
+            Channel: sourceEntry.Channel,
+            DurationSeconds: sourceEntry.DurationSeconds,
+            WebpageUrl: full,
+            RequiresCookies: false);
+
+        LyricsCache.TryMigrateYoutubeLyricsToLocalEntry(oldVideoId, newEntry.VideoId);
+
+        if (_playlistCore.OriginByVideoId.TryGetValue(oldVideoId, out var origin))
+        {
+            _playlistCore.OriginByVideoId.Remove(oldVideoId);
+            _playlistCore.OriginByVideoId[newEntry.VideoId] = origin;
+        }
+
+        for (var i = 0; i < _playlistCore.Entries.Count; i++)
+        {
+            if (string.Equals(_playlistCore.Entries[i].VideoId, oldVideoId, StringComparison.OrdinalIgnoreCase))
+                _playlistCore.Entries[i] = newEntry;
+        }
+
+        for (var i = 0; i < _queuedNext.Count; i++)
+        {
+            var q = _queuedNext[i];
+            if (string.Equals(q.Entry.VideoId, oldVideoId, StringComparison.OrdinalIgnoreCase))
+                _queuedNext[i] = new QueuedInstance(q.Id, newEntry);
+        }
+
+        var curIdx = _engine.CurrentIndex;
+        _engine.SetQueue(_playlistCore.Entries, startIndex: curIdx >= 0 ? curIdx : 0, raiseNowPlayingChanged: true);
+        try { _nowPlayingEntry = _engine.GetCurrent(); } catch { /* ignore */ }
+        SetQueueList(_playlistCore.Entries, selectedIndex: -1, forceFullRebuild: true);
+        UpdatePlaylistTitleDisplayForNowPlaying();
+        RequestPersistSnapshot();
+
+        RefreshLyricsAfterExportReplace(newEntry);
     }
 
     private void PlaylistTitle_OpenOriginMenuItem_OnClick(object sender, RoutedEventArgs e)

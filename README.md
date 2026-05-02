@@ -30,6 +30,7 @@ Support for basic custom theming with a default, automatic, custom or Windows th
 **Compact** and **Ultra compact** main layouts; auxiliary **Playlist**, **Options**, and **Lyrics** windows can snap to the main window and restore after compact mode.  
 Simple visualizer: off, VU bars, or a frequency spectrum (in Ultra compact the strip can double as a seek surface).  
 **Lyrics** (best-effort): separate **Lyrics** window plus optional title-bar line; sources include yt-dlp metadata and LRCLIB.  
+**Export to MP3** (YouTube): when a track has a **finished on-disk cache**, right-click the **main playback/info** area — encoding via **LAME** (`libmp3lame`), settings under **Options → Export** (see below).
 
 **and so much more!** (not really that much, those were the main features :D)  
 
@@ -72,6 +73,12 @@ In case you find it useful and want to give a little something, feel free to, bu
 - Does this work with Youtube Music Premium?
   - I have no idea. Try at your own risk. No responsibility is taken as I have zero idea how Youtube takes to third party agents using their API without a developer token.
 
+## MP3 export (YouTube)
+
+- Only when playback has produced a **completed disk cache** for that track.
+- **Right-click** the main **playback/info** area → **Export to MP3…**; **Options → Export** for LAME path, CBR/VBR, quality, optional **replace** playlist row(s), etc. (encoding runs off the UI thread).
+- **License & source:** **LAME** / `libmp3lame` is **LGPL**; **NAudio.Lame** (managed wrapper) is **MIT**. Official **LAME source** links, LGPL reference, and the **MIT** notice text are in **[docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)** — also copied next to the executable as `THIRD_PARTY_NOTICES.md` for portable/ZIP releases.
+  
 ## TODO (planned, no timeline, best effort)
 
 Ideas for later — **not** commitments and nothing to depend on for now:
@@ -106,11 +113,14 @@ Desktop media player (currently) for **Windows 10 and later** (64-bit), built wi
 | Runtime (dev) | .NET 8 Desktop Runtime (included with SDK for `dotnet run`)                 |
 | Bundled       | LibVLC native libs (via `VideoLAN.LibVLC.Windows` — used for decode/output)   |
 | Typical setup | yt-dlp (PATH or **Options → Tools**, or internal copy), optional **node.js** for YouTube cookies |
+| MP3 export      | Optional: bundled **libmp3lame** DLLs (**NAudio.Lame**); custom DLL path in **Options → Export** if needed |
 
 
 ## License
 
 This project is licensed under the **GNU General Public License v3.0 only** — see [LICENSE](LICENSE) in the repository root. SPDX identifier: `GPL-3.0-only`.
+
+Third-party components (**LAME** / `libmp3lame`, **NAudio.Lame**, etc.) are summarized in **[docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)** — including **LGPL** (LAME), **MIT** (NAudio.Lame), links to **official LAME source**, and the full MIT notice text. Ship that file with binaries (the build copies `THIRD_PARTY_NOTICES.md` to the app output folder).
 
 ## Repository layout
 
@@ -126,6 +136,7 @@ This project is licensed under the **GNU General Public License v3.0 only** — 
 │   ├── publish-portable.ps1
 │   └── publish-artifacts.ps1
 ├── docs/
+│   ├── THIRD_PARTY_NOTICES.md # LAME (LGPL) + NAudio.Lame (MIT); source links — ship with releases
 │   ├── USAGE.md              # End-user feature / UI guide (keep in sync with the app)
 │   ├── SCREENSHOTS.md        # Visual samples (may lag behind minor UI tweaks)
 │   ├── GITHUB.md             # Branch vs Releases, tags, Actions

@@ -264,6 +264,11 @@ public partial class MainWindow
             CompactModeLayout: _compactModeLayout,
             CompactModeHidesAuxWindows: _compactModeHidesAuxWindows,
             KeepIncompletePlaylistOnCancel: _keepIncompletePlaylistOnCancel,
+            LameEncoderPath: string.IsNullOrWhiteSpace(_lameEncoderPath) ? null : _lameEncoderPath.Trim(),
+            Mp3ExportEncodingMode: _mp3ExportEncodingMode,
+            Mp3ExportCbrQualityIndex: _mp3ExportCbrQualityIndex,
+            Mp3ExportVbrQualityIndex: _mp3ExportVbrQualityIndex,
+            Mp3ExportReplacePlaylistEntryAfterExport: _mp3ExportReplacePlaylistEntryAfterExport,
             LastSavedByAppVersion: AppVersion.Current
         ));
     }

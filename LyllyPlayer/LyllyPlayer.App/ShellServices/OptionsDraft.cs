@@ -1,3 +1,4 @@
+using LyllyPlayer.Services;
 using LyllyPlayer.Settings;
 
 namespace LyllyPlayer.ShellServices;
@@ -62,5 +63,11 @@ public sealed class OptionsDraft
     public string AppLogLevel = "ErrorsAndWarnings";
     public int AppLogMaxMb = SettingsStore.DefaultAppLogMaxMb;
     public string OptionsSelectedTab = "Tools";
+
+    public string LameEncoderPath = "";
+    public string Mp3ExportEncodingMode = "Vbr";
+    public int Mp3ExportCbrQualityIndex = Mp3QualityMaps.DefaultCbrSliderIndex;
+    public int Mp3ExportVbrQualityIndex = Mp3QualityMaps.DefaultVbrSliderIndex;
+    public bool Mp3ExportReplacePlaylistEntryAfterExport;
 }
 
