@@ -7969,6 +7969,128 @@ public partial class MainWindow : Window
         try { UpdateExportMp3ControlsEnabled(); } catch { /* ignore */ }
     }
 
+    private static string BuildComparableNameKey(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return "";
+        try
+        {
+            Span<char> buf = stackalloc char[Math.Min(256, s.Length)];
+            var n = 0;
+            foreach (var ch in s.Trim())
+            {
+                if (char.IsLetterOrDigit(ch))
+                {
+                    if (n >= buf.Length)
+                        break;
+                    buf[n++] = char.ToLowerInvariant(ch);
+                }
+            }
+            return n == 0 ? "" : new string(buf[..n]);
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static bool LooksLikeUploaderHandle(string s)
+    {
+        var t = (s ?? "").Trim();
+        if (t.Length < 3)
+            return false;
+        if (t.Contains(' '))
+            return false;
+        var hasLetter = false;
+        var hasUpper = false;
+        var hasLower = false;
+        var hasDigit = false;
+        foreach (var ch in t)
+        {
+            if (char.IsLetter(ch))
+            {
+                hasLetter = true;
+                if (char.IsUpper(ch)) hasUpper = true;
+                if (char.IsLower(ch)) hasLower = true;
+            }
+            if (char.IsDigit(ch)) hasDigit = true;
+        }
+        return hasLetter && (hasDigit || (hasUpper && hasLower)) && t.Length >= 6;
+    }
+
+    private static string NormalizeTopicChannel(string? channel)
+    {
+        var c = (channel ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(c))
+            return "";
+        try
+        {
+            c = System.Text.RegularExpressions.Regex.Replace(
+                c,
+                @"\s*-\s*topic\s*$",
+                "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+        }
+        catch { /* ignore */ }
+        return c;
+    }
+
+    private static (string exportTitle, string? exportArtist) InferExportTagsFromNowPlaying(PlaylistEntry cur)
+    {
+        // Goal: don't poison exported MP3 tags by blindly using the YouTube channel/uploader as Artist.
+        // Prefer parsing "Artist - Title" from the visible title when possible; otherwise fall back to a cleaned Topic channel.
+        var rawTitle = (cur.Title ?? "").Trim();
+        var rawChannel = (cur.Channel ?? "").Trim();
+        var topicChannel = NormalizeTopicChannel(rawChannel);
+
+        // Try structural split on common separators.
+        try
+        {
+            var s = rawTitle;
+            // Normalize mixed dash spacing for splitting.
+            if (!string.IsNullOrWhiteSpace(s))
+                s = System.Text.RegularExpressions.Regex.Replace(s, @"\s*[-–—]\s*", " - ");
+
+            var parts = s.Split(new[] { " - " }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length >= 2)
+            {
+                // "Artist - Track"
+                var a = parts[0].Trim();
+                var t = parts[1].Trim();
+
+                // "Artist - Track - Topic" or "Artist - Track - Uploader"
+                if (parts.Length >= 3)
+                {
+                    var third = parts[2].Trim();
+                    var kThird = BuildComparableNameKey(third);
+                    var kChan = BuildComparableNameKey(topicChannel);
+                    if (string.Equals(third, "Topic", StringComparison.OrdinalIgnoreCase) ||
+                        (!string.IsNullOrWhiteSpace(kThird) && !string.IsNullOrWhiteSpace(kChan) && kThird == kChan) ||
+                        LooksLikeUploaderHandle(third))
+                    {
+                        // ignore third chunk
+                    }
+                    else
+                    {
+                        // Sometimes title legitimately has 3 chunks; keep as part of title.
+                        t = $"{t} {third}".Trim();
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(a) && !string.IsNullOrWhiteSpace(t))
+                    return (t, a);
+            }
+        }
+        catch { /* ignore */ }
+
+        // If channel is a Topic channel, it's usually a good artist hint.
+        if (!string.IsNullOrWhiteSpace(topicChannel) && !LooksLikeUploaderHandle(topicChannel))
+            return (rawTitle, topicChannel);
+
+        // Otherwise, keep title and omit artist rather than saving a likely-uploader handle.
+        return (rawTitle, null);
+    }
+
     private async void ExportCurrentTrackToMp3_OnClick(object sender, RoutedEventArgs e)
     {
         try
@@ -8019,8 +8141,7 @@ public partial class MainWindow : Window
                 _mp3ExportCbrQualityIndex,
                 _mp3ExportVbrQualityIndex);
 
-            var title = cur.Title;
-            var channel = cur.Channel;
+            var (title, channel) = InferExportTagsFromNowPlaying(cur);
             var videoId = cur.VideoId;
             var lamePath = _lameEncoderPath;
 
@@ -8032,7 +8153,7 @@ public partial class MainWindow : Window
             ShowInfoToast($"Exported: {Path.GetFileName(destPath)}");
 
             if (_mp3ExportReplacePlaylistEntryAfterExport)
-                ReplaceYoutubePlaylistRowsWithLocalMp3(videoId, destPath, cur);
+                ReplaceYoutubePlaylistRowsWithLocalMp3(videoId, destPath, cur, inferredTitle: title, inferredArtist: channel);
         }
         catch (Exception ex)
         {
@@ -8049,7 +8170,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ReplaceYoutubePlaylistRowsWithLocalMp3(string oldVideoId, string mp3Path, PlaylistEntry sourceEntry)
+    private void ReplaceYoutubePlaylistRowsWithLocalMp3(string oldVideoId, string mp3Path, PlaylistEntry sourceEntry, string? inferredTitle = null, string? inferredArtist = null)
     {
         if (string.IsNullOrWhiteSpace(oldVideoId))
             return;
@@ -8060,8 +8181,8 @@ public partial class MainWindow : Window
 
         var newEntry = new PlaylistEntry(
             VideoId: LocalPlaylistLoader.CreateLocalIdFromPath(full),
-            Title: sourceEntry.Title,
-            Channel: sourceEntry.Channel,
+            Title: string.IsNullOrWhiteSpace(inferredTitle) ? sourceEntry.Title : inferredTitle,
+            Channel: string.IsNullOrWhiteSpace(inferredArtist) ? sourceEntry.Channel : inferredArtist,
             DurationSeconds: sourceEntry.DurationSeconds,
             WebpageUrl: full,
             RequiresCookies: false);

@@ -145,6 +145,9 @@ public static class LyricsResolver
 
         // Single-query policy: do not issue a second LRCLIB request (reduces load / avoids double misses).
         // However, do one retry on timeout/transient IO to avoid poisoning UX under temporary LRCLIB slowness.
+        //
+        // NOTE: We also allow a *single* fallback query that uses only the cleaned track name when the richer query
+        // produced 0 viable candidates. This improves hit rate when channel/tags are wrong (uploader handles, etc.).
         List<(double score, string lrc, double? duration, string? artistName, string? trackName)> candidates;
         try
         {
@@ -154,6 +157,33 @@ public static class LyricsResolver
         {
             AppLog.Warn($"LRCLIB request transient failure (will retry once): {ex.GetType().Name}: {ex.Message}");
             candidates = await SearchAndScoreAsync(client, searchQuery, trackName, artist, targetDurationSeconds, ct);
+        }
+
+        // Fallback query: title-only (cleaned), when the richer query finds nothing.
+        // This is intentionally conservative: one extra request at most, and only when queries differ.
+        if (candidates.Count == 0)
+        {
+            string? titleOnlyQuery = null;
+            try
+            {
+                // Use the same tokenization path but with no artist hint to avoid including uploader/channel garbage.
+                titleOnlyQuery = BuildLrclibSearchQuery(trackName, artist: null);
+            }
+            catch { /* ignore */ }
+
+            if (!string.IsNullOrWhiteSpace(titleOnlyQuery) &&
+                !string.Equals(titleOnlyQuery.Trim(), searchQuery.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    candidates = await SearchAndScoreAsync(client, titleOnlyQuery, trackName, ytArtist: null, targetDurationSeconds, ct, fallback: true);
+                }
+                catch (Exception ex) when (IsTransientLrclibFailure(ex, ct))
+                {
+                    AppLog.Warn($"LRCLIB title-only request transient failure (will retry once): {ex.GetType().Name}: {ex.Message}");
+                    candidates = await SearchAndScoreAsync(client, titleOnlyQuery, trackName, ytArtist: null, targetDurationSeconds, ct, fallback: true);
+                }
+            }
         }
 
         if (candidates.Count > 0)
@@ -174,6 +204,26 @@ public static class LyricsResolver
         {
             AppLog.Warn($"LRCLIB plain-lyrics request transient failure (will retry once): {ex.GetType().Name}: {ex.Message}");
             plainFallback = await SearchPlainLyricsAsync(client, searchQuery, trackName, artist, ct);
+        }
+
+        // Plain-lyrics title-only fallback when the richer query produced nothing.
+        if (plainFallback is null)
+        {
+            string? titleOnlyQuery = null;
+            try { titleOnlyQuery = BuildLrclibSearchQuery(trackName, artist: null); } catch { /* ignore */ }
+            if (!string.IsNullOrWhiteSpace(titleOnlyQuery) &&
+                !string.Equals(titleOnlyQuery.Trim(), searchQuery.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    plainFallback = await SearchPlainLyricsAsync(client, titleOnlyQuery, trackName, ytArtist: null, ct);
+                }
+                catch (Exception ex) when (IsTransientLrclibFailure(ex, ct))
+                {
+                    AppLog.Warn($"LRCLIB title-only plain-lyrics request transient failure (will retry once): {ex.GetType().Name}: {ex.Message}");
+                    plainFallback = await SearchPlainLyricsAsync(client, titleOnlyQuery, trackName, ytArtist: null, ct);
+                }
+            }
         }
         if (plainFallback != null)
             return (plainFallback.Value.LrcText, plainFallback.Value.Duration, plainFallback.Value.Artist, plainFallback.Value.Title, true, false);
@@ -208,11 +258,36 @@ public static class LyricsResolver
             var tokens = new List<string>(32);
 
             // 1) Extract tokens from the title itself (handles "Artist - Title", "A x B - Song", etc.)
-            tokens.AddRange(ExtractTokensFromTrackTitle(trackName));
+            var normalizedArtistHint = string.IsNullOrWhiteSpace(artist) ? null : NormalizeYoutubeArtistHint(artist);
+            var titleTokens = ExtractTokensFromTrackTitle(trackName, normalizedArtistHint).ToList();
+            tokens.AddRange(titleTokens);
+            var titleSignalTokenCount = CountDistinctMeaningfulTokens(titleTokens);
 
             // 2) Optionally include artist/channel tokens (weak signal for YouTube; avoid Topic/VEVO/etc).
             if (LooksLikeTrustworthyArtistHint(artist))
-                tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(artist!)));
+            {
+                // If the title is "A - B - C" and C matches the channel/uploader name, don't add those tokens:
+                // they are more likely uploader tags than the actual artist, and they pollute search.
+                if (!TitleAppearsToEndWithUploaderTag(trackName, normalizedArtistHint))
+                {
+                    // Local files and some YouTube sources can have wrong "artist" tags that are actually uploader handles
+                    // (e.g. SaturnSpectre). Only use such hints if they also appear in the title.
+                    if (normalizedArtistHint is not null &&
+                        LooksLikeUploaderOrChannelTag(normalizedArtistHint) &&
+                        !TitleContainsComparableKey(trackName, normalizedArtistHint) &&
+                        // If the title already has enough good tokens, don't pollute search with a likely-uploader handle.
+                        // But if the title is very short, keep the hint even if it looks handle-like
+                        // because tags often omit spaces and this improves hit rate.
+                        titleSignalTokenCount >= 3)
+                    {
+                        // skip
+                    }
+                    else
+                    {
+                        tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(NormalizeYoutubeArtistHint(artist!))));
+                    }
+                }
+            }
 
             // 3) Remove junk tokens and dedupe.
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -236,16 +311,86 @@ public static class LyricsResolver
         }
     }
 
+    private static int CountDistinctMeaningfulTokens(IEnumerable<string> tokens)
+    {
+        try
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in tokens ?? Array.Empty<string>())
+            {
+                var w = (t ?? "").Trim();
+                if (string.IsNullOrWhiteSpace(w))
+                    continue;
+                if (IsJunkToken(w))
+                    continue;
+                seen.Add(w);
+            }
+            return seen.Count;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static bool TitleContainsComparableKey(string title, string needle)
+    {
+        if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(needle))
+            return false;
+        try
+        {
+            var kTitle = BuildComparableNameKey(title);
+            var kNeedle = BuildComparableNameKey(needle);
+            if (string.IsNullOrWhiteSpace(kTitle) || string.IsNullOrWhiteSpace(kNeedle))
+                return false;
+            return kTitle.Contains(kNeedle, StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TitleAppearsToEndWithUploaderTag(string rawTitle, string? artistHint)
+    {
+        if (string.IsNullOrWhiteSpace(rawTitle) || string.IsNullOrWhiteSpace(artistHint))
+            return false;
+
+        try
+        {
+            // Mirror the same normalization used by ExtractTokensFromTrackTitle before splitting.
+            var s = rawTitle.Trim();
+            s = StripBracketedJunk(s);
+            s = NormalizeFeatureMarkers(s);
+            s = NormalizeLooseTitleSeparators(s);
+
+            var parts = SplitOnSeparatorsUpTo3(s, new[] { " - ", " – ", " — ", " : ", " | " });
+            if (parts.Count < 3)
+                return false;
+
+            var third = parts[2];
+            if (string.IsNullOrWhiteSpace(third))
+                return false;
+
+            // If it matches the channel/artist hint, it's almost certainly a channel/uploader tag for this title style.
+            // In that case, do not re-add channel tokens into the LRCLIB query.
+            return ThirdPartMatchesArtistHint(third, artistHint);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static bool LooksLikeTrustworthyArtistHint(string? artist)
     {
         if (string.IsNullOrWhiteSpace(artist))
             return false;
-        var a = artist.Trim();
+        var a = NormalizeYoutubeArtistHint(artist);
         if (a.Length < 2)
             return false;
         var lower = a.ToLowerInvariant();
         // Very common non-artist channels.
-        if (lower.Contains("- topic")) return false;
         if (lower.Contains(" vevo")) return false;
         if (lower.Contains("records")) return false;
         if (lower.Contains("label")) return false;
@@ -253,7 +398,23 @@ public static class LyricsResolver
         return true;
     }
 
-    private static IEnumerable<string> ExtractTokensFromTrackTitle(string raw)
+    private static string NormalizeYoutubeArtistHint(string artist)
+    {
+        // Many "Topic" channels are actually the correct artist; keep the artist, drop "- Topic".
+        var a = (artist ?? "").Trim();
+        try
+        {
+            a = System.Text.RegularExpressions.Regex.Replace(
+                a,
+                @"\s*-\s*topic\s*$",
+                "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+        }
+        catch { /* ignore */ }
+        return a;
+    }
+
+    private static IEnumerable<string> ExtractTokensFromTrackTitle(string raw, string? artistHint)
     {
         if (string.IsNullOrWhiteSpace(raw))
             return Array.Empty<string>();
@@ -262,18 +423,39 @@ public static class LyricsResolver
         var s = raw.Trim();
         s = StripBracketedJunk(s);
         s = NormalizeFeatureMarkers(s);
+        s = NormalizeLooseTitleSeparators(s);
 
         // Prefer safe separators with spaces to avoid splitting hyphenated words.
-        var parts = SplitOnFirstSeparator(s, new[]
+        // Also handle common "Artist - Title - Uploader" patterns by dropping the 3rd part when it looks like a channel tag.
+        var splitParts = SplitOnSeparatorsUpTo3(s, new[]
         {
             " - ", " – ", " — ", " : ", " | "
         });
 
         var tokens = new List<string>(32);
-        if (parts is { Left: { } l, Right: { } r })
+        if (splitParts.Count >= 2)
         {
-            tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(l)));
-            tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(r)));
+            var left = splitParts[0];
+            var right = splitParts[1];
+
+            // If we have 3 parts and the last part looks like an uploader/channel tag, ignore it.
+            if (splitParts.Count >= 3)
+            {
+                var third = splitParts[2];
+                if (!string.IsNullOrWhiteSpace(third) &&
+                    (LooksLikeUploaderOrChannelTag(third) || ThirdPartMatchesArtistHint(third, artistHint)))
+                {
+                    // keep only first two parts
+                }
+                else
+                {
+                    // keep the third as well (some songs legitimately contain multiple separators)
+                    right = $"{right} {third}";
+                }
+            }
+
+            tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(left)));
+            tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(right)));
         }
         else
         {
@@ -281,6 +463,241 @@ public static class LyricsResolver
         }
 
         return tokens;
+    }
+
+    private static string NormalizeLooseTitleSeparators(string s)
+    {
+        // Some YouTube titles use "-" / "–" / "—" as separators without consistent spacing:
+        //   "A - B - C" / "A-B - C" / "A -B-C"
+        // We only normalize when there are *multiple* separators, which strongly suggests "chunks" not hyphenated words.
+        try
+        {
+            if (string.IsNullOrWhiteSpace(s))
+                return s ?? "";
+
+            var dashCount = 0;
+            foreach (var ch in s)
+            {
+                if (ch is '-' or '–' or '—')
+                    dashCount++;
+            }
+            if (dashCount < 2)
+                return s;
+
+            // Normalize various dashes into " - " with flexible whitespace.
+            // Important: do this even if one separator is already spaced; mixed formatting is common ("A - B -C").
+            s = System.Text.RegularExpressions.Regex.Replace(
+                s,
+                @"\s*[-–—]\s*",
+                " - ",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+            // Clean up repeated spaces.
+            s = System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ").Trim();
+        }
+        catch { /* ignore */ }
+        return s;
+    }
+
+    private static bool ThirdPartMatchesArtistHint(string thirdPart, string? artistHint)
+    {
+        // Conservative: only drop the 3rd part if we also have an artist/channel hint and it substantially matches.
+        // This covers cases like "Artist - Song - Uploader" where uploader == channel, without assuming all 3-part titles are uploader-tagged.
+        if (string.IsNullOrWhiteSpace(thirdPart) || string.IsNullOrWhiteSpace(artistHint))
+            return false;
+
+        try
+        {
+            var a = NormalizeYoutubeArtistHint(artistHint);
+            if (string.IsNullOrWhiteSpace(a))
+                return false;
+
+            // Compare using a "collapsed" key.
+            var kThird = BuildComparableNameKey(thirdPart);
+            var kHint = BuildComparableNameKey(a);
+            if (!string.IsNullOrWhiteSpace(kThird) && !string.IsNullOrWhiteSpace(kHint) && kThird == kHint)
+                return true;
+
+            // Direct contains in either direction after normalization.
+            var lowerThird = thirdPart.Trim().ToLowerInvariant();
+            var lowerHint = a.Trim().ToLowerInvariant();
+            if (lowerThird == lowerHint)
+                return true;
+            if (lowerThird.Contains(lowerHint) || lowerHint.Contains(lowerThird))
+                return true;
+
+            // Token overlap: require strong coverage to avoid false positives.
+            var tThird = TokenizeBasic(thirdPart).Select(x => x.ToLowerInvariant()).Where(x => x.Length >= 3).Distinct().ToList();
+            var tHint = TokenizeBasic(a).Select(x => x.ToLowerInvariant()).Where(x => x.Length >= 3).Distinct().ToList();
+            if (tThird.Count == 0 || tHint.Count == 0)
+                return false;
+
+            var overlap = tThird.Intersect(tHint).Count();
+            var denom = Math.Min(tThird.Count, tHint.Count);
+            if (denom <= 0)
+                return false;
+
+            var ratio = overlap / (double)denom;
+            return ratio >= 0.75;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string BuildComparableNameKey(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return "";
+        try
+        {
+            Span<char> buf = stackalloc char[Math.Min(256, s.Length)];
+            var n = 0;
+            foreach (var ch in s.Trim())
+            {
+                if (char.IsLetterOrDigit(ch))
+                {
+                    if (n >= buf.Length)
+                        break;
+                    buf[n++] = char.ToLowerInvariant(ch);
+                }
+            }
+            return n == 0 ? "" : new string(buf[..n]);
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static List<string> SplitOnSeparatorsUpTo3(string s, string[] seps)
+    {
+        var parts = new List<string>(3);
+        if (string.IsNullOrWhiteSpace(s))
+            return parts;
+
+        var remaining = s.Trim();
+        for (var i = 0; i < 2; i++)
+        {
+            (string Left, string Right)? found = null;
+            foreach (var sep in seps)
+            {
+                var idx = remaining.IndexOf(sep, StringComparison.Ordinal);
+                if (idx > 0 && idx < remaining.Length - sep.Length - 1)
+                {
+                    var left = remaining.Substring(0, idx).Trim();
+                    var right = remaining.Substring(idx + sep.Length).Trim();
+                    if (!string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right))
+                    {
+                        found = (left, right);
+                        break;
+                    }
+                }
+            }
+
+            if (found is null)
+                break;
+
+            parts.Add(found.Value.Left);
+            remaining = found.Value.Right;
+        }
+
+        if (!string.IsNullOrWhiteSpace(remaining))
+            parts.Add(remaining.Trim());
+
+        // If no separators were found, return single part.
+        if (parts.Count == 0)
+            parts.Add(s.Trim());
+
+        return parts;
+    }
+
+    private static bool LooksLikeUploaderOrChannelTag(string s)
+    {
+        // Heuristic: many uploader/channel tags are a single token with no spaces,
+        // or a short phrase that is clearly non-title (e.g. "Topic").
+        var t = (s ?? "").Trim();
+        if (t.Length < 3)
+            return false;
+
+        var lower = t.ToLowerInvariant();
+        if (lower == "topic" || lower.EndsWith(" topic"))
+            return true;
+
+        // Long all-lowercase single-token tags are often uploader handles, not artists.
+        // Keep this conservative: only treat as handle-like when it's long enough to be unlikely as a real artist casing.
+        try
+        {
+            if (!t.Contains(' ') && t.Length >= 12)
+            {
+                var allLettersOrDigits = true;
+                var anyUpper = false;
+                var anyLower = false;
+                var anyDigit = false;
+                foreach (var ch in t)
+                {
+                    if (!char.IsLetterOrDigit(ch))
+                    {
+                        allLettersOrDigits = false;
+                        break;
+                    }
+                    if (char.IsUpper(ch)) anyUpper = true;
+                    if (char.IsLower(ch)) anyLower = true;
+                    if (char.IsDigit(ch)) anyDigit = true;
+                }
+
+                if (allLettersOrDigits && anyLower && !anyUpper && !anyDigit)
+                    return true;
+            }
+        }
+        catch { /* ignore */ }
+
+        // Two-token uploader handles — treat as uploader-like when both tokens
+        // look like name parts and the string has no punctuation.
+        try
+        {
+            if (t.Contains(' ') && !t.Contains('-') && !t.Contains('|') && !t.Contains(':') && !t.Contains('/') && !t.Contains('&'))
+            {
+                var parts = t.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (parts.Length == 2)
+                {
+                    var p0 = parts[0];
+                    var p1 = parts[1];
+                    if (p0.Length >= 4 && p1.Length >= 4 &&
+                        char.IsUpper(p0[0]) && char.IsUpper(p1[0]) &&
+                        p0.All(ch => char.IsLetterOrDigit(ch)) &&
+                        p1.All(ch => char.IsLetterOrDigit(ch)))
+                        return true;
+                }
+            }
+        }
+        catch { /* ignore */ }
+
+        // Single-token camel/pascal case handles like "SomeUploader123"
+        if (!t.Contains(' '))
+        {
+            var hasLetter = false;
+            var hasUpper = false;
+            var hasLower = false;
+            var hasDigit = false;
+            foreach (var ch in t)
+            {
+                if (char.IsLetter(ch))
+                {
+                    hasLetter = true;
+                    if (char.IsUpper(ch)) hasUpper = true;
+                    if (char.IsLower(ch)) hasLower = true;
+                }
+                if (char.IsDigit(ch))
+                    hasDigit = true;
+            }
+
+            if (hasLetter && (hasDigit || (hasUpper && hasLower)) && t.Length >= 6)
+                return true;
+        }
+
+        return false;
     }
 
     private static (string Left, string Right)? SplitOnFirstSeparator(string s, string[] seps)
@@ -483,11 +900,19 @@ public static class LyricsResolver
 
                 double score = 0;
 
-                // 1. Artist cross-reference
-                var artistScore = ComputeArtistMatchScore(lrclibArtist, ytArtist, ytTrackName);
-                score += artistScore;
+                // 1) Combined match (primary): compare (artist+title) as an unordered token set.
+                // This removes guesswork about which side is "artist" vs "title" for messy metadata.
+                var combinedQuery = BuildCombinedQueryString(query, ytTrackName, ytArtist);
+                var combinedCandidate = BuildCombinedCandidateString(lrclibArtist, lrclibName);
+                var combinedScore = ComputeCombinedMatchScore(combinedQuery, combinedCandidate);
+                score += combinedScore;
 
-                // 2. Duration proximity
+                // 2) Artist hint bonus (secondary): only a small nudge, because LRCLIB fields can be swapped.
+                // Also avoid hard negative penalties here; combinedScore already penalizes mismatches naturally.
+                var artistScore = ComputeArtistMatchScore(lrclibArtist, ytArtist, ytTrackName);
+                score += Math.Clamp(artistScore, -10, 120) * 0.25;
+
+                // 3) Duration proximity
                 if (targetDurationSeconds.HasValue && lrclibDuration.HasValue)
                 {
                     var ytDur = targetDurationSeconds.Value;
@@ -502,41 +927,9 @@ public static class LyricsResolver
                     }
                 }
 
-                // 3. Track name matching
-                var trackScore = 0;
-                if (!string.IsNullOrWhiteSpace(lrclibName))
-                {
-                    var lowerQuery = query.Trim().ToLowerInvariant();
-                    var lowerName = lrclibName.ToLowerInvariant();
-
-                    if (artistScore >= 100 && !string.IsNullOrWhiteSpace(lrclibArtist))
-                    {
-                        var lowerArtist = lrclibArtist.ToLowerInvariant();
-                        lowerQuery = lowerQuery.Replace(lowerArtist, "");
-                        lowerQuery = System.Text.RegularExpressions.Regex.Replace(lowerQuery, @"\s*[-|/;:,]+\s*", " ");
-                        lowerQuery = System.Text.RegularExpressions.Regex.Replace(lowerQuery, @"\s+", " ").Trim();
-                    }
-
-                    if (lowerName == lowerQuery)
-                        trackScore = 60;
-                    else if (lowerName.StartsWith(lowerQuery))
-                        trackScore = 45;
-                    else if (lowerName.Contains(lowerQuery) && lowerQuery.Length >= 3)
-                        trackScore = 30;
-                    else if (lowerQuery.Contains(lowerName) && lowerName.Length >= 5)
-                    {
-                        var coverage = (double)lowerName.Length / lowerQuery.Length;
-                        trackScore = (int)(15 * coverage);
-                    }
-                    else
-                    {
-                        var wordScore = ComputeWordOverlapScore(lowerQuery, lowerName);
-                        trackScore = (int)Math.Min(wordScore, 15);
-                    }
-
-                    score += trackScore;
-                    AppLog.Info($"LRCLIB scoring: track={lrclibName} artistScore={artistScore} trackScore={trackScore} total={score} query=\"{query}\"");
-                }
+                // 4) Diagnostic log: focus on combined scoring now.
+                if (!fallback)
+                    AppLog.Info($"LRCLIB scoring: track={lrclibName ?? "(none)"} artist={lrclibArtist ?? "(none)"} combinedScore={combinedScore:F0} artistHintScore={artistScore:F0} total={score:F0} query=\"{query}\"");
 
                 if (score >= MinimumMatchScore)
                     candidates.Add((score, lrc, lrclibDuration, lrclibArtist, lrclibName));
@@ -550,6 +943,85 @@ public static class LyricsResolver
         }
 
         return candidates;
+    }
+
+    private static string BuildCombinedQueryString(string query, string ytTrackName, string? ytArtist)
+    {
+        try
+        {
+            var parts = new List<string>(4);
+            if (!string.IsNullOrWhiteSpace(query)) parts.Add(query);
+            if (!string.IsNullOrWhiteSpace(ytTrackName)) parts.Add(ytTrackName);
+            if (!string.IsNullOrWhiteSpace(ytArtist)) parts.Add(ytArtist!);
+            return string.Join(' ', parts);
+        }
+        catch
+        {
+            return $"{query} {ytTrackName} {ytArtist}".Trim();
+        }
+    }
+
+    private static string BuildCombinedCandidateString(string? lrclibArtist, string? lrclibName)
+        => $"{lrclibArtist ?? ""} {lrclibName ?? ""}".Trim();
+
+    private static double ComputeCombinedMatchScore(string combinedQuery, string combinedCandidate)
+    {
+        // Returns roughly 0..110. High score when most meaningful query tokens appear in candidate.
+        try
+        {
+            var qTokens = TokenizeMeaningfulForMatch(combinedQuery);
+            var cTokens = TokenizeMeaningfulForMatch(combinedCandidate);
+            if (qTokens.Count == 0 || cTokens.Count == 0)
+                return 0;
+
+            var overlap = qTokens.Intersect(cTokens, StringComparer.OrdinalIgnoreCase).Count();
+            if (overlap <= 0)
+                return 0;
+
+            var qCount = qTokens.Count;
+            var cCount = cTokens.Count;
+            var denom = Math.Max(qCount, cCount);
+            var ratio = overlap / (double)denom; // 0..1
+
+            var score = ratio * 80.0;
+            var queryCoverage = overlap / (double)qCount;
+            if (queryCoverage >= 0.80) score += 25;
+            else if (queryCoverage >= 0.60) score += 15;
+            else if (queryCoverage >= 0.40) score += 8;
+
+            // Exact-ish collapsed-key containment bonus (handles spacing/case differences).
+            var kQ = BuildComparableNameKey(combinedQuery);
+            var kC = BuildComparableNameKey(combinedCandidate);
+            if (!string.IsNullOrWhiteSpace(kQ) && !string.IsNullOrWhiteSpace(kC) && (kC.Contains(kQ) || kQ.Contains(kC)))
+                score += 10;
+
+            return Math.Clamp(score, 0, 110);
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static List<string> TokenizeMeaningfulForMatch(string s)
+    {
+        var tokens = new List<string>(16);
+        try
+        {
+            foreach (var t in TokenizeBasic(CleanSearchQuery(s)))
+            {
+                var w = (t ?? "").Trim();
+                if (string.IsNullOrWhiteSpace(w))
+                    continue;
+                if (IsJunkToken(w))
+                    continue;
+                if (w.Length < 2)
+                    continue;
+                tokens.Add(w);
+            }
+        }
+        catch { /* ignore */ }
+        return tokens.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>Searches LRCLIB for plain (non-synced) lyrics fallback.</summary>
@@ -695,6 +1167,13 @@ public static class LyricsResolver
         if (string.IsNullOrWhiteSpace(lowerArtist))
             return 0;
 
+        // Normalize common YouTube channel suffixes for matching ("X - Topic" should still match "X").
+        string? lowerChannelNorm = null;
+        if (!string.IsNullOrWhiteSpace(ytChannel))
+        {
+            lowerChannelNorm = NormalizeYoutubeArtistHint(ytChannel).ToLowerInvariant().Trim();
+        }
+
         // Extract significant words from LRCLIB artist (3+ chars, excluding common stop words)
         var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -714,18 +1193,30 @@ public static class LyricsResolver
             return 0;
 
         // Check 1: Exact match with YouTube channel
-        if (!string.IsNullOrWhiteSpace(ytChannel))
+        if (!string.IsNullOrWhiteSpace(lowerChannelNorm))
         {
-            var lowerChannel = ytChannel.ToLowerInvariant().Trim();
-            if (lowerChannel == lowerArtist)
+            if (lowerChannelNorm == lowerArtist)
                 return 120;
 
             // Check if LRCLIB artist appears in channel or channel contains LRCLIB artist
-            if (lowerChannel.Contains(lowerArtist) || lowerArtist.Contains(lowerChannel))
+            if (lowerChannelNorm.Contains(lowerArtist) || lowerArtist.Contains(lowerChannelNorm))
                 return 100;
         }
 
-        // Check 2: LRCLIB artist appears in the raw YouTube title
+        // If we have a channel name but it *doesn't* overlap the LRCLIB artist at all, treat title overlap as very weak.
+        // This prevents wrong picks like "Frida" → "FRIDA GOLD ..." when the channel points to a different artist.
+        var channelHasAnyArtistWord = false;
+        if (!string.IsNullOrWhiteSpace(lowerChannelNorm))
+        {
+            var channelWords = lowerChannelNorm
+                .Split(new[] { ' ', '-', '&', '/', '+', '.', ',', ';', ':', '(', ')', '[', ']', '|', '!' }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(w => w.Length >= 3 && !stopWords.Contains(w))
+                .Distinct()
+                .ToHashSet();
+            channelHasAnyArtistWord = artistWords.Overlaps(channelWords);
+        }
+
+        // Check 2: LRCLIB artist appears in the raw YouTube title (very weak unless multiple words match)
         if (!string.IsNullOrWhiteSpace(ytRawTitle))
         {
             var lowerTitle = ytRawTitle.ToLowerInvariant();
@@ -746,7 +1237,13 @@ public static class LyricsResolver
             if (matchingWords > 0)
             {
                 var coverage = matchingWords / (double)artistWords.Count;
-                return 30 + (int)(30 * coverage); // 30–60 range
+                // Single-word overlap is often ambiguous (artist word appears as the *song* title).
+                // Only give a meaningful score when multiple words match or coverage is high.
+                if (matchingWords >= 2 || (artistWords.Count >= 2 && coverage >= 0.75))
+                    return 20 + (int)(25 * coverage); // 20–45 range
+
+                // If the channel also supports the artist, keep a small bump; otherwise treat as noise.
+                return channelHasAnyArtistWord ? 10 : 0;
             }
         }
 
@@ -770,7 +1267,10 @@ public static class LyricsResolver
             if (sharedWords.Any())
             {
                 var coverage = sharedWords.Count() / (double)artistWords.Count;
-                return 10 + (int)(20 * coverage); // 10–30 range
+                // Same ambiguity rule: if we have channel info that doesn't overlap, don't reward title-based overlap.
+                if (!string.IsNullOrWhiteSpace(lowerChannelNorm) && !channelHasAnyArtistWord)
+                    return 0;
+                return 8 + (int)(18 * coverage); // 8–26 range
             }
         }
 
