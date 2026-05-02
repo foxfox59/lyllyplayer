@@ -7,7 +7,8 @@
 **[Using the Theme Designer in 1.2.0 (YouTube link)](https://www.youtube.com/watch?v=Z1lniBzXm9Q)**  
 **[Compound playlists - song queue - M3U export in 1.4.1 (YouTube link)](https://www.youtube.com/watch?v=K855yiYLzeQ)**
 
-[CHANGELOG.md](CHANGELOG.md)
+[CHANGELOG.md](CHANGELOG.md)  
+[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)  
 
 ---
 
@@ -41,10 +42,6 @@ I am a software developer, so I have some qualifications to supervise and sugges
 All I touch manually is the documentation (recently I had to start doing some fixes manually). This is partially an experiment in how far can I push things before the codebase gets too complicated for the AI to track. Also a test of patience - many things would have been faster fixed by hand but I deliberately chose not to.  
 
 **Exit now or accept that.**
-
-## Some screenshots of the app in action (outdated)
-
-**[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)**
 
 ## Quick preface before the machine overlords take over
 
