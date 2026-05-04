@@ -1,5 +1,7 @@
 # LyllyPlayer
 
+A desktop audio player for YouTube, streams and local files
+  
 © MuiluFox 2026  
 **LyllyPlayer should always be completely free to download and use. If you are getting asked to pay for it (other than [donations](https://www.paypal.me/MuiluFox) here), someone is ripping you off.**  
   
