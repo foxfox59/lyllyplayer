@@ -422,6 +422,19 @@ public static class LyricsResolver
             var left = splitParts[0];
             var right = splitParts[1];
 
+            // If the title already contains a strong structural split in the left chunk (e.g. "Artist - Track")
+            // and the right chunk looks like a label/uploader tag, drop the right chunk entirely.
+            // This prevents "Artist - Track | Label Records" from polluting LRCLIB queries.
+            try
+            {
+                var leftHasDashSplit = left.Contains(" - ", StringComparison.Ordinal) ||
+                                       left.Contains(" – ", StringComparison.Ordinal) ||
+                                       left.Contains(" — ", StringComparison.Ordinal);
+                if (leftHasDashSplit && LooksLikeUploaderOrChannelTag(right))
+                    right = "";
+            }
+            catch { /* ignore */ }
+
             // If we have 3 parts and the last part looks like an uploader/channel tag, ignore it.
             if (splitParts.Count >= 3)
             {
@@ -430,7 +443,8 @@ public static class LyricsResolver
             }
 
             tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(left)));
-            tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(right)));
+            if (!string.IsNullOrWhiteSpace(right))
+                tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(right)));
         }
         else
         {
@@ -448,12 +462,29 @@ public static class LyricsResolver
         {
             if (string.IsNullOrWhiteSpace(s))
                 return s ?? "";
-            // Only strip when "feat" occurs as a word.
-            var cut = System.Text.RegularExpressions.Regex.Replace(
-                s,
-                @"\s+\bfeat\b\s+.*$",
-                "",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            // Only strip when "feat" occurs as a word AND it is a true trailing clause.
+            // If a separator like " - " occurs after "feat", it is likely a collab in the left chunk
+            // (e.g. "A feat B - Song"), and stripping would remove the real track tokens.
+            var lower = s.ToLowerInvariant();
+            var featIdx = lower.IndexOf(" feat ", StringComparison.Ordinal);
+            if (featIdx < 0)
+                return s;
+
+            var tail = s.Substring(featIdx);
+            var hasSeparatorAfterFeat =
+                tail.Contains(" - ", StringComparison.Ordinal) ||
+                tail.Contains(" – ", StringComparison.Ordinal) ||
+                tail.Contains(" — ", StringComparison.Ordinal) ||
+                tail.Contains(" : ", StringComparison.Ordinal) ||
+                tail.Contains(" | ", StringComparison.Ordinal);
+
+            var cut = hasSeparatorAfterFeat
+                ? s
+                : System.Text.RegularExpressions.Regex.Replace(
+                    s,
+                    @"\s+\bfeat\b\s+.*$",
+                    "",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             cut = System.Text.RegularExpressions.Regex.Replace(cut, @"\s+", " ").Trim();
             return string.IsNullOrWhiteSpace(cut) ? s : cut;
         }
@@ -822,8 +853,9 @@ public static class LyricsResolver
             }
             catch { /* ignore */ }
 
-            // Keep letters/numbers, split on punctuation.
-            var cleaned = System.Text.RegularExpressions.Regex.Replace(s, @"[^\p{L}\p{N}]+", " ");
+            // Keep letters/numbers and a small set of in-name symbols, split on everything else.
+            // '$' is meaningful for some artist names and should survive into LRCLIB queries.
+            var cleaned = System.Text.RegularExpressions.Regex.Replace(s, @"[^\p{L}\p{N}\$]+", " ");
             cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"\s+", " ").Trim();
             var baseTokens = string.IsNullOrWhiteSpace(cleaned)
                 ? Array.Empty<string>()
