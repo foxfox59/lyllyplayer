@@ -2,11 +2,11 @@
 
 © MuiluFox 2026  
 **LyllyPlayer should always be completely free to download and use. If you are getting asked to pay for it (other than [donations](https://www.paypal.me/MuiluFox) here), someone is ripping you off.**  
-
-**[1.1.0 in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**  
+  
+**[Compound playlists - song queue - M3U export in 1.4.1 (YouTube link)](https://www.youtube.com/watch?v=K855yiYLzeQ)**  
 **[Using the Theme Designer in 1.2.0 (YouTube link)](https://www.youtube.com/watch?v=Z1lniBzXm9Q)**  
-**[Compound playlists - song queue - M3U export in 1.4.1 (YouTube link)](https://www.youtube.com/watch?v=K855yiYLzeQ)**
-
+**[1.1.0 in action (YouTube link)](https://www.youtube.com/watch?v=qnoZVa0sWO4)**  
+  
 [CHANGELOG.md](CHANGELOG.md)  
 [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)  
 
