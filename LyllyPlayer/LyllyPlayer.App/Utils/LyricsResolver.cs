@@ -1,5 +1,6 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 
 namespace LyllyPlayer.Utils;
@@ -10,11 +11,18 @@ namespace LyllyPlayer.Utils;
 /// </summary>
 public static class LyricsResolver
 {
+    private const int LrclibTimeoutSeconds = 25;
     private const int FetchTimeoutMs = 15_000;
 
     /// <summary>Minimum score a candidate must reach to be considered a valid match.
     /// Prevents wrong songs from being selected when title matches but artist doesn't.</summary>
     private const int MinimumMatchScore = 30;
+
+    /// <summary>
+    /// Hard cutoff for LRCLIB duration mismatch. If the absolute difference between the expected duration and the
+    /// LRCLIB candidate duration exceeds this, the candidate is rejected (prevents clear misses).
+    /// </summary>
+    private const double LrclibMaxAbsoluteDurationMismatchSeconds = 10;
 
     /// <summary>
     /// Fetches lyrics for a YouTube video by its video ID, using the given yt-dlp path.
@@ -110,53 +118,38 @@ public static class LyricsResolver
     }
 
     /// <summary>
-    /// Fetches lyrics from LRCLIB using a combined token-bag query.
+    /// Fetches synced LRC lyrics from LRCLIB by track title, with optional artist name for cross-referencing.
     ///
-    /// IMPORTANT:
-    /// We intentionally do NOT treat "artist" and "title" as distinct concepts for matching.
-    /// We score candidates purely by token overlap between:
-    /// - the query tokens (derived from trackName) and
-    /// - the candidate tokens (LRCLIB artistName + trackName)
+    /// The YouTube title is cleaned (common suffixes, bracketed extras removed) before searching LRCLIB.
+    /// Results are scored with artist cross-reference as the primary discriminator:
+    ///   1. Artist cross-reference (LRCLIB artistName vs YouTube channel/title) — primary, -30 to +120
+    ///   2. Duration proximity — secondary, 0 to +15
+    ///   3. Track name substring match — tertiary, 0 to +60
     ///
-<<<<<<< Updated upstream
     /// If no synced lyrics are found but the song was found, falls back to plain (non-synced) lyrics.
-    /// Returns a tuple of (LrcText, LrclibDurationSeconds, Artist, Title, IsPlainLyrics).
-=======
-    /// Duration proximity is a small secondary nudge.
-    ///
-    /// Returns a tuple of (LrcText, LrclibDurationSeconds, ArtistName, TrackName, IsPlainLyrics, IsDefinitiveMiss).
+    /// Returns a tuple of (LrcText, LrclibDurationSeconds, Artist, Title, IsPlainLyrics, IsDefinitiveMiss).
+    /// IsDefinitiveMiss is true only when LRCLIB was successfully queried but no acceptable lyrics were found.
     /// Network/timeout/parse failures are surfaced as exceptions and must NOT be treated as misses by callers.
->>>>>>> Stashed changes
     /// </summary>
-    /// <param name="trackName">A best-effort combined query string (often "title + artist").</param>
-    /// <param name="artist">Unused for matching; kept for API compatibility.</param>
+    /// <param name="trackName">Raw YouTube video title (will be cleaned before searching).</param>
+    /// <param name="artist">YouTube channel name, used for artist cross-referencing (not for searching).</param>
     /// <param name="targetDurationSeconds">Expected duration of the YouTube video.</param>
     /// <param name="ct">Cancellation token.</param>
-    public static async Task<(string? LrcText, double? LrclibDurationSeconds, string? Artist, string? Title, bool IsPlainLyrics)> FetchLyricsFromLrclibAsync(
+    public static async Task<(string? LrcText, double? LrclibDurationSeconds, string? Artist, string? Title, bool IsPlainLyrics, bool IsDefinitiveMiss)> FetchLyricsFromLrclibAsync(
         string trackName,
         string? artist,
         double? targetDurationSeconds,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(trackName))
-            return (null, null, null, null, false);
+            return (null, null, null, null, false, false);
 
-<<<<<<< Updated upstream
-        var searchQuery = CleanSearchQuery(trackName + " " + artist);
-=======
-        // Token-bag search: build query from trackName only.
-        // (Callers should pass a combined string when they have multiple fields.)
-        var searchQuery = BuildLrclibSearchQuery(trackName, artist: null);
->>>>>>> Stashed changes
+        var searchQuery = BuildLrclibSearchQuery(trackName, artist);
         if (string.IsNullOrWhiteSpace(searchQuery))
-            return (null, null, null, null, false);
+            return (null, null, null, null, false, false);
 
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(LrclibTimeoutSeconds) };
 
-<<<<<<< Updated upstream
-        // Try full query first (trackName + artist)
-        var candidates = await SearchAndScoreAsync(client, searchQuery, trackName, artist, targetDurationSeconds, ct);
-=======
         // Single-query policy: do not issue a second LRCLIB request (reduces load / avoids double misses).
         // However, do one retry on timeout/transient IO to avoid poisoning UX under temporary LRCLIB slowness.
         //
@@ -165,39 +158,37 @@ public static class LyricsResolver
         List<(double score, string lrc, double? duration, string? artistName, string? trackName)> candidates;
         try
         {
-            candidates = await SearchAndScoreAsync(client, searchQuery, targetDurationSeconds, ct);
+            candidates = await SearchAndScoreAsync(client, searchQuery, trackName, artist, targetDurationSeconds, ct);
         }
         catch (Exception ex) when (IsTransientLrclibFailure(ex, ct))
         {
             AppLog.Warn($"LRCLIB request transient failure (will retry once): {ex.GetType().Name}: {ex.Message}");
-            candidates = await SearchAndScoreAsync(client, searchQuery, targetDurationSeconds, ct);
+            candidates = await SearchAndScoreAsync(client, searchQuery, trackName, artist, targetDurationSeconds, ct);
         }
->>>>>>> Stashed changes
 
-        // If no synced candidates, try trackName-only as fallback
-        string? fallbackQuery = null;
+        // Fallback query: title-only (cleaned), when the richer query finds nothing.
+        // This is intentionally conservative: one extra request at most, and only when queries differ.
         if (candidates.Count == 0)
         {
-            fallbackQuery = CleanSearchQuery(trackName);
-            if (!string.IsNullOrWhiteSpace(fallbackQuery) && fallbackQuery != searchQuery)
+            string? titleOnlyQuery = null;
+            try
             {
-                AppLog.Info($"LRCLIB fallback: querying trackName-only: {fallbackQuery}");
-                var fallbackCandidates = await SearchAndScoreAsync(client, fallbackQuery, trackName, artist, targetDurationSeconds, ct, fallback: true);
-                // Deduplicate by LRCLIB track name (simple dedup: keep higher-scored candidate)
-                var existingNames = new HashSet<string>(candidates.Select(c => c.trackName ?? ""), StringComparer.OrdinalIgnoreCase);
-                foreach (var fb in fallbackCandidates)
+                // Use the same tokenization path but with no artist hint to avoid including uploader/channel garbage.
+                titleOnlyQuery = BuildLrclibSearchQuery(trackName, artist: null);
+            }
+            catch { /* ignore */ }
+
+            if (!string.IsNullOrWhiteSpace(titleOnlyQuery) &&
+                !string.Equals(titleOnlyQuery.Trim(), searchQuery.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                try
                 {
-<<<<<<< Updated upstream
-                    if (!existingNames.Contains(fb.trackName ?? ""))
-                        candidates.Add(fb);
-=======
-                    candidates = await SearchAndScoreAsync(client, titleOnlyQuery, targetDurationSeconds, ct, fallback: true);
+                    candidates = await SearchAndScoreAsync(client, titleOnlyQuery, trackName, ytArtist: null, targetDurationSeconds, ct, fallback: true);
                 }
                 catch (Exception ex) when (IsTransientLrclibFailure(ex, ct))
                 {
                     AppLog.Warn($"LRCLIB title-only request transient failure (will retry once): {ex.GetType().Name}: {ex.Message}");
-                    candidates = await SearchAndScoreAsync(client, titleOnlyQuery, targetDurationSeconds, ct, fallback: true);
->>>>>>> Stashed changes
+                    candidates = await SearchAndScoreAsync(client, titleOnlyQuery, trackName, ytArtist: null, targetDurationSeconds, ct, fallback: true);
                 }
             }
         }
@@ -207,23 +198,19 @@ public static class LyricsResolver
             // Pick the highest-scored synced candidate.
             candidates.Sort((a, b) => b.score.CompareTo(a.score));
             var best = candidates[0];
-            return (best.lrc, best.duration, best.artistName, best.trackName, false);
+            return (best.lrc, best.duration, best.artistName, best.trackName, false, false);
         }
 
-<<<<<<< Updated upstream
-        // No synced lyrics found — check plain lyrics. Try full query first, then fallback.
-        var plainFallback = await SearchPlainLyricsAsync(client, searchQuery, trackName, artist, ct);
-=======
         // No synced lyrics found — check plain lyrics (same single-query policy).
         (string? LrcText, double? Duration, string? Artist, string? Title, bool IsPlainLyrics)? plainFallback;
         try
         {
-            plainFallback = await SearchPlainLyricsAsync(client, searchQuery, ct);
+            plainFallback = await SearchPlainLyricsAsync(client, searchQuery, trackName, artist, ct);
         }
         catch (Exception ex) when (IsTransientLrclibFailure(ex, ct))
         {
             AppLog.Warn($"LRCLIB plain-lyrics request transient failure (will retry once): {ex.GetType().Name}: {ex.Message}");
-            plainFallback = await SearchPlainLyricsAsync(client, searchQuery, ct);
+            plainFallback = await SearchPlainLyricsAsync(client, searchQuery, trackName, artist, ct);
         }
 
         // Plain-lyrics title-only fallback when the richer query produced nothing.
@@ -236,210 +223,56 @@ public static class LyricsResolver
             {
                 try
                 {
-                    plainFallback = await SearchPlainLyricsAsync(client, titleOnlyQuery, ct);
+                    plainFallback = await SearchPlainLyricsAsync(client, titleOnlyQuery, trackName, ytArtist: null, ct);
                 }
                 catch (Exception ex) when (IsTransientLrclibFailure(ex, ct))
                 {
                     AppLog.Warn($"LRCLIB title-only plain-lyrics request transient failure (will retry once): {ex.GetType().Name}: {ex.Message}");
-                    plainFallback = await SearchPlainLyricsAsync(client, titleOnlyQuery, ct);
+                    plainFallback = await SearchPlainLyricsAsync(client, titleOnlyQuery, trackName, ytArtist: null, ct);
                 }
             }
         }
->>>>>>> Stashed changes
         if (plainFallback != null)
-            return plainFallback.Value;
+            return (plainFallback.Value.LrcText, plainFallback.Value.Duration, plainFallback.Value.Artist, plainFallback.Value.Title, true, false);
 
-        // Fallback to trackName-only for plain lyrics
-        if (!string.IsNullOrWhiteSpace(fallbackQuery))
+        // Successful query but no lyrics found.
+        return (null, null, null, null, false, true);
+    }
+
+    private static bool IsTransientLrclibFailure(Exception ex, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested)
+            return false;
+
+        // HttpClient timeouts commonly surface as TaskCanceledException / TimeoutException chains.
+        if (ex is TimeoutException)
+            return true;
+        if (ex is TaskCanceledException)
+            return true;
+
+        // Also treat IO-level aborts as transient.
+        if (ex is System.IO.IOException)
+            return true;
+        if (ex.InnerException is not null)
+            return IsTransientLrclibFailure(ex.InnerException, ct);
+        return false;
+    }
+
+    private static string BuildLrclibSearchQuery(string trackName, string? artist)
+    {
+        try
         {
-<<<<<<< Updated upstream
-            var plainFallback2 = await SearchPlainLyricsAsync(client, fallbackQuery, trackName, artist, ct);
-            if (plainFallback2 != null)
-                return plainFallback2.Value;
-        }
-
-        return (null, null, null, null, false);
-=======
-            // Pre-drop common "Artist - Track - Label" tails before tokenization, so label words
-            // cannot leak into the query even if generic junk-token filters later remove only the
-            // suffix word ("Records") and leave the label name behind.
-            try
-            {
-                trackName ??= "";
-                var s0 = NormalizeUnicodeStylizedLetters(trackName).Trim();
-                s0 = StripBracketedJunk(s0);
-                s0 = NormalizeFeatureMarkers(s0);
-                s0 = StripFeaturedArtistsTail(s0);
-                s0 = NormalizeLooseTitleSeparators(s0);
-
-                // Also handle cases where label tails are appended without clear separators (e.g. combinedName paths).
-                // IMPORTANT: only do this when the string cannot be split into parts; otherwise we might accidentally
-                // trim away the real track title and leave only the leading artist tokens.
-                try
-                {
-                    var hasKnownSeparator =
-                        s0.Contains(" - ", StringComparison.Ordinal) ||
-                        s0.Contains(" – ", StringComparison.Ordinal) ||
-                        s0.Contains(" — ", StringComparison.Ordinal) ||
-                        s0.Contains(" : ", StringComparison.Ordinal) ||
-                        s0.Contains(" | ", StringComparison.Ordinal);
-
-                    if (!hasKnownSeparator)
-                    {
-                        var t0 = TokenizeBasic(s0).ToList();
-                        static bool IsLabelKeyword0(string w)
-                        {
-                            var x = (w ?? "").Trim();
-                            if (x.Length == 0) return false;
-                            return x.Equals("records", StringComparison.OrdinalIgnoreCase)
-                                   || x.Equals("record", StringComparison.OrdinalIgnoreCase)
-                                   || x.Equals("recordings", StringComparison.OrdinalIgnoreCase)
-                                   || x.Equals("recording", StringComparison.OrdinalIgnoreCase)
-                                   || x.Equals("label", StringComparison.OrdinalIgnoreCase);
-                        }
-
-                        var k = -1;
-                        for (var i = t0.Count - 1; i >= 0; i--)
-                        {
-                            if (IsLabelKeyword0(t0[i]))
-                            {
-                                k = i;
-                                break;
-                            }
-                        }
-
-                        if (k >= 0 && k >= Math.Max(0, t0.Count - 6))
-                        {
-                            // Remove up to 4 tokens before the keyword, but keep at least 2 tokens overall.
-                            var start = Math.Max(0, k - 4);
-                            var keepMin = 2;
-                            if (start < keepMin)
-                                start = keepMin;
-                            if (start < t0.Count)
-                            {
-                                t0.RemoveRange(start, t0.Count - start);
-                                if (t0.Count >= keepMin)
-                                    s0 = string.Join(' ', t0);
-                            }
-                        }
-                    }
-                }
-                catch { /* ignore */ }
-
-                // Diagnostics: do we still have visible separators to split on?
-                try
-                {
-                    var dashCount = 0;
-                    var enDashCount = 0;
-                    var emDashCount = 0;
-                    foreach (var ch in s0)
-                    {
-                        if (ch == '-') dashCount++;
-                        else if (ch == '–') enDashCount++;
-                        else if (ch == '—') emDashCount++;
-                    }
-                    AppLog.Info($"LRCLIB query build: sepStats len={s0.Length} hasSpacedDash={s0.Contains(" - ", StringComparison.Ordinal)} dashes={dashCount} enDashes={enDashCount} emDashes={emDashCount}");
-                }
-                catch { /* ignore */ }
-
-                var parts0 = SplitOnSeparatorsUpTo3(s0, new[] { " - ", " – ", " — ", " : ", " | " });
-                // Strict rule for LRCLIB queries:
-                // - If the title is already a clean two-part "A - B", completely ignore any 3rd part.
-                //   (Third parts are overwhelmingly uploader/label tags and pollute the query.)
-                var forcedTwoPart = false;
-                if (parts0.Count >= 2)
-                {
-                    trackName = $"{parts0[0]} - {parts0[1]}";
-                    forcedTwoPart = true;
-                }
-                else
-                {
-                    // If we couldn't split into parts, still carry forward the normalized/trimmed string
-                    // (this includes parenthetical cleanup and conservative tail trimming above).
-                    trackName = s0;
-                }
-
-                // Diagnostic stamp: helps verify which build is running and what split logic did,
-                // without logging the full raw title.
-                try
-                {
-                    var hadThird = parts0.Count >= 3;
-                    var thirdLen = hadThird ? (parts0[2]?.Length ?? 0) : 0;
-                    AppLog.Info($"LRCLIB query build: forcedTwoPart={forcedTwoPart} parts={parts0.Count} hadThird={hadThird} thirdLen={thirdLen}");
-                }
-                catch { /* ignore */ }
-            }
-            catch { /* ignore */ }
-
             var tokens = new List<string>(32);
 
             // 1) Extract tokens from the title itself (handles "Artist - Title", "A x B - Song", etc.)
-            var normalizedArtistHint = string.IsNullOrWhiteSpace(artist) ? null : NormalizeYoutubeArtistHint(artist);
-            var titleTokens = ExtractTokensFromTrackTitle(trackName, normalizedArtistHint).ToList();
+            // Token-bag policy: treat the raw input string as the only source of truth.
+            // Callers should pass a combined string when they have multiple fields (e.g. "Title - Channel").
+            // We do not use the separate 'artist' parameter as a hint anymore.
+            var titleTokens = ExtractTokensFromTrackTitle(trackName, artistHint: null).ToList();
             tokens.AddRange(titleTokens);
             var titleSignalTokenCount = CountDistinctMeaningfulTokens(titleTokens);
 
-            // 2) Optionally include artist/channel tokens (weak signal for YouTube; avoid Topic/VEVO/etc).
-            if (LooksLikeTrustworthyArtistHint(artist))
-            {
-                // If the title is "A - B - C" and C matches the channel/uploader name, don't add those tokens:
-                // they are more likely uploader tags than the actual artist, and they pollute search.
-                if (!TitleAppearsToEndWithUploaderTag(trackName, normalizedArtistHint))
-                {
-                    // Local files and some YouTube sources can have wrong "artist" tags that are actually uploader handles
-                    // (e.g. SaturnSpectre). Only use such hints if they also appear in the title.
-                    if (normalizedArtistHint is not null &&
-                        LooksLikeUploaderOrChannelTag(normalizedArtistHint) &&
-                        !TitleContainsComparableKey(trackName, normalizedArtistHint) &&
-                        // If the title already has enough good tokens, don't pollute search with a likely-uploader handle.
-                        // But if the title is very short, keep the hint even if it looks handle-like
-                        // because tags often omit spaces and this improves hit rate.
-                        titleSignalTokenCount >= 3)
-                    {
-                        // skip
-                    }
-                    else
-                    {
-                        tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(NormalizeYoutubeArtistHint(artist!))));
-                    }
-                }
-            }
-
-            // 2.5) Drop label/publisher tails even when the keyword itself is later treated as junk.
-            // Example tokens: ["Artist","Track","LabelName","Records"] — remove the whole tail, not just "Records".
-            try
-            {
-                static bool IsLabelKeyword(string t)
-                {
-                    var w = (t ?? "").Trim();
-                    if (w.Length == 0) return false;
-                    return w.Equals("records", StringComparison.OrdinalIgnoreCase)
-                           || w.Equals("record", StringComparison.OrdinalIgnoreCase)
-                           || w.Equals("recordings", StringComparison.OrdinalIgnoreCase)
-                           || w.Equals("recording", StringComparison.OrdinalIgnoreCase)
-                           || w.Equals("label", StringComparison.OrdinalIgnoreCase);
-                }
-
-                var idx = -1;
-                for (var i = tokens.Count - 1; i >= 0; i--)
-                {
-                    if (IsLabelKeyword(tokens[i]))
-                    {
-                        idx = i;
-                        break;
-                    }
-                }
-
-                // Treat as a tail only when the keyword appears near the end (last ~6 tokens).
-                if (idx >= 0 && idx >= Math.Max(0, tokens.Count - 6))
-                {
-                    var start = Math.Max(0, idx - 4); // remove up to 4 tokens before keyword (label name)
-                    tokens.RemoveRange(start, tokens.Count - start);
-                }
-            }
-            catch { /* ignore */ }
-
-            // 3) Remove junk tokens and dedupe.
+            // 2) Remove junk tokens and dedupe.
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var filtered = new List<string>(tokens.Count);
             foreach (var t in tokens)
@@ -453,45 +286,7 @@ public static class LyricsResolver
                     filtered.Add(w);
             }
 
-            // Safety: never collapse to a 1-token query if we can derive a clean 2-part title.
-            // This prevents over-pruning from producing queries like "Word" when we had "Word Word2 - Word3".
-            if (filtered.Count < 2)
-            {
-                try
-                {
-                    var s1 = NormalizeUnicodeStylizedLetters(trackName ?? "").Trim();
-                    s1 = StripBracketedJunk(s1);
-                    s1 = NormalizeFeatureMarkers(s1);
-                    s1 = StripFeaturedArtistsTail(s1);
-                    s1 = NormalizeLooseTitleSeparators(s1);
-                    var parts1 = SplitOnSeparatorsUpTo3(s1, new[] { " - ", " – ", " — ", " : ", " | " });
-                    if (parts1.Count >= 2)
-                    {
-                        var rescue = new List<string>(16);
-                        rescue.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(parts1[0])));
-                        rescue.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(parts1[1])));
-                        var seen2 = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        var filtered2 = new List<string>(rescue.Count);
-                        foreach (var rr in rescue)
-                        {
-                            var w2 = (rr ?? "").Trim();
-                            if (string.IsNullOrWhiteSpace(w2))
-                                continue;
-                            if (IsJunkToken(w2))
-                                continue;
-                            if (seen2.Add(w2))
-                                filtered2.Add(w2);
-                        }
-                        if (filtered2.Count >= 2)
-                            filtered = filtered2;
-                    }
-                }
-                catch { /* ignore */ }
-            }
-
-            var built = CleanSearchQuery(string.Join(' ', filtered));
-            try { AppLog.Info($"LRCLIB query build: finalTokenCount={filtered.Count} queryLen={built.Length}"); } catch { /* ignore */ }
-            return built;
+            return CleanSearchQuery(string.Join(' ', filtered));
         }
         catch
         {
@@ -631,30 +426,7 @@ public static class LyricsResolver
             if (splitParts.Count >= 3)
             {
                 var third = splitParts[2];
-                // Common case: "Artist - Track - Label/Publisher". Drop it aggressively.
-                // Even if the keyword is later token-filtered (e.g. dropping "records"), keeping the remaining label
-                // words pollutes the query.
-                static bool LooksLikeLabelTail(string s)
-                {
-                    try
-                    {
-                        var l = (s ?? "").Trim().ToLowerInvariant();
-                        return l.Contains(" records") || l.Contains(" record") || l.Contains(" recordings") || l.Contains(" recording") ||
-                               l.Contains(" label") || l.Contains(" record label");
-                    }
-                    catch { return false; }
-                }
-
-                if (!string.IsNullOrWhiteSpace(third) &&
-                    (LooksLikeLabelTail(third) || LooksLikeUploaderOrChannelTag(third) || ThirdPartMatchesArtistHint(third, artistHint)))
-                {
-                    // keep only first two parts
-                }
-                else
-                {
-                    // keep the third as well (some songs legitimately contain multiple separators)
-                    right = $"{right} {third}";
-                }
+                // Strict rule: if we already have a clean two-part "A - B", ignore any 3rd part.
             }
 
             tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(left)));
@@ -851,17 +623,6 @@ public static class LyricsResolver
         if (lower == "topic" || lower.EndsWith(" topic"))
             return true;
 
-        // Label / publisher tags are frequently appended as the 3rd chunk: "Artist - Track - Label".
-        // These are almost never useful for LRCLIB lookup and actively cause wrong matches.
-        try
-        {
-            if (lower.EndsWith(" records") || lower.EndsWith(" record") || lower.EndsWith(" recordings") || lower.EndsWith(" recording"))
-                return true;
-            if (lower.EndsWith(" record label") || lower.EndsWith(" label"))
-                return true;
-        }
-        catch { /* ignore */ }
-
         // Long all-lowercase single-token tags are often uploader handles, not artists.
         // Keep this conservative: only treat as handle-like when it's long enough to be unlikely as a real artist casing.
         try
@@ -964,7 +725,7 @@ public static class LyricsResolver
             // Remove [...] blocks (resolutions, etc).
             s = System.Text.RegularExpressions.Regex.Replace(s, @"\s*\[[^\]]*\]\s*", " ");
             // Remove most (...) blocks, but keep those that contain feat/ft (we normalize later).
-            // Also keep disambiguation qualifiers that are often crucial for LRCLIB matching (e.g. "Studio Outtake").
+            // Also keep disambiguation qualifiers that are often crucial for LRCLIB matching (e.g. studio outtake).
             s = System.Text.RegularExpressions.Regex.Replace(
                 s,
                 @"\s*\((?!\s*(?:feat|ft|featuring|studio|outtake|demo|live|acoustic|session|alternate|alt|take|out\-?take)\b)[^)]*\)\s*",
@@ -1017,7 +778,6 @@ public static class LyricsResolver
         try
         {
             // Normalize hyphenated letter segments like "Word-X" into "Word X".
-            // We keep a small allowlist of single-letter tokens (see IsJunkToken) for these cases.
             try
             {
                 s = System.Text.RegularExpressions.Regex.Replace(
@@ -1099,7 +859,6 @@ public static class LyricsResolver
         }
 
         // Common uploader/channel tags that pollute LRCLIB queries.
-        // Treat as junk even when glued to an artist token (e.g. "AlexCVEVO", "SomeArtistVEVO").
         try
         {
             if (t.EndsWith("vevo", StringComparison.OrdinalIgnoreCase) && t.Length >= 6)
@@ -1120,13 +879,14 @@ public static class LyricsResolver
                "official" or "video" or "music" or "mv" or "lyrics" or "lyric" or "audio" or "visualizer" or "hd" or "hq" or "uhd"
                or "4k" or "8k" or "1080p" or "720p" or "remastered" or "remaster" or "explicit"
                or "records" or "recordings" or "label";
->>>>>>> Stashed changes
     }
 
     /// <summary>Searches LRCLIB and scores synced-lyric candidates against the given query.</summary>
     private static async Task<List<(double score, string lrc, double? duration, string? artistName, string? trackName)>> SearchAndScoreAsync(
         HttpClient client,
         string query,
+        string ytTrackName,
+        string? ytArtist,
         double? targetDurationSeconds,
         CancellationToken ct,
         bool fallback = false)
@@ -1172,13 +932,15 @@ public static class LyricsResolver
 
                 double score = 0;
 
-<<<<<<< Updated upstream
-                // 1. Artist cross-reference
-                var artistScore = ComputeArtistMatchScore(lrclibArtist, ytArtist, ytTrackName);
-                score += artistScore;
+                // Hard reject obvious duration mismatches.
+                if (targetDurationSeconds is double ytDur0 &&
+                    lrclibDuration is double lrDur0 &&
+                    ytDur0 > 0.5 && lrDur0 > 0.5 &&
+                    Math.Abs(ytDur0 - lrDur0) > LrclibMaxAbsoluteDurationMismatchSeconds)
+                {
+                    continue;
+                }
 
-                // 2. Duration proximity
-=======
                 // 1) Token overlap match (primary): query tokens vs candidate tokens (LRCLIB artistName + trackName).
                 // We do not privilege "artist" vs "title"; it's one combined bag-of-words.
                 var combinedCandidate = BuildCombinedCandidateString(lrclibArtist, lrclibName);
@@ -1186,7 +948,6 @@ public static class LyricsResolver
                 score += combinedScore;
 
                 // 2) Duration proximity (secondary nudge)
->>>>>>> Stashed changes
                 if (targetDurationSeconds.HasValue && lrclibDuration.HasValue)
                 {
                     var ytDur = targetDurationSeconds.Value;
@@ -1201,87 +962,31 @@ public static class LyricsResolver
                     }
                 }
 
-<<<<<<< Updated upstream
-                // 3. Track name matching
-                var trackScore = 0;
-                if (!string.IsNullOrWhiteSpace(lrclibName))
-                {
-                    var lowerQuery = query.Trim().ToLowerInvariant();
-                    var lowerName = lrclibName.ToLowerInvariant();
-
-                    if (artistScore >= 100 && !string.IsNullOrWhiteSpace(lrclibArtist))
-                    {
-                        var lowerArtist = lrclibArtist.ToLowerInvariant();
-                        lowerQuery = lowerQuery.Replace(lowerArtist, "");
-                        lowerQuery = System.Text.RegularExpressions.Regex.Replace(lowerQuery, @"\s*[-|/;:,]+\s*", " ");
-                        lowerQuery = System.Text.RegularExpressions.Regex.Replace(lowerQuery, @"\s+", " ").Trim();
-                    }
-
-                    if (lowerName == lowerQuery)
-                        trackScore = 60;
-                    else if (lowerName.StartsWith(lowerQuery))
-                        trackScore = 45;
-                    else if (lowerName.Contains(lowerQuery) && lowerQuery.Length >= 3)
-                        trackScore = 30;
-                    else if (lowerQuery.Contains(lowerName) && lowerName.Length >= 5)
-                    {
-                        var coverage = (double)lowerName.Length / lowerQuery.Length;
-                        trackScore = (int)(15 * coverage);
-                    }
-                    else
-                    {
-                        var wordScore = ComputeWordOverlapScore(lowerQuery, lowerName);
-                        trackScore = (int)Math.Min(wordScore, 15);
-                    }
-
-                    score += trackScore;
-                    AppLog.Info($"LRCLIB scoring: track={lrclibName} artistScore={artistScore} trackScore={trackScore} total={score} query=\"{query}\"");
-=======
-                // 3) Diagnostic log: focus on overlap scoring.
+                // Minimal diagnostic log; query URL already logged for non-fallback calls.
                 if (!fallback)
-                {
-                    // Emit extra overlap details when the candidate is near/above threshold; helps debug false positives.
-                    var qTokens = TokenizeMeaningfulForMatch(query);
-                    var cTokens = TokenizeMeaningfulForMatch(combinedCandidate);
-                    var overlap = qTokens.Intersect(cTokens, StringComparer.OrdinalIgnoreCase).Count();
-                    var coverage = qTokens.Count == 0 ? 0 : overlap / (double)qTokens.Count;
-                    var shouldDetail = score >= (MinimumMatchScore - 5);
-                    if (shouldDetail)
-                    {
-                        AppLog.Info(
-                            $"LRCLIB scoring: track={lrclibName ?? "(none)"} artist={lrclibArtist ?? "(none)"} " +
-                            $"combinedScore={combinedScore:F0} total={score:F0} " +
-                            $"qTokens={qTokens.Count} cTokens={cTokens.Count} overlap={overlap} qCoverage={coverage:F2} " +
-                            $"q=\"{query}\" cand=\"{combinedCandidate}\"");
-                    }
-                    else
-                    {
-                        AppLog.Info($"LRCLIB scoring: track={lrclibName ?? "(none)"} artist={lrclibArtist ?? "(none)"} combinedScore={combinedScore:F0} total={score:F0} query=\"{query}\"");
-                    }
->>>>>>> Stashed changes
-                }
+                    AppLog.Info($"LRCLIB scoring: track={lrclibName ?? "(none)"} artist={lrclibArtist ?? "(none)"} overlapScore={combinedScore:F0} total={score:F0} query=\"{query}\"");
 
                 if (score >= MinimumMatchScore)
                     candidates.Add((score, lrc, lrclibDuration, lrclibArtist, lrclibName));
             }
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
-            // Best-effort — LRCLIB may be down
+            // Do NOT treat network/parse failures as "no results" — callers must not cache misses for failures.
+            throw;
         }
 
         return candidates;
     }
 
-<<<<<<< Updated upstream
-=======
     private static string BuildCombinedCandidateString(string? lrclibArtist, string? lrclibName)
         => $"{lrclibArtist ?? ""} {lrclibName ?? ""}".Trim();
 
     private static double ComputeCombinedMatchScore(string combinedQuery, string combinedCandidate)
     {
         // Returns roughly 0..140. High score when MORE meaningful query tokens appear in candidate.
-        // Ranking goal: items with more matching tokens should always win (before secondary nudges like duration).
+        // Ranking goal: candidates with more matching tokens should always win.
         try
         {
             var qTokens = TokenizeMeaningfulForMatch(combinedQuery);
@@ -1293,10 +998,7 @@ public static class LyricsResolver
             if (overlap <= 0)
                 return 0;
 
-            // Guardrails:
-            // - Avoid false positives driven by a single shared token (e.g. "noc").
-            // - If the query has >= 3 meaningful tokens, require >= 2 overlaps.
-            // - If overlap is 1, allow it only when the overlapping token is "strong" (length >= 4).
+            // Guardrail: avoid false positives driven by a single shared short token.
             if (qTokens.Count >= 3 && overlap < 2)
                 return 0;
 
@@ -1311,7 +1013,6 @@ public static class LyricsResolver
                         break;
                     }
                 }
-
                 if (shared is null || shared.Length < 4)
                     return 0;
             }
@@ -1320,7 +1021,6 @@ public static class LyricsResolver
             var queryCoverage = overlap / (double)qCount; // 0..1
 
             // Primary: overlap count dominates so "more matching tokens" always outranks fewer matches.
-            // (Coverage still matters for tie-breakers.)
             var score = overlap * 30.0;
             if (queryCoverage >= 0.80) score += 20;
             else if (queryCoverage >= 0.60) score += 12;
@@ -1361,11 +1061,12 @@ public static class LyricsResolver
         return tokens.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
->>>>>>> Stashed changes
     /// <summary>Searches LRCLIB for plain (non-synced) lyrics fallback.</summary>
     private static async Task<(string? LrcText, double? Duration, string? Artist, string? Title, bool IsPlainLyrics)?> SearchPlainLyricsAsync(
         HttpClient client,
         string query,
+        string ytTrackName,
+        string? ytArtist,
         CancellationToken ct)
     {
         var queryString = System.Web.HttpUtility.UrlEncode(query.Trim());
@@ -1381,7 +1082,7 @@ public static class LyricsResolver
             if (items.ValueKind != System.Text.Json.JsonValueKind.Array)
                 return null;
 
-            (double score, string plainLyrics, double? duration, string? artistName, string? trackName)? bestCandidate = null;
+            (double score, string plainLyrics, double? duration, string? artistName, string? trackName)? best = null;
 
             foreach (var item in items.EnumerateArray())
             {
@@ -1412,31 +1113,19 @@ public static class LyricsResolver
 
                 if (score >= MinimumMatchScore)
                 {
-                    try
-                    {
-                        var qTokens = TokenizeMeaningfulForMatch(query);
-                        var cTokens = TokenizeMeaningfulForMatch(combinedCandidate);
-                        var overlap = qTokens.Intersect(cTokens, StringComparer.OrdinalIgnoreCase).Count();
-                        var coverage = qTokens.Count == 0 ? 0 : overlap / (double)qTokens.Count;
-                        AppLog.Info(
-                            $"LRCLIB plain scoring: track={lrclibName ?? "(none)"} artist={lrclibArtist ?? "(none)"} total={score:F0} " +
-                            $"qTokens={qTokens.Count} cTokens={cTokens.Count} overlap={overlap} qCoverage={coverage:F2} q=\"{query}\"");
-                    }
-                    catch { /* ignore */ }
-
-                    // Keep the best match; if scores tie, prefer one that at least has an artist+title.
-                    // (We don't use duration proximity here because plain lyrics often lack a reliable duration.)
-                    if (bestCandidate is null || score > bestCandidate.Value.score)
-                        bestCandidate = (score, plainLyrics, lrclibDuration, lrclibArtist, lrclibName);
+                    if (best is null || score > best.Value.score)
+                        best = (score, plainLyrics, lrclibDuration, lrclibArtist, lrclibName);
                 }
             }
 
-            if (bestCandidate is not null)
-                return (bestCandidate.Value.plainLyrics, bestCandidate.Value.duration, bestCandidate.Value.artistName, bestCandidate.Value.trackName, true);
+            if (best is not null)
+                return (best.Value.plainLyrics, best.Value.duration, best.Value.artistName, best.Value.trackName, true);
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
-            // Best-effort
+            // Do NOT treat network/parse failures as "no results" — callers must not cache misses for failures.
+            throw;
         }
 
         return null;
@@ -1458,7 +1147,9 @@ public static class LyricsResolver
         if (string.IsNullOrWhiteSpace(rawTitle))
             return rawTitle ?? "";
 
-        var result = rawTitle.Trim();
+        // Normalize stylized Unicode (e.g. mathematical italic/bold letters) to improve tokenization/search.
+        // NFKC converts many "fancy" alphabets into regular letters (e.g. 𝘭 → l).
+        var result = NormalizeUnicodeStylizedLetters(rawTitle).Trim();
 
         // 1. Remove bracketed content: [4K], [HD], [Ultra HD], [4K Ultra HD], [8K], etc.
         result = System.Text.RegularExpressions.Regex.Replace(result, @"\s*\[[^\]]*\]\s*", " ");
@@ -1498,13 +1189,28 @@ public static class LyricsResolver
         result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+x\s+", " ", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         // 3.5. Split camelCase concatenated words (e.g., "ArtistName" → "Artist Name")
-        // This helps LRCLIB match against properly spaced artist/track names in its database.
-        result = System.Text.RegularExpressions.Regex.Replace(result, @"([a-z])([A-Z])", "$1 $2");
+        // Avoid splitting trailing single-letter suffixes like "PinocchioP" (would lose the "P").
+        // Only split when the uppercase begins a multi-letter segment (Uppercase followed by lowercase).
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"(?<=[a-z])(?=[A-Z][a-z])", " ");
 
         // 4. Normalize whitespace
         result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+", " ").Trim();
 
         return result;
+    }
+
+    private static string NormalizeUnicodeStylizedLetters(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            return s ?? "";
+        try
+        {
+            return s.Normalize(NormalizationForm.FormKC);
+        }
+        catch
+        {
+            return s;
+        }
     }
 
     /// <summary>
@@ -1528,6 +1234,13 @@ public static class LyricsResolver
         if (string.IsNullOrWhiteSpace(lowerArtist))
             return 0;
 
+        // Normalize common YouTube channel suffixes for matching ("X - Topic" should still match "X").
+        string? lowerChannelNorm = null;
+        if (!string.IsNullOrWhiteSpace(ytChannel))
+        {
+            lowerChannelNorm = NormalizeYoutubeArtistHint(ytChannel).ToLowerInvariant().Trim();
+        }
+
         // Extract significant words from LRCLIB artist (3+ chars, excluding common stop words)
         var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1547,18 +1260,30 @@ public static class LyricsResolver
             return 0;
 
         // Check 1: Exact match with YouTube channel
-        if (!string.IsNullOrWhiteSpace(ytChannel))
+        if (!string.IsNullOrWhiteSpace(lowerChannelNorm))
         {
-            var lowerChannel = ytChannel.ToLowerInvariant().Trim();
-            if (lowerChannel == lowerArtist)
+            if (lowerChannelNorm == lowerArtist)
                 return 120;
 
             // Check if LRCLIB artist appears in channel or channel contains LRCLIB artist
-            if (lowerChannel.Contains(lowerArtist) || lowerArtist.Contains(lowerChannel))
+            if (lowerChannelNorm.Contains(lowerArtist) || lowerArtist.Contains(lowerChannelNorm))
                 return 100;
         }
 
-        // Check 2: LRCLIB artist appears in the raw YouTube title
+        // If we have a channel name but it *doesn't* overlap the LRCLIB artist at all, treat title overlap as very weak.
+        // This prevents wrong picks like "Frida" → "FRIDA GOLD ..." when the channel points to a different artist.
+        var channelHasAnyArtistWord = false;
+        if (!string.IsNullOrWhiteSpace(lowerChannelNorm))
+        {
+            var channelWords = lowerChannelNorm
+                .Split(new[] { ' ', '-', '&', '/', '+', '.', ',', ';', ':', '(', ')', '[', ']', '|', '!' }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(w => w.Length >= 3 && !stopWords.Contains(w))
+                .Distinct()
+                .ToHashSet();
+            channelHasAnyArtistWord = artistWords.Overlaps(channelWords);
+        }
+
+        // Check 2: LRCLIB artist appears in the raw YouTube title (very weak unless multiple words match)
         if (!string.IsNullOrWhiteSpace(ytRawTitle))
         {
             var lowerTitle = ytRawTitle.ToLowerInvariant();
@@ -1579,7 +1304,13 @@ public static class LyricsResolver
             if (matchingWords > 0)
             {
                 var coverage = matchingWords / (double)artistWords.Count;
-                return 30 + (int)(30 * coverage); // 30–60 range
+                // Single-word overlap is often ambiguous (artist word appears as the *song* title).
+                // Only give a meaningful score when multiple words match or coverage is high.
+                if (matchingWords >= 2 || (artistWords.Count >= 2 && coverage >= 0.75))
+                    return 20 + (int)(25 * coverage); // 20–45 range
+
+                // If the channel also supports the artist, keep a small bump; otherwise treat as noise.
+                return channelHasAnyArtistWord ? 10 : 0;
             }
         }
 
@@ -1603,7 +1334,10 @@ public static class LyricsResolver
             if (sharedWords.Any())
             {
                 var coverage = sharedWords.Count() / (double)artistWords.Count;
-                return 10 + (int)(20 * coverage); // 10–30 range
+                // Same ambiguity rule: if we have channel info that doesn't overlap, don't reward title-based overlap.
+                if (!string.IsNullOrWhiteSpace(lowerChannelNorm) && !channelHasAnyArtistWord)
+                    return 0;
+                return 8 + (int)(18 * coverage); // 8–26 range
             }
         }
 
