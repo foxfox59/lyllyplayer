@@ -10390,6 +10390,11 @@ public partial class MainWindow : Window
                             LyricsCache.SetMiss(cacheKey);
                         }
                     }
+                    catch (OperationCanceledException)
+                    {
+                        // Expected when a newer resolve cancels the in-flight request (single-flight) or during shutdown.
+                        return;
+                    }
                     catch (Exception ex)
                     {
                         AppLog.Exception(ex, $"TryResolveLyricsAsync: LRCLIB fetch failed for {title} (localDur={duration?.ToString("F0") ?? "null"}s)");
@@ -10506,6 +10511,11 @@ public partial class MainWindow : Window
                                     AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
                                     LyricsCache.SetMiss(cacheKey);
                                 }
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                // Expected when a newer resolve cancels the in-flight request (single-flight) or during shutdown.
+                                return;
                             }
                             catch (Exception ex)
                             {

@@ -402,16 +402,61 @@ public static class LyricsResolver
         if (string.IsNullOrWhiteSpace(raw))
             return Array.Empty<string>();
 
-        // Preserve the raw for structural split, but normalize common separators and feature markers first.
-        var s = NormalizeUnicodeStylizedLetters(raw).Trim();
-        s = StripBracketedJunk(s);
-        s = NormalizeFeatureMarkers(s);
-        s = StripFeaturedArtistsTail(s);
-        s = NormalizeLooseTitleSeparators(s);
+        static string CleanPartForSearch(string part)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(part))
+                    return "";
 
-        // Prefer safe separators with spaces to avoid splitting hyphenated words.
-        // Also handle common "Artist - Title - Uploader" patterns by dropping the 3rd part when it looks like a channel tag.
-        var splitParts = SplitOnSeparatorsUpTo3(s, new[]
+                var s = StripBracketedJunk(part);
+                s = NormalizeFeatureMarkers(s);
+                s = StripFeaturedArtistsTail(s);
+                s = NormalizeLooseTitleSeparators(s);
+
+                // Second-pass split inside a part: drop uploader/label tails like "Title | Label Records".
+                // Do this after bracket/feat cleanup so "Label (Official)" doesn't block matching.
+                try
+                {
+                    // Handle "|" with or without surrounding spaces.
+                    var bar = s.IndexOf('|', StringComparison.Ordinal);
+                    if (bar > 0 && bar < s.Length - 1)
+                    {
+                        var left = s.Substring(0, bar).Trim();
+                        var right = s.Substring(bar + 1).Trim();
+                        if (!string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right) && LooksLikeTrashRightPart(right))
+                            s = left;
+                    }
+                    else
+                    {
+                        // Conservative ":" split only when spaced (avoids "http://", timestamps, etc.)
+                        var sub = SplitOnSeparatorsUpTo3(s, new[] { " : " });
+                        if (sub.Count >= 2)
+                        {
+                            var left = sub[0];
+                            var right = sub[1];
+                            if (LooksLikeTrashRightPart(right))
+                                s = left;
+                        }
+                    }
+                }
+                catch { /* ignore */ }
+
+                return s.Trim();
+            }
+            catch
+            {
+                return (part ?? "").Trim();
+            }
+        }
+
+        // IMPORTANT: split raw input into parts BEFORE applying other filtering/normalization.
+        // The split structure is what lets us drop uploader/label chunks safely; later normalization (feat/x, bracket stripping)
+        // should not be allowed to destroy separators and prevent part dropping.
+        var rawNorm = NormalizeUnicodeStylizedLetters(raw).Trim();
+
+        // First-pass split: use explicit separators only (the caller provides " - " between title and channel).
+        var splitParts = SplitOnSeparatorsUpTo3(rawNorm, new[]
         {
             " - ", " – ", " — ", " : ", " | "
         });
@@ -422,32 +467,36 @@ public static class LyricsResolver
             var left = splitParts[0];
             var right = splitParts[1];
 
-            // If the title already contains a strong structural split in the left chunk (e.g. "Artist - Track")
-            // and the right chunk looks like a label/uploader tag, drop the right chunk entirely.
-            // This prevents "Artist - Track | Label Records" from polluting LRCLIB queries.
+            // If we have 3 parts, treat the 3rd as trash by default (uploader/label tags are the common case).
+            // This matches the "split, drop parts, then tokenize" pipeline.
+            if (splitParts.Count >= 3)
+            {
+                // ignore 3rd part
+            }
+
+            // Drop the right chunk entirely when it looks like a label/uploader tag.
+            // This is the most common case for "<title> - <channel>" raw inputs where the channel is something like
+            // "Official YouTube Channel" or a label/publisher handle.
             try
             {
-                var leftHasDashSplit = left.Contains(" - ", StringComparison.Ordinal) ||
-                                       left.Contains(" – ", StringComparison.Ordinal) ||
-                                       left.Contains(" — ", StringComparison.Ordinal);
-                if (leftHasDashSplit && LooksLikeUploaderOrChannelTag(right))
+                if (LooksLikeTrashRightPart(right))
                     right = "";
             }
             catch { /* ignore */ }
 
-            // If we have 3 parts and the last part looks like an uploader/channel tag, ignore it.
-            if (splitParts.Count >= 3)
-            {
-                var third = splitParts[2];
-                // Strict rule: if we already have a clean two-part "A - B", ignore any 3rd part.
-            }
+            // Now apply per-part cleanup (and drop internal uploader/label tails like "| Label Records").
+            var left2 = CleanPartForSearch(left);
+            var right2 = string.IsNullOrWhiteSpace(right) ? "" : CleanPartForSearch(right);
 
-            tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(left)));
+            tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(left2)));
             if (!string.IsNullOrWhiteSpace(right))
-                tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(right)));
+                tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(right2)));
         }
         else
         {
+            // Single-part input: apply cleanup then tokenize.
+            var s = rawNorm;
+            s = CleanPartForSearch(s);
             tokens.AddRange(TokenizeBasic(CleanTrackPrefixNumbers(s)));
         }
 
@@ -654,6 +703,35 @@ public static class LyricsResolver
         if (lower == "topic" || lower.EndsWith(" topic"))
             return true;
 
+        // Explicit channel boilerplate.
+        try
+        {
+            if (lower.Contains("youtube") && lower.Contains("channel"))
+                return true;
+            if (lower == "youtube channel" || lower.EndsWith(" youtube channel"))
+                return true;
+        }
+        catch { /* ignore */ }
+
+        // Common uploader suffixes like "... LIVE" / "... Upload".
+        try
+        {
+            if (lower.EndsWith(" live") || lower.EndsWith(" upload") || lower.EndsWith(" original upload"))
+                return true;
+        }
+        catch { /* ignore */ }
+
+        // Label / publisher tails are frequently appended as a separate chunk (e.g. after "|" or as a 3rd dash chunk).
+        // These almost never help LRCLIB lookup and actively pollute queries.
+        try
+        {
+            if (lower.EndsWith(" records") || lower.EndsWith(" record") ||
+                lower.EndsWith(" recordings") || lower.EndsWith(" recording") ||
+                lower.EndsWith(" label") || lower.EndsWith(" record label"))
+                return true;
+        }
+        catch { /* ignore */ }
+
         // Long all-lowercase single-token tags are often uploader handles, not artists.
         // Keep this conservative: only treat as handle-like when it's long enough to be unlikely as a real artist casing.
         try
@@ -729,6 +807,44 @@ public static class LyricsResolver
         return false;
     }
 
+    private static bool LooksLikeTrashRightPart(string s)
+    {
+        // Stricter predicate for dropping the right-side chunk in "<title> - <channel>".
+        // Only drop when it is clearly boilerplate (label/uploader), not a legitimate single-word artist.
+        try
+        {
+            var t = (s ?? "").Trim();
+            if (t.Length < 3)
+                return false;
+            var lower = t.ToLowerInvariant();
+
+            if (lower == "topic" || lower.EndsWith(" topic"))
+                return true;
+            if (lower.Contains("youtube") && lower.Contains("channel"))
+                return true;
+            if (lower.EndsWith(" vevo") || lower.EndsWith("vevo"))
+                return true;
+
+            if (lower.EndsWith(" records") || lower.EndsWith(" record") ||
+                lower.EndsWith(" recordings") || lower.EndsWith(" recording") ||
+                lower.EndsWith(" label") || lower.EndsWith(" record label"))
+                return true;
+
+            if (lower.EndsWith(" live") || lower.EndsWith(" upload") || lower.EndsWith(" original upload"))
+                return true;
+
+            // Also drop explicit glued boilerplate tails.
+            if (!t.Contains(' ') && (lower.EndsWith("official") || lower.EndsWith("channel")))
+                return true;
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static (string Left, string Right)? SplitOnFirstSeparator(string s, string[] seps)
     {
         try
@@ -755,13 +871,64 @@ public static class LyricsResolver
         {
             // Remove [...] blocks (resolutions, etc).
             s = System.Text.RegularExpressions.Regex.Replace(s, @"\s*\[[^\]]*\]\s*", " ");
-            // Remove most (...) blocks, but keep those that contain feat/ft (we normalize later).
-            // Also keep disambiguation qualifiers that are often crucial for LRCLIB matching (e.g. studio outtake).
-            s = System.Text.RegularExpressions.Regex.Replace(
-                s,
-                @"\s*\((?!\s*(?:feat|ft|featuring|studio|outtake|demo|live|acoustic|session|alternate|alt|take|out\-?take)\b)[^)]*\)\s*",
-                " ",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            // Parentheses can be either:
+            // - real title text (should KEEP), e.g. "(I Want Your Body)"
+            // - junk metadata (should DROP), e.g. "(Official Video)", "(Music Video FULL)", "(Audio)", "(Lyrics)"
+            //
+            // Keep by default; only drop when the inner text looks like metadata/junk.
+            try
+            {
+                s = System.Text.RegularExpressions.Regex.Replace(
+                    s,
+                    @"\s*\(([^)]{1,120})\)\s*",
+                    m =>
+                    {
+                        try
+                        {
+                            var inner = (m.Groups[1].Value ?? "").Trim();
+                            if (string.IsNullOrWhiteSpace(inner))
+                                return " ";
+
+                            var lower = inner.ToLowerInvariant();
+
+                            // Keep: featured/collab markers and disambiguation qualifiers.
+                            if (System.Text.RegularExpressions.Regex.IsMatch(lower, @"^\s*(feat|ft|featuring)\b", System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+                                return $" ({inner}) ";
+                            if (System.Text.RegularExpressions.Regex.IsMatch(lower, @"^\s*(studio|outtake|demo|acoustic|session|alternate|alt|take|out\-?take)\b", System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+                                return $" ({inner}) ";
+
+                            // Drop: common metadata/junk markers.
+                            if (lower.Contains("official") ||
+                                lower.Contains("music video") ||
+                                lower.Contains("mv") ||
+                                lower.Contains("video") ||
+                                lower.Contains("audio") ||
+                                lower.Contains("lyrics") ||
+                                lower.Contains("lyric") ||
+                                lower.Contains("visualizer") ||
+                                lower.Contains("remaster") ||
+                                lower.Contains("remastered") ||
+                                lower.Contains("hd") ||
+                                lower.Contains("4k") ||
+                                lower.Contains("8k") ||
+                                lower.Contains("full") ||
+                                lower.Contains("upload") ||
+                                lower.Contains("live"))
+                            {
+                                return " ";
+                            }
+
+                            // Default: keep.
+                            return $" ({inner}) ";
+                        }
+                        catch
+                        {
+                            return " ";
+                        }
+                    },
+                    System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            }
+            catch { /* ignore */ }
         }
         catch { /* ignore */ }
         return System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ").Trim();
@@ -910,7 +1077,10 @@ public static class LyricsResolver
         return t is
                "official" or "video" or "music" or "mv" or "lyrics" or "lyric" or "audio" or "visualizer" or "hd" or "hq" or "uhd"
                or "4k" or "8k" or "1080p" or "720p" or "remastered" or "remaster" or "explicit"
-               or "records" or "recordings" or "label";
+               or "records" or "recordings" or "label"
+               or "youtube" or "channel" or "tube"
+               or "ver"
+               or "live" or "upload";
     }
 
     /// <summary>Searches LRCLIB and scores synced-lyric candidates against the given query.</summary>
