@@ -23,18 +23,29 @@ A multi-function desktop audio player: **audio playback uses LibVLC** (native li
 Supports login cookies from browser if you have **node.js**, but not required for playback in most cases.  
 Supports either pasting a direct Youtube playlist ID/URL or searching from Youtube.  
 
-Imports .m3u playlists. Generates playlists from supported local audio file folders (.mp3, .wav, .flac, .m4a, .aac, .ogg, .opus, .wma, .aiff, .aif, .aifc). Can save and load playlists for later use both in internal JSON format and .M3U / .M3U8. **Compound** playlists (append local + YouTube, etc.) keep per-item origin metadata in JSON exports.  
+Imports .m3u playlists. Generates playlists from supported local audio file folders (.mp3, .wav, .flac, .m4a, .aac, .ogg, .opus, .wma, .aiff, .aif, .aifc). Can save and load playlists for later use both in internal JSON format and .M3U / .M3U8.
+  
+**Compound** playlists (append local + YouTube, etc.) keep per-item origin metadata in JSON exports.  
 **Song queue:** right-click tracks to **add to queue** and play through a short “up next” list without reordering the full playlist. **Clean invalid items** drops missing locals and unavailable YouTube rows in one action.  
 YouTube flows live in a dedicated **YouTube** window: search, **Open URL** (video/playlist or direct stream URL), import playlist, and **My playlists** (best-effort with cookies when configured).  
+  
 Tested also with simple icecast/shoutcast streams either via .m3u playlist or direct URL.  
+  
 Support for basic custom theming with a default, automatic, custom or Windows themed color tint. Can be switched between light/dark modes (although the feature is crude). Optional **Theme designer** and bundled default backgrounds (including **Meow Cat**).  
-**Compact** and **Ultra compact** main layouts; auxiliary **Playlist**, **Options**, and **Lyrics** windows can snap to the main window and restore after compact mode.  
-Simple visualizer: off, VU bars, or a frequency spectrum (in Ultra compact the strip can double as a seek surface).  
-**Lyrics** (best-effort): separate **Lyrics** window plus optional title-bar line; sources include yt-dlp metadata and LRCLIB.  
-**AGC** (optional): lightweight real-time **automatic gain control** under **Options → Audio** to reduce loudness jumps (not peak normalization).  
+  
 **Export to MP3** (YouTube): enables after  a track has a **finished on-disk cache** — encoding via **LAME** (`libmp3lame`), settings under **Options → Export** (see below).
-
+  
+**Compact** and **Ultra compact** main layouts; auxiliary **Playlist**, **Options**, and **Lyrics** windows can snap to the main window and restore after compact mode.  
+  
+Simple visualizer: off, VU bars, or a frequency spectrum (in Ultra compact the strip can double as a seek surface).  
+  
+**Lyrics** (best-effort): separate **Lyrics** window plus optional title-bar line; sources include yt-dlp metadata and LRCLIB.  
+  
+**AGC** (optional): lightweight real-time **automatic gain control** under **Options → Audio** to reduce loudness jumps (not peak normalization).  
+  
 **and so much more!** (not really that much, those were the main features :D)  
+
+---
 
 I am a software developer, so I have some qualifications to supervise and suggest solutions, but unless otherwise specified:  
 
