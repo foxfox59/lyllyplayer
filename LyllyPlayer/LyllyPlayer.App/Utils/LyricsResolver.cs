@@ -132,7 +132,7 @@ public static class LyricsResolver
     /// Network/timeout/parse failures are surfaced as exceptions and must NOT be treated as misses by callers.
     /// </summary>
     /// <param name="trackName">Raw YouTube video title (will be cleaned before searching).</param>
-    /// <param name="artist">YouTube channel name, used for artist cross-referencing (not for searching).</param>
+    /// <param name="artist">YouTube channel (or similar). Used for LRCLIB candidate scoring; when it looks like a real artist label, its tokens are also merged into the search query (after stripping a trailing " - Topic" suffix).</param>
     /// <param name="targetDurationSeconds">Expected duration of the YouTube video.</param>
     /// <param name="ct">Cancellation token.</param>
     public static async Task<(string? LrcText, double? LrclibDurationSeconds, string? Artist, string? Title, bool IsPlainLyrics, bool IsDefinitiveMiss)> FetchLyricsFromLrclibAsync(
@@ -264,15 +264,22 @@ public static class LyricsResolver
         {
             var tokens = new List<string>(32);
 
-            // 1) Extract tokens from the title itself (handles "Artist - Title", "A x B - Song", etc.)
-            // Token-bag policy: treat the raw input string as the only source of truth.
-            // Callers should pass a combined string when they have multiple fields (e.g. "Title - Channel").
-            // We do not use the separate 'artist' parameter as a hint anymore.
+            // 1) Extract tokens from the primary string (handles "Artist - Title", "A x B - Song", etc.)
             var titleTokens = ExtractTokensFromTrackTitle(trackName, artistHint: null).ToList();
             tokens.AddRange(titleTokens);
-            var titleSignalTokenCount = CountDistinctMeaningfulTokens(titleTokens);
 
-            // 2) Remove junk tokens and dedupe.
+            // 2) Optional second field (YouTube channel, ID3 artist, etc.): when it looks like a real artist
+            // (not VEVO / label / bare "Topic"), merge its tokens. Auto-generated channels are often stored as
+            // "Name - Topic" or even "Topic" alone while the real artist is only in the full channel label.
+            if (LooksLikeTrustworthyArtistHint(artist))
+            {
+                var hint = NormalizeYoutubeArtistHint(artist!);
+                if (!string.IsNullOrWhiteSpace(hint) &&
+                    !string.Equals(hint.Trim(), trackName.Trim(), StringComparison.OrdinalIgnoreCase))
+                    tokens.AddRange(ExtractTokensFromTrackTitle(hint, artistHint: null));
+            }
+
+            // 3) Remove junk tokens and dedupe.
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var filtered = new List<string>(tokens.Count);
             foreach (var t in tokens)
@@ -373,6 +380,9 @@ public static class LyricsResolver
         if (a.Length < 2)
             return false;
         var lower = a.ToLowerInvariant();
+        // YouTube synthetic artist channel without the name (metadata sometimes only has "Topic").
+        if (lower == "topic")
+            return false;
         // Very common non-artist channels.
         if (lower.Contains(" vevo")) return false;
         if (lower.Contains("records")) return false;
@@ -380,6 +390,13 @@ public static class LyricsResolver
         if (lower.Contains("official") && (lower.Contains("music") || lower.Contains("channel"))) return false;
         return true;
     }
+
+    /// <summary>
+    /// Strips YouTube's synthetic " - Topic" suffix from channel labels (e.g. auto-generated artist channels).
+    /// Use before building "title - channel" strings for LRCLIB so the artist name is not replaced by "Topic".
+    /// </summary>
+    public static string NormalizeYoutubeChannelForLrclib(string? channel)
+        => NormalizeYoutubeArtistHint(channel ?? "");
 
     private static string NormalizeYoutubeArtistHint(string artist)
     {

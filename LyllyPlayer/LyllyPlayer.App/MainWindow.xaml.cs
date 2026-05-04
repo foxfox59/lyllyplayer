@@ -10465,11 +10465,13 @@ public partial class MainWindow : Window
                             _lyricsWindow?.Refresh();
                             // Fallback: try LRCLIB using track title and channel (artist)
                             var title = entry.Title ?? "";
-                            var combinedName = $"{title} - {entry.Channel ?? ""}".Trim();
+                            // Strip " - Topic" so we do not build "Askel - Topic" (right chunk is dropped as junk) when the real artist is "Viikate - Topic".
+                            var channelForCombine = LyricsResolver.NormalizeYoutubeChannelForLrclib(entry.Channel);
+                            var combinedName = $"{title} - {channelForCombine}".Trim();
                             try
                             {
                                 var (lrcLrclib, lrclibDuration, lrclibArtist, lrclibName, isPlainLyrics, isDefinitiveMiss) =
-                                    await LyricsResolver.FetchLyricsFromLrclibAsync(combinedName, artist: null, entry.DurationSeconds, resolveCt);
+                                    await LyricsResolver.FetchLyricsFromLrclibAsync(combinedName, entry.Channel, entry.DurationSeconds, resolveCt);
                                 if (!string.IsNullOrWhiteSpace(lrcLrclib))
                                     LyricsCache.Set(cacheKey, lrcLrclib);
 
