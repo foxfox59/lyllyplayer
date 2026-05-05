@@ -125,7 +125,7 @@
         <Border Margin="12,12,12,12"
                 CornerRadius="6"
                 Padding="10"
-                Background="{DynamicResource {x:Static SystemColors.ControlLightBrushKey}}">
+                Background="{DynamicResource App.Theme.Surface}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>

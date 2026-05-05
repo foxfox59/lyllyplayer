@@ -1,4 +1,4 @@
-﻿using Microsoft.Win32;
+using Microsoft.Win32;
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Input;
@@ -3977,16 +3977,25 @@ public partial class MainWindow : Window
         _playlistIsCompound = true;
         UpdateRefreshEnabled();
 
+        var core = _playlistCore;
+        if (core is null)
+            return (added: 0, removedDuplicates: removedDupes);
+
+        var entries = core.Entries;
+        var origins = core.OriginByVideoId;
+        if (entries is null || origins is null)
+            return (added: 0, removedDuplicates: removedDupes);
+
         foreach (var e in appended)
-            _playlistCore!.Entries.Add(e);
+            entries.Add(e);
 
         // Per-item origins for appended entries.
         foreach (var e in appended)
-            _playlistCore.OriginByVideoId[e.VideoId] = new PlaylistOriginInfo(originLabel, originSource);
+            origins[e.VideoId] = new PlaylistOriginInfo(originLabel, originSource);
 
         // Rebuild play order around the current track; do not change playback.
         // RebuildEffectivePlayOrderPreserveCurrent(raiseNowPlayingChanged: false);
-        var final = _playlistCore.Entries?.ToArray() ?? Array.Empty<PlaylistEntry>();
+        var final = entries.ToArray();
         _engine.SetQueue(final, startIndex: _engine.CurrentIndex); // , raiseNowPlayingChanged: false);
         SetQueueList(final, selectedIndex: -1);
         UpdatePlaylistTitleDisplayForNowPlaying();
@@ -8087,19 +8096,19 @@ public partial class MainWindow : Window
                     shortMsg = shortMsg[..80] + "\u2026";
                 title = $"{title} ({shortMsg})";
             }
-
-            if (NowPlayingTitleRun is not null)
-                NowPlayingTitleRun.Text = title;
-            else
-                NowPlayingTextBlock.Text = $"[{status}] {title}";
-
-            try
-            {
-                // Keep the main window title synced when using "Current song" title mode.
-                ApplyMainWindowTitleFromSettings(GetAppTitleBase());
-            }
-            catch { /* ignore */ }
         }
+
+        if (NowPlayingTitleRun is not null)
+            NowPlayingTitleRun.Text = title;
+        else
+            NowPlayingTextBlock.Text = $"[{status}] {title}";
+
+        try
+        {
+            // Keep the main window title synced when using "Current song" title mode.
+            ApplyMainWindowTitleFromSettings(GetAppTitleBase());
+        }
+        catch { /* ignore */ }
 
         try { UpdateExportMp3ControlsEnabled(); } catch { /* ignore */ }
     }
@@ -11683,7 +11692,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Minimum alpha for panels, borders, selection, title bar, and window frame tint so 0% background opacity does not erase all chrome.</summary>
-    private const byte ThemeChromeAlphaFloor = 48;
+    private const byte ThemeChromeAlphaFloor = 28;
 
     /// <summary>Maps user background opacity [0,255] to alpha for theme UI chrome: low end stays visible; 255 stays fully opaque.</summary>
     private static byte MapThemeChromeAlpha(byte userAlpha)
@@ -11758,6 +11767,16 @@ public partial class MainWindow : Window
             SetBrush("App.Theme.PopupSurfaceRaised", darkTheme
                 ? System.Windows.Media.Color.FromArgb(0xFF, 0x23, 0x23, 0x23)
                 : System.Windows.Media.Color.FromArgb(0xFF, 0xFA, 0xFA, 0xFA));
+            // Tabs: passive headers should be darker, and must honor global UI alpha.
+            SetBrush("App.Theme.TabHeaderPassiveBackground",
+                DeriveTabHeaderPassiveBackground(
+                    baseSurfaceRgbOnly: System.Windows.Media.Color.FromRgb(surface.R, surface.G, surface.B),
+                    surfaceRaisedRgbOnly: surfaceRaisedRgbOnly,
+                    preferDarkTheme: darkTheme,
+                    chromeAlpha: a,
+                    darkBlendToBlack: 0.62,
+                    lightBlendToBlack: 0.14,
+                    alphaMultiplier: 0.72));
             SetBrush("App.Theme.Border", System.Windows.Media.Color.FromArgb(a, border.R, border.G, border.B));
             // Window border should remain visible even when background alpha is low (border is chrome, not content).
             SetBrush("App.Theme.WindowBorderActive", System.Windows.Media.Color.FromArgb(0xFF, border.R, border.G, border.B));
@@ -11871,6 +11890,18 @@ public partial class MainWindow : Window
             // Popups/menus must remain opaque so they don't become click-through when background alpha is low.
             SetBrush("App.Theme.PopupSurface", System.Windows.Media.Color.FromArgb(0xFF, surfaceRgb.R, surfaceRgb.G, surfaceRgb.B));
             SetBrush("App.Theme.PopupSurfaceRaised", System.Windows.Media.Color.FromArgb(0xFF, surfaceRaisedRgb.R, surfaceRaisedRgb.G, surfaceRaisedRgb.B));
+            // Tabs: passive headers slightly darker than surface in Windows theme mode.
+            var surfaceRgbOnlyWin = System.Windows.Media.Color.FromRgb(surfaceRgb.R, surfaceRgb.G, surfaceRgb.B);
+            var darkWinChrome = RelativeLuminance(surfaceRgbOnlyWin) < 0.42;
+            SetBrush("App.Theme.TabHeaderPassiveBackground",
+                DeriveTabHeaderPassiveBackground(
+                    baseSurfaceRgbOnly: surfaceRgb,
+                    surfaceRaisedRgbOnly: surfaceRaisedRgb,
+                    preferDarkTheme: darkWinChrome,
+                    chromeAlpha: a,
+                    darkBlendToBlack: 0.12,
+                    lightBlendToBlack: 0.12,
+                    alphaMultiplier: 0.70));
             SetBrush("App.Theme.Border", System.Windows.Media.Color.FromArgb(a, borderRgb.R, borderRgb.G, borderRgb.B));
             // Window frame: WPF SystemColors.ActiveBorder/InactiveBorder are legacy and don't track Win10/11 DWM chrome.
             // Derive 1px borders from the same caption palette we use for title bars + ControlDark.
@@ -11884,8 +11915,6 @@ public partial class MainWindow : Window
             SetBrush("App.Theme.WindowBorderInactive", System.Windows.Media.Color.FromArgb(0xFF, winBorderInact.R, winBorderInact.G, winBorderInact.B));
             SetBrush("App.Theme.Foreground", System.Windows.Media.Color.FromArgb(inkA, fgRgb.R, fgRgb.G, fgRgb.B));
             SetBrush("App.Theme.ForegroundSubtle", System.Windows.Media.Color.FromArgb(inkSubtleA, subtleRgb.R, subtleRgb.G, subtleRgb.B));
-            var surfaceRgbOnlyWin = System.Windows.Media.Color.FromRgb(surfaceRgb.R, surfaceRgb.G, surfaceRgb.B);
-            var darkWinChrome = RelativeLuminance(surfaceRgbOnlyWin) < 0.42;
             var spectrumWin = Blend(
                 System.Windows.Media.Color.FromRgb(subtleRgb.R, subtleRgb.G, subtleRgb.B),
                 System.Windows.Media.Color.FromRgb(borderRgb.R, borderRgb.G, borderRgb.B),
@@ -12008,6 +12037,17 @@ public partial class MainWindow : Window
         SetBrush("App.Theme.PopupSurface", System.Windows.Media.Color.FromArgb(0xFF, bc.R, bc.G, bc.B));
         SetBrush("App.Theme.PopupSurfaceRaised", System.Windows.Media.Color.FromArgb(0xFF, surfaceRaised.R, surfaceRaised.G, surfaceRaised.B));
         SetBrush("App.Theme.Border", themeBorder);
+        // Tabs: passive headers should be darker, and must honor global UI alpha.
+        SetBrush("App.Theme.TabHeaderPassiveBackground",
+            DeriveTabHeaderPassiveBackground(
+                baseSurfaceRgbOnly: System.Windows.Media.Color.FromRgb(bc.R, bc.G, bc.B),
+                surfaceRaisedRgbOnly: System.Windows.Media.Color.FromRgb(surfaceRaised.R, surfaceRaised.G, surfaceRaised.B),
+                preferDarkTheme: preferDarkTheme,
+                chromeAlpha: a,
+                // Custom dark themes can otherwise make passive tabs read nearly black (especially with saturated base colors).
+                darkBlendToBlack: 0.48,
+                lightBlendToBlack: 0.14,
+                alphaMultiplier: preferDarkTheme ? 0.62 : 0.72));
         SetBrush("App.Theme.WindowBorderActive", System.Windows.Media.Color.FromArgb(0xFF, themeBorder.R, themeBorder.G, themeBorder.B));
         var themeBorderRgbOnly = System.Windows.Media.Color.FromRgb(themeBorder.R, themeBorder.G, themeBorder.B);
         var baseSurfaceRgb = System.Windows.Media.Color.FromRgb(bc.R, bc.G, bc.B);
@@ -12210,6 +12250,24 @@ public partial class MainWindow : Window
             BlendCh(a.G, b.G),
             BlendCh(a.B, b.B)
         );
+    }
+
+    private static System.Windows.Media.Color DeriveTabHeaderPassiveBackground(
+        System.Windows.Media.Color baseSurfaceRgbOnly,
+        System.Windows.Media.Color surfaceRaisedRgbOnly,
+        bool preferDarkTheme,
+        byte chromeAlpha,
+        double darkBlendToBlack,
+        double lightBlendToBlack,
+        double alphaMultiplier)
+    {
+        // Keep the *hue* from the base surface/raised surface, and only bias toward black.
+        // Alpha is applied separately so passive headers don't read as an opaque slab over images.
+        var rgb = preferDarkTheme
+            ? Blend(baseSurfaceRgbOnly, System.Windows.Media.Color.FromRgb(0, 0, 0), darkBlendToBlack)
+            : Blend(surfaceRaisedRgbOnly, System.Windows.Media.Color.FromRgb(0, 0, 0), lightBlendToBlack);
+        var a = (byte)Math.Clamp((int)Math.Round(chromeAlpha * alphaMultiplier), 0, 255);
+        return System.Windows.Media.Color.FromArgb(a, rgb.R, rgb.G, rgb.B);
     }
 
     private static System.Windows.Media.Color AdjustLuminance(System.Windows.Media.Color c, double delta)

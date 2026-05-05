@@ -158,7 +158,7 @@
                     <ListBox x:Name="LyricsListBox"
                              Grid.Row="1"
                              Margin="12,0,12,8"
-                             Background="{DynamicResource {x:Static SystemColors.ControlLightBrushKey}}"
+                             Background="{DynamicResource App.Theme.Surface}"
                              BorderThickness="0"
                              VirtualizingStackPanel.IsVirtualizing="False"
                              VirtualizingStackPanel.VirtualizationMode="Standard"

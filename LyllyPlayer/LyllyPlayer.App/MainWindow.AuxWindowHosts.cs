@@ -213,6 +213,17 @@ public partial class MainWindow
                 try { _playlistCore.Clear(); } catch { /* ignore */ }
                 _engine.SetQueue(_playlistCore.Entries, startIndex: -1, raiseNowPlayingChanged: false);
                 SetQueueList(Array.Empty<PlaylistEntry>(), selectedIndex: -1);
+                try
+                {
+                    _nowPlayingStatus = "STOPPED";
+                    _nowPlayingEntry = null;
+                    _lyricsService.Manager.Clear();
+                    _lyricsService.ResolvedVideoId = null;
+                    _lyricsWindow?.Refresh();
+                    UpdateNowPlayingText();
+                    UpdatePlaylistTitleDisplayForNowPlaying();
+                }
+                catch { /* ignore */ }
                 UpdateRefreshEnabled();
                 MarkLastPlaylistSnapshotDirty();
                 RequestPersistSnapshot();
@@ -475,7 +486,7 @@ public partial class MainWindow
         try { ApplyPlaylistWindowSettings(latestSettings, w); } catch { /* ignore */ }
         try { NormalizePlaylistWindowOuterForUiScale(latestSettings, w); } catch { /* ignore */ }
         var plS = UiScale;
-        w.MinWidth = 560.0 * plS;
+        w.MinWidth = 640.0 * plS;
         w.MinHeight = 320.0 * plS;
         _playlistWindowOuterAtUiScalePercent = _uiScalePercent;
         AppLog.Info($"Playlist bounds (open) pre-show: L={w.Left} T={w.Top} W={w.Width} H={w.Height} State={w.WindowState}");

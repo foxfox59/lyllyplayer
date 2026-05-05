@@ -937,6 +937,17 @@ public partial class PlaylistWindow : Window
             _suppressQueueListUntilInitialScroll = false;
             PlaylistListBox.Opacity = 1;
             try { _initialScrollMaskFailsafeTimer?.Stop(); } catch { /* ignore */ }
+            // Ensure the list measures to full width before the user interacts; otherwise some layouts only settle after first scroll.
+            try
+            {
+                PlaylistListBox.InvalidateMeasure();
+                PlaylistListBox.InvalidateArrange();
+                PlaylistListBox.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try { PlaylistListBox.UpdateLayout(); } catch { /* ignore */ }
+                }), DispatcherPriority.Loaded);
+            }
+            catch { /* ignore */ }
         }
         catch
         {

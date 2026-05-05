@@ -128,20 +128,29 @@
             <Border Margin="12,12,12,10"
                     CornerRadius="6"
                     Padding="10"
-                    Background="{DynamicResource {x:Static SystemColors.ControlLightBrushKey}}">
+                    Background="{DynamicResource App.Theme.Surface}">
                 <DockPanel LastChildFill="True">
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
                         <Button Content="Refresh" MinWidth="90" Padding="10,2" Margin="0,0,8,0" Click="RefreshButton_OnClick"/>
                         <Button Content="Open file" MinWidth="90" Padding="10,2" Click="OpenFileButton_OnClick"/>
                     </StackPanel>
 
-                    <TextBox x:Name="LogTextBox"
-                             MinWidth="0"
-                             MaxWidth="100000"
-                             IsReadOnly="True"
-                             TextWrapping="NoWrap"
-                             VerticalScrollBarVisibility="Auto"
-                             HorizontalScrollBarVisibility="Auto"/>
+                    <Border CornerRadius="4"
+                            Background="{DynamicResource App.Theme.SurfaceRaised}"
+                            BorderBrush="{DynamicResource App.Theme.Border}"
+                            BorderThickness="1"
+                            ClipToBounds="True"
+                            SnapsToDevicePixels="True">
+                        <TextBox x:Name="LogTextBox"
+                                 MinWidth="0"
+                                 MaxWidth="100000"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 IsReadOnly="True"
+                                 TextWrapping="NoWrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"/>
+                    </Border>
                 </DockPanel>
             </Border>
             </Grid>

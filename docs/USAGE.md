@@ -1,6 +1,6 @@
 # LyllyPlayer — usage guide
 
-This document describes the **current** behavior of the Windows desktop app (main window, playlist, YouTube modal, lyrics, options, and persistence). Update it whenever behavior or labels change.
+This document describes the **current** behavior of the Windows desktop app (main window, playlist, YouTube tab, lyrics, options, and persistence). Update it whenever behavior or labels change.
 
 ---
 
@@ -65,12 +65,11 @@ Note from the implementation: the hook consumes those keys (other apps may not s
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **↻ (Refresh)**        | Re-loads the **current playlist source** while trying to keep the current track. **Disabled** for sources that don’t support refresh (e.g. non‑YouTube HTTP stream URLs) and **disabled for compound playlists** (when multiple sources have been appended and the app cannot reliably refresh them all).                           |
 | **Window title**       | Includes the current **source** after the second em dash (URL, path, or `Search: …`).                                                                                                                                                                                                                                                                        |
-| **Youtube...**         | Opens the modeless **YouTube** window. Tabs (left to right): **Search videos**, **Open URL**, **Search playlists**, **Import playlist**, **My playlists (best-effort)**. **Open URL**: paste a **YouTube** playlist or video URL (resolved via yt-dlp) or a **direct HTTP(S) stream** URL (e.g. Icecast) for a **single-item** playlist. **Import playlist** supports **Replace** or **Append** (and optional **Remove duplicates**). The app remembers your last Replace/Append choice. |
-| **Load playlist…**     | Loads a playlist from file (**JSON**, **M3U**, **M3U8**). For M3U and folder-origin sources, optional metadata behavior follows Options (see **Options → Playlist**).                                                                                                                                                       |
-| **Local files…**       | Opens the local file picker modal to import from a **folder** and/or specific **files**. Supports **Replace** or **Append** and optional best-effort **Remove duplicates** (defaults are remembered).                                                                                                                        |
-| **Save playlist…**     | Saves the current playlist to **JSON** (app’s internal format) or **M3U/M3U8** (based on your Save dialog choice). M3U export options are under **Options → Playlist**. Per-item origin metadata (compound playlists) is preserved in JSON; M3U export follows the Options toggles (including `#LYLLY:` comments when enabled).                                                                                                                                                    |
+| **Tabs**               | The playlist window uses three tabs: **(blank)** (main playlist view), **YouTube**, and **Files**. The main tab contains the playlist list, search, sort, refresh, and removal actions. The YouTube tab contains YouTube flows. The Files tab contains local file/folder import and save/load actions. |
+| **YouTube tab**        | Sub-tabs (left to right): **Search videos**, **Open URL**, **Search playlists**, **Import playlist**, **My playlists**. **Open URL**: paste a **YouTube** playlist or video URL (resolved via yt-dlp) or a **direct HTTP(S) stream** URL (e.g. Icecast) for a **single-item** playlist. **Import playlist** supports **Replace** or **Append** (and optional **Remove duplicates**). The app remembers your last Replace/Append choice. |
+| **Files tab**          | **New playlist…** clears the current playlist. **Save playlist…** saves to **JSON** (internal format) or **M3U/M3U8** (based on your Save dialog choice). **Load playlist…** loads **JSON**, **M3U**, or **M3U8**. Local import actions add from a **folder** and/or specific **files**. Replace/Append and dedupe behavior follows the import behavior controls. |
 | **Sort** row           | Pick **Ascending / Descending** (toggle), a **sort mode** (**Title** or **Name**, **Source**, **Duration**, or **None** depending on playlist type), then **Sort** to apply. Sorting **reorders the real playlist** (playback order), not just the view.                                                                                                                                       |
-| **Clean invalid items** | Removes **missing local files** and YouTube rows marked **unavailable**, **premium-gated**, or **age-restricted** (same criteria as greyed rows). **Queued** references to removed entries are dropped; the app tries to keep the current track when it still exists.                                                      |
+| **Remove**             | **Duplicates** removes best-effort duplicates; **Missing** removes missing local files and YouTube rows marked **unavailable**, **premium-gated**, or **age-restricted** (same criteria as greyed rows). **Queued** references to removed entries are dropped; the app tries to keep the current track when it still exists. |
 | **Queue** panel        | When the song **queue** is non-empty, a **Queue** list appears above the main list. **Double-click** a row to jump playback. **Right-click** context menu: **Open** / **Open file location** / **Open source** (label depends on item), **Add to queue**, **Remove from queue** (queue row only for remove).              |
 | **Playlist list**      | Full playlist in **playlist order**. **Double-click** a row to jump playback. **Right-click**: same pattern as the queue—**Open file location** for local files, **Open source** for URLs/YouTube, plus **Add to queue** / **Remove from queue** when applicable. Rows that are **queued** for “play next” show distinct styling. |
 
@@ -84,6 +83,15 @@ A **progress bar** under the overlay message reflects **metadata** loads (per-fi
 **Taking too long? [Skip metadata]** appears when **Read metadata on load** is on and you load/refresh a **folder** or **M3U** source: it cancels the slow metadata pass and **reloads the same path** with metadata reading turned off for that operation only (you keep the new playlist; this does not change your Options toggle). The “no metadata” reload runs in the background so the UI stays responsive.
 
 **Taking too long? [Stop search]** can appear during long **YouTube video search** batches; it stops the staged search and leaves whatever results were already merged (subject to **Keep incomplete playlist on cancel** under **Options → Playlist**).
+
+### Drag & drop (playlist list)
+
+You can drag and drop onto the playlist list:
+
+- **Local files / folders** (folders import recursively)
+- **Browser tabs / URLs** (http/https). Dropping a YouTube playlist URL (or a watch URL containing a `list=...` parameter) uses the same URL import flow as **Open URL**.
+
+Unsupported drops are ignored.
 
 ---
 

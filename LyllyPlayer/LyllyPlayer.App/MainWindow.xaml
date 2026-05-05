@@ -254,7 +254,7 @@
             <Border x:Name="MainPlaybackCardBorder"
                     CornerRadius="6"
                     SnapsToDevicePixels="True"
-                    Background="{DynamicResource {x:Static SystemColors.ControlLightBrushKey}}"
+                    Background="{DynamicResource App.Theme.Surface}"
                     BorderBrush="{DynamicResource App.Theme.Border}"
                     BorderThickness="1">
                 <Grid x:Name="PlaybackCardInnerGrid">

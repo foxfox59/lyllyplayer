@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows;
 
 namespace LyllyPlayer.Utils;
@@ -85,9 +87,15 @@ public static class PlaylistDragDropHelper
             else if (data.GetDataPresent(System.Windows.DataFormats.Text))
                 text = (data.GetData(System.Windows.DataFormats.Text) as string) ?? "";
             else if (data.GetDataPresent("UniformResourceLocatorW"))
-                text = (data.GetData("UniformResourceLocatorW") as string) ?? "";
+                text = TryReadStringLikeData(data.GetData("UniformResourceLocatorW")) ?? "";
             else if (data.GetDataPresent("UniformResourceLocator"))
-                text = (data.GetData("UniformResourceLocator") as string) ?? "";
+                text = TryReadStringLikeData(data.GetData("UniformResourceLocator")) ?? "";
+            else if (data.GetDataPresent(System.Windows.DataFormats.Html) || data.GetDataPresent("HTML Format"))
+            {
+                var htmlRaw = data.GetData(System.Windows.DataFormats.Html) ?? data.GetData("HTML Format");
+                var html = TryReadStringLikeData(htmlRaw) ?? "";
+                text = ExtractUrlFromHtmlBestEffort(html) ?? "";
+            }
 
             text = (text ?? "").Trim();
             return !string.IsNullOrWhiteSpace(text);
@@ -96,6 +104,53 @@ public static class PlaylistDragDropHelper
         {
             return false;
         }
+    }
+
+    private static string? TryReadStringLikeData(object? data)
+    {
+        try
+        {
+            if (data is null)
+                return null;
+            if (data is string s)
+                return s;
+            if (data is byte[] bytes && bytes.Length > 0)
+            {
+                // URL drops are commonly UTF-16LE null-terminated (UniformResourceLocatorW) or ANSI/UTF8.
+                var u16 = Encoding.Unicode.GetString(bytes);
+                var trimmedU16 = u16.Trim('\0', '\r', '\n', ' ', '\t');
+                if (!string.IsNullOrWhiteSpace(trimmedU16))
+                    return trimmedU16;
+
+                var u8 = Encoding.UTF8.GetString(bytes);
+                var trimmedU8 = u8.Trim('\0', '\r', '\n', ' ', '\t');
+                if (!string.IsNullOrWhiteSpace(trimmedU8))
+                    return trimmedU8;
+            }
+        }
+        catch { /* ignore */ }
+        return null;
+    }
+
+    private static string? ExtractUrlFromHtmlBestEffort(string html)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(html))
+                return null;
+
+            // "HTML Format" payload may include a header; just search for href.
+            var m = Regex.Match(html, "href\\s*=\\s*\"(?<u>https?://[^\"]+)\"", RegexOptions.IgnoreCase);
+            if (m.Success)
+                return m.Groups["u"].Value;
+
+            // Fallback: first http(s) looking token.
+            var m2 = Regex.Match(html, "(?<u>https?://\\S+)", RegexOptions.IgnoreCase);
+            if (m2.Success)
+                return m2.Groups["u"].Value.TrimEnd('"', '\'', '>', ')', ']');
+        }
+        catch { /* ignore */ }
+        return null;
     }
 
     private static List<string> ParseUrlsFromText(string raw)

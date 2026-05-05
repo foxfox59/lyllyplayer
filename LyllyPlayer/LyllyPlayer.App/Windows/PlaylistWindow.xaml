@@ -12,11 +12,12 @@
         AllowsTransparency="True"
         Width="760"
         Height="720"
+        MinWidth="640"
         MinHeight="320"
         ShowInTaskbar="False"
         WindowStartupLocation="Manual"
         >
-        <!-- Window MinWidth set by MainWindow code-behind to 560.0 * UiScale -->
+        <!-- Window MinWidth is also enforced by MainWindow code-behind (scaled). -->
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="0"
                             ResizeBorderThickness="8,0,8,8"
@@ -124,20 +125,23 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="1" Margin="{DynamicResource App.Theme.WindowChromeBodyInsetMargin}">
+        <Grid Grid.Row="1"
+              Margin="{DynamicResource App.Theme.WindowChromeBodyInsetMargin}"
+              HorizontalAlignment="Stretch">
         <TabControl x:Name="PlaylistTabs"
                     Margin="12,12,12,12"
-                    Padding="10">
+                    Padding="10"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    VerticalContentAlignment="Stretch">
             <TabControl.ItemContainerStyle>
-                <Style TargetType="{x:Type TabItem}">
+                <Style TargetType="{x:Type TabItem}" BasedOn="{StaticResource {x:Type TabItem}}">
                     <Setter Property="MinWidth" Value="96"/>
-                    <Setter Property="Background" Value="{DynamicResource App.Theme.SurfaceRaised}"/>
-                    <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
-                    <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
                 </Style>
             </TabControl.ItemContainerStyle>
-            <TabItem Header="">
-                <Grid>
+            <TabItem Header="Playlist">
+                <Grid HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
@@ -234,26 +238,34 @@
                             BorderThickness="1"
                             CornerRadius="6"
                             Padding="8,6"
-                            HorizontalAlignment="Left">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="Search"
+                            HorizontalAlignment="Stretch">
+                        <Grid VerticalAlignment="Center">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="Search"
                                        VerticalAlignment="Center"
                                        Margin="0,0,8,0"
                                        Foreground="{DynamicResource App.Theme.ForegroundSubtle}"/>
                             <TextBox x:Name="PlaylistFilterTextBox"
-                                     Width="280"
+                                     Grid.Column="1"
                                      Height="20"
                                      MinHeight="20"
                                      Padding="6,0"
                                      VerticalContentAlignment="Center"
                                      Margin="0,0,8,0"
+                                     HorizontalAlignment="Stretch"
                                      TextChanged="PlaylistFilterTextBox_TextChanged"/>
                             <Button x:Name="PlaylistFilterClearButton"
+                                    Grid.Column="2"
                                     Style="{StaticResource App.CompactMonoButton}"
                                     Width="46"
                                     Content="Clear"
                                     Click="PlaylistFilterClearButton_OnClick"/>
-                        </StackPanel>
+                        </Grid>
                     </Border>
 
                     <Grid Grid.Row="2">
@@ -285,8 +297,11 @@
                     <ListBox x:Name="QueuedListBox"
                              Grid.Row="1"
                              Background="Transparent"
+                             HorizontalAlignment="Stretch"
+                             HorizontalContentAlignment="Stretch"
                              VirtualizingStackPanel.IsVirtualizing="True"
                              VirtualizingStackPanel.VirtualizationMode="Recycling"
+                             VirtualizingStackPanel.ScrollUnit="Pixel"
                              ScrollViewer.CanContentScroll="True"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
@@ -378,10 +393,14 @@
 
             <ListBox x:Name="PlaylistListBox"
                      Grid.Row="1"
-                     Background="{DynamicResource {x:Static SystemColors.ControlLightBrushKey}}"
+                     Background="{DynamicResource App.Theme.Surface}"
+                     MinWidth="520"
+                     HorizontalAlignment="Stretch"
+                     HorizontalContentAlignment="Stretch"
                      AllowDrop="True"
                      VirtualizingStackPanel.IsVirtualizing="True"
                      VirtualizingStackPanel.VirtualizationMode="Recycling"
+                     VirtualizingStackPanel.ScrollUnit="Pixel"
                      ScrollViewer.CanContentScroll="True"
                      ScrollViewer.IsDeferredScrollingEnabled="False"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -593,7 +612,9 @@
             </TabItem>
 
             <TabItem Header="YouTube">
-                <views:YoutubeTabView x:Name="YoutubeTab"/>
+                <views:YoutubeTabView x:Name="YoutubeTab"
+                                      HorizontalAlignment="Stretch"
+                                      VerticalAlignment="Stretch"/>
             </TabItem>
 
             <TabItem Header="Files">
@@ -622,7 +643,10 @@
                                 Margin="0,0,6,0"
                                 Click="LoadPlaylistButton_OnClick"/>
                     </StackPanel>
-                    <views:LocalFilesTabView x:Name="LocalTab" Grid.Row="1"/>
+                    <views:LocalFilesTabView x:Name="LocalTab"
+                                             Grid.Row="1"
+                                             HorizontalAlignment="Stretch"
+                                             VerticalAlignment="Stretch"/>
                 </Grid>
             </TabItem>
         </TabControl>

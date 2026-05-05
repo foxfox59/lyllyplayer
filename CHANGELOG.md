@@ -1,6 +1,12 @@
 ### What's new, pussycat?
 
-- Documentation: refreshed **README**, **docs/USAGE.md**, **docs/RELEASING.md**, and **docs/SCREENSHOTS.md** — **ffmpeg** removed as a user dependency (playback/metadata use **LibVLC**); **yt-dlp** / optional **Node** documented to match **Options → Tools**.
+- 2.4.0:
+  - Playlist window: YouTube + local files are now tabs (YouTube / Files) instead of separate modals.
+  - Playlist: new **Remove** section with **Duplicates** and **Missing** actions.
+  - Drag & drop: drop local files/folders and browser URLs onto the playlist (including YouTube playlist URLs and watch URLs containing `list=...`).
+  - UI: tab header theming improved for transparency (selected header avoids double-alpha darkening).
+  - UI: scrollbar thumbs now have a consistent rounded outline and fixed sizing across virtualized lists.
+  - QOL: **New playlist…** fully resets now playing status and clears lyrics state (Lyrics window no longer shows stale lines).
 - 1.6.2: slight Options changes
   - Options window tabs reworked (Advanced/Search/Local clutter moved under Playlist + Tools)
   - New Log tab in Options (embedded log tail + Pause + popout)
@@ -52,3 +58,4 @@
 - 1.2.1: fixes a rare issue that only happened when using DisplayFusion (apps were fighting for window focus). 
 - 1.2.0: introduces the **ultra-compact mode**, a simple **theme designer** and slight transparency fixes for the foreground + title text
 - 1.1.0: initial public release with no major bugs (fingers crossed)
+
