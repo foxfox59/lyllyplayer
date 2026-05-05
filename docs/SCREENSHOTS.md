@@ -2,7 +2,11 @@
 
 Most images are from around **v1.2.0** and **remain useful** for layout and theming, but labels and small controls may differ in newer builds (e.g. **lyrics…**, **Stop**, YouTube **Open URL** tab, playlist **Sort** / **Clean invalid items**, **Ultra compact**). For **accurate, current behavior**, use **[USAGE.md](USAGE.md)**.
 
-## Newest (2.1.0)
+## 2.4.1 
+
+![2.4.1](/docs/_media/241.png)
+
+## 2.1.0
 
 ![2.1.0](/docs/_media/210.png)
 
