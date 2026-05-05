@@ -2545,18 +2545,48 @@ public partial class OptionsWindow : Window
     {
         if (TryApplyDraft())
         {
+            try
+            {
+                if (IsActive)
+                {
+                    var owner = Owner ?? System.Windows.Application.Current?.MainWindow;
+                    if (owner is not null && !ReferenceEquals(owner, this))
+                        WindowActivationHelper.ActivateWindowBestEffort(owner);
+                }
+            }
+            catch { /* ignore */ }
             try { Hide(); } catch { /* ignore */ }
         }
     }
 
     private void CancelButton_OnClick(object sender, RoutedEventArgs e)
     {
+        try
+        {
+            if (IsActive)
+            {
+                var owner = Owner ?? System.Windows.Application.Current?.MainWindow;
+                if (owner is not null && !ReferenceEquals(owner, this))
+                    WindowActivationHelper.ActivateWindowBestEffort(owner);
+            }
+        }
+        catch { /* ignore */ }
         try { Hide(); } catch { /* ignore */ }
     }
 
     private void ChromeCloseButton_OnClick(object sender, RoutedEventArgs e)
     {
-        try { Hide(); } catch { }
+        try
+        {
+            if (IsActive)
+            {
+                var owner = Owner ?? System.Windows.Application.Current?.MainWindow;
+                if (owner is not null && !ReferenceEquals(owner, this))
+                    WindowActivationHelper.ActivateWindowBestEffort(owner);
+            }
+        }
+        catch { /* ignore */ }
+        try { Hide(); } catch { /* ignore */ }
     }
 
     private void ChromeBar_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)

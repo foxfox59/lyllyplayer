@@ -519,6 +519,16 @@ public partial class PlaylistWindow : Window
     {
         // Hiding instead of closing keeps the visual tree + bindings warm for large playlists.
         // MainWindow owns persistence on close/hide.
+        try
+        {
+            if (IsActive)
+            {
+                var owner = Owner ?? System.Windows.Application.Current?.MainWindow;
+                if (owner is not null && !ReferenceEquals(owner, this))
+                    WindowActivationHelper.ActivateWindowBestEffort(owner);
+            }
+        }
+        catch { /* ignore */ }
         try { Hide(); } catch { /* ignore */ }
     }
 

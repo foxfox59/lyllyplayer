@@ -175,11 +175,31 @@ public partial class LyricsWindow : Window
 
     private void ChromeCloseButton_OnClick(object sender, RoutedEventArgs e)
     {
+        try
+        {
+            if (IsActive)
+            {
+                var owner = Owner ?? System.Windows.Application.Current?.MainWindow;
+                if (owner is not null && !ReferenceEquals(owner, this))
+                    WindowActivationHelper.ActivateWindowBestEffort(owner);
+            }
+        }
+        catch { /* ignore */ }
         try { Hide(); } catch { /* ignore */ }
     }
 
     private void CloseButton_OnClick(object sender, RoutedEventArgs e)
     {
+        try
+        {
+            if (IsActive)
+            {
+                var owner = Owner ?? System.Windows.Application.Current?.MainWindow;
+                if (owner is not null && !ReferenceEquals(owner, this))
+                    WindowActivationHelper.ActivateWindowBestEffort(owner);
+            }
+        }
+        catch { /* ignore */ }
         try { Hide(); } catch { /* ignore */ }
     }
 

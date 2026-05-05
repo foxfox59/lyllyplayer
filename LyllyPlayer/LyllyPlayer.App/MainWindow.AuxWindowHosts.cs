@@ -16,6 +16,7 @@ public partial class MainWindow
     private AuxWindowHost<PlaylistWindow>? _playlistHost;
     private AuxWindowHost<OptionsWindow>? _optionsHost;
     private AuxWindowHost<LyricsWindow>? _lyricsHost;
+    private readonly AppWindowManager _windowManager = new();
 
     private AuxWindowHost<PlaylistWindow> GetPlaylistHost() =>
         _playlistHost ??= new AuxWindowHost<PlaylistWindow>(
@@ -398,9 +399,24 @@ public partial class MainWindow
             HandleDroppedUrlsAsync: async (urls, ct) => await HandleDroppedUrlsAsync(urls, ct).ConfigureAwait(true)
         ))
         {
-            Owner = null,
+            Owner = this,
         };
+        try { _windowManager.Register(w); } catch { /* ignore */ }
         try { w.Title = $"{GetAppTitleBase()} — Playlist"; } catch { /* ignore */ }
+
+        // Close button should behave like the main-window toggle: hide (warm reuse) unless app is shutting down.
+        w.Closing += (_, e) =>
+        {
+            try
+            {
+                if (_isShuttingDown)
+                    return;
+                e.Cancel = true;
+                w.Hide();
+                try { Activate(); } catch { /* ignore */ }
+            }
+            catch { /* ignore */ }
+        };
 
         try
         {
@@ -897,9 +913,24 @@ public partial class MainWindow
             }
         )
         {
-        Owner = null,
+        Owner = this,
         };
+        try { _windowManager.Register(w); } catch { /* ignore */ }
         try { w.Title = $"{GetAppTitleBase()} — Options"; } catch { /* ignore */ }
+
+        w.Closing += (_, e) =>
+        {
+            try
+            {
+                if (_isShuttingDown)
+                    return;
+                e.Cancel = true;
+                w.Hide();
+                try { Activate(); } catch { /* ignore */ }
+            }
+            catch { /* ignore */ }
+        };
+
         w.Closing += (_, _) =>
         {
         if (_isShuttingDown)
@@ -988,9 +1019,23 @@ public partial class MainWindow
             getCurrentLineIndex: () => _lyricsService.Manager.GetCurrentLineIndex(_engine.CurrentPositionSeconds)
         )
         {
-            Owner = null,
+            Owner = this,
         };
+        try { _windowManager.Register(w); } catch { /* ignore */ }
         try { w.Title = $"{GetAppTitleBase()} — Lyrics"; } catch { /* ignore */ }
+
+        w.Closing += (_, e) =>
+        {
+            try
+            {
+                if (_isShuttingDown)
+                    return;
+                e.Cancel = true;
+                w.Hide();
+                try { Activate(); } catch { /* ignore */ }
+            }
+            catch { /* ignore */ }
+        };
 
         w.Closing += (_, _) =>
         {
