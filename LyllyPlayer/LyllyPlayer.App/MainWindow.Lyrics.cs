@@ -5,6 +5,9 @@ namespace LyllyPlayer;
 
 public partial class MainWindow
 {
+    /// <summary>Lyrics resolve / preheat detail — only when app log is set to Verbose (see <see cref="AppLogInfoTier.Diagnostic"/>); hidden for Basic and ErrorsAndWarnings.</summary>
+    private static void LogLyricsVerbose(string message) => AppLog.Info(message, AppLogInfoTier.Diagnostic);
+
     private void TryLoadLyricsFromCacheForCurrentBestEffort()
     {
         try

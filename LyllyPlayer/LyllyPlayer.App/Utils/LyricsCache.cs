@@ -11,6 +11,9 @@ public static class LyricsCache
     private const string FileName = "lyrics-cache.json";
     private const int DefaultTtlDays = 30;
     private const int MissTtlHours = 24;
+
+    /// <summary>How long a cached "no lyrics" result suppresses re-fetching (same value as internal miss expiry).</summary>
+    public const int MissEntryTtlHours = MissTtlHours;
     // NOTE: This used to be a "poor man's exploit guard" but it also prevented legitimate caches from loading
     // at startup (forcing network fetches and making lyrics appear late). Keep best-effort parsing instead.
     private const int MaxFileBytes = int.MaxValue;

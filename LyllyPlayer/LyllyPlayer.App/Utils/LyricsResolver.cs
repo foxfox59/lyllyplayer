@@ -1114,7 +1114,7 @@ public static class LyricsResolver
         var queryString = System.Web.HttpUtility.UrlEncode(query.Trim());
         var url = $"https://lrclib.net/api/search?q={queryString}";
         if (!fallback)
-            AppLog.Info($"LRCLIB query url: {url}");
+            AppLog.Info($"LRCLIB query url: {url}", AppLogInfoTier.Diagnostic);
 
         try
         {
@@ -1183,7 +1183,7 @@ public static class LyricsResolver
 
                 // Minimal diagnostic log; query URL already logged for non-fallback calls.
                 if (!fallback)
-                    AppLog.Info($"LRCLIB scoring: track={lrclibName ?? "(none)"} artist={lrclibArtist ?? "(none)"} overlapScore={combinedScore:F0} total={score:F0} query=\"{query}\"");
+                    AppLog.Info($"LRCLIB scoring: track={lrclibName ?? "(none)"} artist={lrclibArtist ?? "(none)"} overlapScore={combinedScore:F0} total={score:F0} query=\"{query}\"", AppLogInfoTier.Diagnostic);
 
                 if (score >= MinimumMatchScore)
                     candidates.Add((score, lrc, lrclibDuration, lrclibArtist, lrclibName));

@@ -10241,7 +10241,7 @@ public partial class MainWindow : Window
     private async Task TryResolveLyricsAsync()
     {
         var entry = _engine.GetCurrent();
-        AppLog.Info($"TryResolveLyricsAsync: entry={entry?.VideoId ?? "(null)"}, lyricsEnabled={_lyricsEnabled}, resolvedVideoId={_lyricsService.ResolvedVideoId ?? "(none)"}");
+        LogLyricsVerbose($"TryResolveLyricsAsync: entry={entry?.VideoId ?? "(null)"}, lyricsEnabled={_lyricsEnabled}, resolvedVideoId={_lyricsService.ResolvedVideoId ?? "(none)"}");
         if (entry is null)
         {
             // When the engine has no current entry (e.g., stopped), preserve lyrics so the
@@ -10260,7 +10260,7 @@ public partial class MainWindow : Window
             if (!string.IsNullOrWhiteSpace(entry.VideoId) &&
                 string.Equals(_lyricsResolveInFlightVideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
             {
-                AppLog.Info($"TryResolveLyricsAsync: resolve already in-flight for {entry.VideoId}, skipping");
+                LogLyricsVerbose($"TryResolveLyricsAsync: skip — another resolve for this track is still running (single-flight) id={entry.VideoId}");
                 return;
             }
         }
@@ -10282,6 +10282,8 @@ public partial class MainWindow : Window
             var resolveCt = _lyricsResolveCts.Token;
             _lyricsResolveInFlightVideoId = requestedVideoId;
 
+            try
+            {
             if (_lyricsEnabled && !string.IsNullOrWhiteSpace(entry.VideoId))
             {
                 var isLocalFile = entry.VideoId.StartsWith("local:");
@@ -10289,7 +10291,7 @@ public partial class MainWindow : Window
                 // Local files: only resolve if enabled in settings
                 if (isLocalFile && !_lyricsLocalFilesEnabled)
                 {
-                    AppLog.Info($"TryResolveLyricsAsync: skipped for {entry.VideoId} — local files lyrics disabled");
+                    LogLyricsVerbose($"TryResolveLyricsAsync: skipped for {entry.VideoId} — local files lyrics disabled");
                     _lyricsWindow?.Refresh();
                 }
                 // Local files: resolve via LRCLIB (check cache first, cache results)
@@ -10298,6 +10300,8 @@ public partial class MainWindow : Window
                     var cacheKey = $"lyr_{entry.VideoId}";
                     if (LyricsCache.IsMiss(cacheKey))
                     {
+                        LogLyricsVerbose(
+                            $"TryResolveLyricsAsync: lyrics cache has a stored miss for {entry.VideoId} (key={cacheKey}) — not re-fetching for ~{LyricsCache.MissEntryTtlHours}h; clear lyrics cache to retry");
                         _lyricsWindow?.Refresh();
                         return;
                     }
@@ -10307,7 +10311,7 @@ public partial class MainWindow : Window
                         var metadata = LrcParser.TryExtractMetadata(cached);
                         var cacheArtist = metadata?.Artist ?? entry.Channel;
                         var cacheTitle = metadata?.Title ?? entry.Title;
-                        AppLog.Info($"TryResolveLyricsAsync: cache hit for {entry.VideoId}, lines={LrcParser.Parse(cached, CancellationToken.None).Count}, artist={cacheArtist ?? "(none)"}, title={cacheTitle ?? "(none)"}");
+                        LogLyricsVerbose($"TryResolveLyricsAsync: cache hit for {entry.VideoId}, lines={LrcParser.Parse(cached, CancellationToken.None).Count}, artist={cacheArtist ?? "(none)"}, title={cacheTitle ?? "(none)"}");
                         _lyricsService.Manager.Parse(cached, artist: cacheArtist, title: cacheTitle);
                         UpdateNowPlayingText();
                         UpdatePlaylistTitleDisplayForNowPlaying();
@@ -10315,7 +10319,7 @@ public partial class MainWindow : Window
                         return;
                     }
 
-                    AppLog.Info($"TryResolveLyricsAsync: fetching lyrics for local file {entry.VideoId} via LRCLIB");
+                    LogLyricsVerbose($"TryResolveLyricsAsync: fetching lyrics for local file {entry.VideoId} via LRCLIB");
                     // WebpageUrl holds the actual file path for local entries (VideoId is local:{filename}:{hash}, not a path)
                     var localFilePath = entry.WebpageUrl;
                     if (string.IsNullOrWhiteSpace(localFilePath))
@@ -10333,7 +10337,7 @@ public partial class MainWindow : Window
                     {
                         searchTitle = syncTitle;
                         searchArtist = syncArtist;
-                        AppLog.Info($"TryResolveLyricsAsync: read metadata for {entry.VideoId}: title={searchTitle ?? "(none)"}, artist={searchArtist ?? "(none)"}");
+                        LogLyricsVerbose($"TryResolveLyricsAsync: read metadata for {entry.VideoId}: title={searchTitle ?? "(none)"}, artist={searchArtist ?? "(none)"}");
                     }
 
                     // Use sync duration if available (entry.DurationSeconds may be null if enrichment hasn't finished)
@@ -10357,7 +10361,7 @@ public partial class MainWindow : Window
                         var stillCurrentTrack = string.Equals(_engine.GetCurrent()?.VideoId, requestedVideoId, StringComparison.OrdinalIgnoreCase);
                         if (!stillLatestResolve || !stillCurrentTrack)
                         {
-                            AppLog.Info(!string.IsNullOrWhiteSpace(lrcLrclib)
+                            LogLyricsVerbose(!string.IsNullOrWhiteSpace(lrcLrclib)
                                 ? $"TryResolveLyricsAsync: LRCLIB fetch completed but track changed, cached for {requestedVideoId}"
                                 : $"TryResolveLyricsAsync: LRCLIB fetch completed but track changed, no lyrics for {requestedVideoId}");
                             return;
@@ -10369,11 +10373,11 @@ public partial class MainWindow : Window
                             if (entry.DurationSeconds.HasValue && lrclibDuration.HasValue)
                             {
                                 syncOffset = entry.DurationSeconds.Value - lrclibDuration.Value;
-                                AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, localDur={entry.DurationSeconds}s, lrclibDur={lrclibDuration}s, offset={syncOffset:+0.##;-0.##;0}s, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
+                                LogLyricsVerbose($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, localDur={entry.DurationSeconds}s, lrclibDur={lrclibDuration}s, offset={syncOffset:+0.##;-0.##;0}s, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
                             }
                             else
                             {
-                                AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
+                                LogLyricsVerbose($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
                             }
                             _lyricsService.Manager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
                             Dispatcher.Invoke(() =>
@@ -10386,7 +10390,7 @@ public partial class MainWindow : Window
                         }
                         else if (isDefinitiveMiss)
                         {
-                            AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (localDur={duration?.ToString("F0") ?? "null"}s)");
+                            LogLyricsVerbose($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (localDur={duration?.ToString("F0") ?? "null"}s)");
                             LyricsCache.SetMiss(cacheKey);
                         }
                     }
@@ -10410,6 +10414,8 @@ public partial class MainWindow : Window
                     var cacheKey = $"yt_{entry.VideoId}";
                     if (LyricsCache.IsMiss(cacheKey))
                     {
+                        LogLyricsVerbose(
+                            $"TryResolveLyricsAsync: lyrics cache has a stored miss for {entry.VideoId} (key={cacheKey}) — not re-fetching for ~{LyricsCache.MissEntryTtlHours}h; clear lyrics cache to retry");
                         _lyricsWindow?.Refresh();
                         return;
                     }
@@ -10419,7 +10425,7 @@ public partial class MainWindow : Window
                         var metadata = LrcParser.TryExtractMetadata(cached);
                         var cacheArtist = metadata?.Artist ?? entry.Channel;
                         var cacheTitle = metadata?.Title ?? entry.Title;
-                        AppLog.Info($"TryResolveLyricsAsync: cache hit for {entry.VideoId}, lines={LrcParser.Parse(cached, CancellationToken.None).Count}, artist={cacheArtist ?? "(none)"}, title={cacheTitle ?? "(none)"}");
+                        LogLyricsVerbose($"TryResolveLyricsAsync: cache hit for {entry.VideoId}, lines={LrcParser.Parse(cached, CancellationToken.None).Count}, artist={cacheArtist ?? "(none)"}, title={cacheTitle ?? "(none)"}");
                         _lyricsService.Manager.Parse(cached, artist: cacheArtist, title: cacheTitle);
                         UpdateNowPlayingText();
                         UpdatePlaylistTitleDisplayForNowPlaying();
@@ -10427,7 +10433,7 @@ public partial class MainWindow : Window
                         return;
                     }
 
-                    AppLog.Info($"TryResolveLyricsAsync: fetching lyrics for {requestedVideoId} via yt-dlp at '{ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp").EffectiveFileName}'");
+                    LogLyricsVerbose($"TryResolveLyricsAsync: fetching lyrics for {requestedVideoId} via yt-dlp at '{ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp").EffectiveFileName}'");
                     // Fetch from YouTube via yt-dlp
                     var resolvedYtDlp = ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp");
                     try
@@ -10440,7 +10446,7 @@ public partial class MainWindow : Window
                         var stillCurrentTrack = string.Equals(_engine.GetCurrent()?.VideoId, requestedVideoId, StringComparison.OrdinalIgnoreCase);
                         if (!stillLatestResolve || !stillCurrentTrack)
                         {
-                            AppLog.Info(!string.IsNullOrWhiteSpace(lrc)
+                            LogLyricsVerbose(!string.IsNullOrWhiteSpace(lrc)
                                 ? $"TryResolveLyricsAsync: yt-dlp fetch completed but track changed, cached for {requestedVideoId}"
                                 : $"TryResolveLyricsAsync: yt-dlp fetch completed but track changed, no lyrics for {requestedVideoId}");
                             return;
@@ -10450,7 +10456,7 @@ public partial class MainWindow : Window
                             var metadata = LrcParser.TryExtractMetadata(lrc);
                             var ytArtist = metadata?.Artist ?? entry.Channel;
                             var ytTitle = metadata?.Title ?? entry.Title;
-                            AppLog.Info($"TryResolveLyricsAsync: fetched lyrics for {requestedVideoId}, length={lrc.Length}, lines={LrcParser.Parse(lrc, CancellationToken.None).Count}, artist={ytArtist ?? "(none)"}, title={ytTitle ?? "(none)"}");
+                            LogLyricsVerbose($"TryResolveLyricsAsync: fetched lyrics for {requestedVideoId}, length={lrc.Length}, lines={LrcParser.Parse(lrc, CancellationToken.None).Count}, artist={ytArtist ?? "(none)"}, title={ytTitle ?? "(none)"}");
                             _lyricsService.Manager.Parse(lrc, artist: ytArtist, title: ytTitle);
                             Dispatcher.Invoke(() =>
                             {
@@ -10461,7 +10467,7 @@ public partial class MainWindow : Window
                         }
                         else
                         {
-                            AppLog.Info($"TryResolveLyricsAsync: yt-dlp returned no lyrics for {requestedVideoId}, trying LRCLIB fallback");
+                            LogLyricsVerbose($"TryResolveLyricsAsync: yt-dlp returned no lyrics for {requestedVideoId}, trying LRCLIB fallback");
                             _lyricsWindow?.Refresh();
                             // Fallback: try LRCLIB using track title and channel (artist)
                             var title = entry.Title ?? "";
@@ -10479,7 +10485,7 @@ public partial class MainWindow : Window
                                 stillCurrentTrack = string.Equals(_engine.GetCurrent()?.VideoId, requestedVideoId, StringComparison.OrdinalIgnoreCase);
                                 if (!stillLatestResolve || !stillCurrentTrack)
                                 {
-                                    AppLog.Info(!string.IsNullOrWhiteSpace(lrcLrclib)
+                                    LogLyricsVerbose(!string.IsNullOrWhiteSpace(lrcLrclib)
                                         ? $"TryResolveLyricsAsync: LRCLIB fetch completed but track changed, cached for {requestedVideoId}"
                                         : $"TryResolveLyricsAsync: LRCLIB fetch completed but track changed, no lyrics for {requestedVideoId}");
                                     return;
@@ -10493,11 +10499,11 @@ public partial class MainWindow : Window
                                     if (entry.DurationSeconds.HasValue && lrclibDuration.HasValue)
                                     {
                                         syncOffset = entry.DurationSeconds.Value - lrclibDuration.Value;
-                                        AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, ytDur={entry.DurationSeconds}s, lrclibDur={lrclibDuration}s, offset={syncOffset:+0.##;-0.##;0}s, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
+                                        LogLyricsVerbose($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, ytDur={entry.DurationSeconds}s, lrclibDur={lrclibDuration}s, offset={syncOffset:+0.##;-0.##;0}s, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
                                     }
                                     else
                                     {
-                                        AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
+                                        LogLyricsVerbose($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
                                     }
                                     _lyricsService.Manager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
                                     Dispatcher.Invoke(() =>
@@ -10510,7 +10516,7 @@ public partial class MainWindow : Window
                                 }
                                 else if (isDefinitiveMiss)
                                 {
-                                    AppLog.Info($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
+                                    LogLyricsVerbose($"TryResolveLyricsAsync: LRCLIB returned no lyrics for {title} (ytDur={entry.DurationSeconds?.ToString("F0") ?? "null"}s)");
                                     LyricsCache.SetMiss(cacheKey);
                                 }
                             }
@@ -10541,18 +10547,21 @@ public partial class MainWindow : Window
             }
             else
             {
-                AppLog.Info($"TryResolveLyricsAsync: skipped for {entry.VideoId} — enabled={_lyricsEnabled}, videoId={(string.IsNullOrWhiteSpace(entry.VideoId) ? "(empty)" : entry.VideoId)}");
+                LogLyricsVerbose($"TryResolveLyricsAsync: skipped for {entry.VideoId} — enabled={_lyricsEnabled}, videoId={(string.IsNullOrWhiteSpace(entry.VideoId) ? "(empty)" : entry.VideoId)}");
                 _lyricsWindow?.Refresh();
+            }
+
+            }
+            finally
+            {
+                try { _lyricsResolveInFlightVideoId = null; } catch { /* ignore */ }
             }
 
         }
         else
         {
-            AppLog.Info($"TryResolveLyricsAsync: already resolved for {entry.VideoId}, skipping");
+            LogLyricsVerbose($"TryResolveLyricsAsync: already resolved for {entry.VideoId}, skipping");
         }
-
-        // Clear single-flight marker after the attempt completes (success, miss, or error).
-        try { _lyricsResolveInFlightVideoId = null; } catch { /* ignore */ }
     }
 
     /// <summary>
@@ -10616,16 +10625,23 @@ public partial class MainWindow : Window
             try
             {
                 var kind = entry.VideoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase) ? "local file" : "YouTube";
-                AppLog.Info($"Preheat: starting to preheat lyrics for {kind} {entry.VideoId}");
+                LogLyricsVerbose($"Preheat: starting to preheat lyrics for {kind} {entry.VideoId}");
             }
             catch { /* ignore */ }
 
             var cacheKey = entry.VideoId.StartsWith("local:") ? $"lyr_{entry.VideoId}" : $"yt_{entry.VideoId}";
             if (LyricsCache.IsMiss(cacheKey))
+            {
+                LogLyricsVerbose(
+                    $"Preheat: skip — lyrics cache has stored miss for {entry.VideoId} (key={cacheKey}), no fetch until ~{LyricsCache.MissEntryTtlHours}h TTL expires");
                 return;
+            }
             var cached = LyricsCache.Get(cacheKey);
             if (cached != null)
-                return; // Already cached
+            {
+                LogLyricsVerbose($"Preheat: skip — already cached for {entry.VideoId} (key={cacheKey})");
+                return;
+            }
 
             if (entry.VideoId.StartsWith("local:"))
             {
@@ -10644,11 +10660,12 @@ public partial class MainWindow : Window
                 if (!string.IsNullOrWhiteSpace(lrcLrclib))
                 {
                     LyricsCache.Set(cacheKey, lrcLrclib);
-                    AppLog.Info($"Preheat: cached lyrics for local file {entry.VideoId}");
+                    LogLyricsVerbose($"Preheat: cached lyrics for local file {entry.VideoId}");
                 }
                 else if (isDefinitiveMiss)
                 {
                     LyricsCache.SetMiss(cacheKey);
+                    LogLyricsVerbose($"Preheat: stored lyrics miss (local) for {entry.VideoId} (key={cacheKey})");
                 }
             }
             else
@@ -10659,7 +10676,7 @@ public partial class MainWindow : Window
                 if (!string.IsNullOrWhiteSpace(lrc))
                 {
                     LyricsCache.Set(cacheKey, lrc);
-                    AppLog.Info($"Preheat: cached lyrics for {entry.VideoId} via yt-dlp");
+                    LogLyricsVerbose($"Preheat: cached lyrics for {entry.VideoId} via yt-dlp");
                 }
                 else
                 {
@@ -10670,11 +10687,12 @@ public partial class MainWindow : Window
                     if (!string.IsNullOrWhiteSpace(lrcLrclib))
                     {
                         LyricsCache.Set(cacheKey, lrcLrclib);
-                        AppLog.Info($"Preheat: cached lyrics for {entry.VideoId} via LRCLIB");
+                        LogLyricsVerbose($"Preheat: cached lyrics for {entry.VideoId} via LRCLIB");
                     }
                     else if (isDefinitiveMiss)
                     {
                         LyricsCache.SetMiss(cacheKey);
+                        LogLyricsVerbose($"Preheat: stored lyrics miss (YouTube/LRCLIB) for {entry.VideoId} (key={cacheKey})");
                     }
                 }
             }
