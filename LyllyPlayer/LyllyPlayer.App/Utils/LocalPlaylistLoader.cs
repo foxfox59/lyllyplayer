@@ -39,6 +39,64 @@ public static class LocalPlaylistLoader
 
     private const int MetadataLoadParallelism = 6;
 
+    /// <summary>
+    /// Expands a set of paths (files and/or directories) into a de-duplicated list of supported audio files.
+    /// Directories are always scanned recursively.
+    /// </summary>
+    public static List<string> ExpandToSupportedAudioFilesRecursive(IReadOnlyList<string> paths, CancellationToken ct = default)
+    {
+        var results = new List<string>();
+        try
+        {
+            if (paths is null || paths.Count == 0)
+                return results;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var raw in paths)
+            {
+                ct.ThrowIfCancellationRequested();
+                var p = (raw ?? "").Trim();
+                if (string.IsNullOrWhiteSpace(p))
+                    continue;
+
+                try
+                {
+                    if (Directory.Exists(p))
+                    {
+                        foreach (var f in EnumerateAudioFiles(p, includeSubfolders: true, ct))
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            if (seen.Add(f))
+                                results.Add(f);
+                        }
+                        continue;
+                    }
+                }
+                catch { /* ignore */ }
+
+                try
+                {
+                    if (!File.Exists(p))
+                        continue;
+                    var ext = Path.GetExtension(p) ?? "";
+                    if (!SupportedAudioExtensions.Contains(ext))
+                        continue;
+                    var full = "";
+                    try { full = Path.GetFullPath(p); } catch { full = p; }
+                    if (seen.Add(full))
+                        results.Add(full);
+                }
+                catch { /* ignore */ }
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return results;
+    }
+
     /// <summary>Fast path: no metadata probe; filenames only.</summary>
     public static List<PlaylistEntry> LoadFolder(string folder, bool includeSubfolders, bool readMetadataOnLoad = false)
     {

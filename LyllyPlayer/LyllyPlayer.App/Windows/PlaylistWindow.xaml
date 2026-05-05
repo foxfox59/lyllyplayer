@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:local="clr-namespace:LyllyPlayer"
+        xmlns:views="clr-namespace:LyllyPlayer.Windows"
         Title="LyllyPlayer — Playlist"
         Icon="pack://application:,,,/Assets/LyllyPlayer.ico"
         Background="Transparent"
@@ -124,91 +125,142 @@
         </Border>
 
         <Grid Grid.Row="1" Margin="{DynamicResource App.Theme.WindowChromeBodyInsetMargin}">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
+        <TabControl x:Name="PlaylistTabs"
+                    Margin="12,12,12,12"
+                    Padding="10">
+            <TabControl.ItemContainerStyle>
+                <Style TargetType="{x:Type TabItem}">
+                    <Setter Property="MinWidth" Value="96"/>
+                    <Setter Property="Background" Value="{DynamicResource App.Theme.SurfaceRaised}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource App.Theme.Border}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource App.Theme.Foreground}"/>
+                </Style>
+            </TabControl.ItemContainerStyle>
+            <TabItem Header="">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
 
-         <Grid Grid.Row="0" Margin="12,12,12,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
+                        <Border Grid.Column="0"
+                                Background="{DynamicResource App.Theme.SurfaceRaised}"
+                                BorderBrush="{DynamicResource App.Theme.Border}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="8,6"
+                                Margin="0,0,10,0">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="RefreshButton"
+                                        Style="{StaticResource App.CompactMonoButton}"
+                                        Margin="0,0,8,0"
+                                        Content="&#x21BB;"
+                                        Click="RefreshButton_OnClick"/>
+                                <TextBlock Text="Sort"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"/>
+                                <ToggleButton x:Name="SortDescToggleButton"
+                                              Width="54"
+                                              Height="20"
+                                              MinHeight="20"
+                                              Margin="0,0,8,0"
+                                              Padding="0"
+                                              Content="Asc"
+                                              FontFamily="{StaticResource App.MonoFont}"
+                                              FontSize="11"
+                                              Checked="SortDescToggleButton_OnChecked"
+                                              Unchecked="SortDescToggleButton_OnUnchecked"/>
+                                <ComboBox x:Name="SortModeComboBox"
+                                          Width="170"
+                                          Height="20"
+                                          Margin="0,0,8,0"
+                                          VerticalContentAlignment="Center"
+                                          SelectionChanged="SortModeComboBox_OnSelectionChanged"/>
+                                <Button x:Name="ApplySortButton"
+                                        Style="{StaticResource App.CompactMonoButton}"
+                                        Width="46"
+                                        Margin="0,0,0,0"
+                                        Content="Sort"
+                                        Click="ApplySortButton_OnClick"/>
+                            </StackPanel>
+                        </Border>
 
-            <Button x:Name="RefreshButton"
-                    Content="&#x21BB;"
-                    MinWidth="44"
-                    Height="30"
-                    Margin="0,0,8,0"
-                    Click="RefreshButton_OnClick"/>
+                        <Border Grid.Column="2"
+                                Background="{DynamicResource App.Theme.SurfaceRaised}"
+                                BorderBrush="{DynamicResource App.Theme.Border}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="6,4">
+                            <Grid VerticalAlignment="Center">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="Remove"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"/>
+                                <StackPanel Grid.Column="1" Orientation="Vertical">
+                                    <Button x:Name="RemoveDuplicatesButton"
+                                            Style="{StaticResource App.CompactMonoButton}"
+                                            Width="90"
+                                            Margin="0,0,0,4"
+                                            Content="Duplicates"
+                                            Click="RemoveDuplicatesButton_OnClick"/>
+                                    <Button x:Name="RemoveMissingButton"
+                                            Style="{StaticResource App.CompactMonoButton}"
+                                            Width="90"
+                                            Margin="0,0,0,0"
+                                            Content="Missing"
+                                            Click="RemoveMissingButton_OnClick"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </Grid>
 
-            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                <Button x:Name="SavePlaylistButton"
-                        Content="Save playlist..."
-                        MinWidth="110"
-                        Height="30"
-                        Margin="0,0,6,0"
-                        Click="SavePlaylistButton_OnClick"/>
-                <Button x:Name="LoadPlaylistButton"
-                        Content="Load playlist..."
-                        MinWidth="110"
-                        Height="30"
-                        Margin="0,0,6,0"
-                        Click="LoadPlaylistButton_OnClick"/>
-                <Button x:Name="SearchYoutubeButton"
-                        Content="Youtube..."
-                        MinWidth="108"
-                        Height="30"
-                        Margin="0,0,6,0"
-                        Click="SearchYoutubeButton_OnClick"/>
-                <Button x:Name="LoadFolderButton"
-                        Content="Local files..."
-                        MinWidth="104"
-                        Height="30"
-                        Click="LoadFolderButton_OnClick"/>
-            </StackPanel>
-        </Grid>
-        <StackPanel Grid.Row="1" Margin="12,8,12,0" Orientation="Horizontal">
-            <TextBlock Text="Sort"
-                       VerticalAlignment="Center"
-                       Margin="0,0,8,0"/>
-            <ToggleButton x:Name="SortDescToggleButton"
-                          Width="70"
-                          Height="28"
-                          Margin="0,0,8,0"
-                          Content="Asc"
-                          Checked="SortDescToggleButton_OnChecked"
-                          Unchecked="SortDescToggleButton_OnUnchecked"/>
-            <ComboBox x:Name="SortModeComboBox"
-                      Width="170"
-                      Height="28"
-                      Margin="0,0,8,0"
-                      Background="{DynamicResource {x:Static SystemColors.ControlBrushKey}}"
-                      Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}"
-                      BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}"
-                      VerticalContentAlignment="Center"
-                      SelectionChanged="SortModeComboBox_OnSelectionChanged"/>
-            <Button x:Name="ApplySortButton"
-                    Content="Sort"
-                    MinWidth="62"
-                    Height="28"
-                    Margin="0,0,8,0"
-                    Click="ApplySortButton_OnClick"/>
-            <Button x:Name="CleanInvalidItemsButton"
-                    Content="Clean invalid items"
-                    MinWidth="148"
-                    Height="28"
-                    Margin="0,0,0,0"
-                    Click="CleanInvalidItemsButton_OnClick"/>                    
-        </StackPanel>
+                    <Border Grid.Row="1"
+                            Margin="0,0,0,8"
+                            Background="{DynamicResource App.Theme.SurfaceRaised}"
+                            BorderBrush="{DynamicResource App.Theme.Border}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="8,6"
+                            HorizontalAlignment="Left">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="Search"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,8,0"
+                                       Foreground="{DynamicResource App.Theme.ForegroundSubtle}"/>
+                            <TextBox x:Name="PlaylistFilterTextBox"
+                                     Width="280"
+                                     Height="20"
+                                     MinHeight="20"
+                                     Padding="6,0"
+                                     VerticalContentAlignment="Center"
+                                     Margin="0,0,8,0"
+                                     TextChanged="PlaylistFilterTextBox_TextChanged"/>
+                            <Button x:Name="PlaylistFilterClearButton"
+                                    Style="{StaticResource App.CompactMonoButton}"
+                                    Width="46"
+                                    Content="Clear"
+                                    Click="PlaylistFilterClearButton_OnClick"/>
+                        </StackPanel>
+                    </Border>
 
-        <Grid Grid.Row="2" Margin="12,0,12,8">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
+                    <Grid Grid.Row="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
 
             <Border x:Name="QueuedPanel"
                     Grid.Row="0"
@@ -327,6 +379,7 @@
             <ListBox x:Name="PlaylistListBox"
                      Grid.Row="1"
                      Background="{DynamicResource {x:Static SystemColors.ControlLightBrushKey}}"
+                     AllowDrop="True"
                      VirtualizingStackPanel.IsVirtualizing="True"
                      VirtualizingStackPanel.VirtualizationMode="Recycling"
                      ScrollViewer.CanContentScroll="True"
@@ -335,7 +388,9 @@
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                      Focusable="False"
                      PreviewMouseLeftButtonDown="QueueListBox_OnPreviewMouseLeftButtonDown"
-                     MouseDoubleClick="QueueListBox_OnMouseDoubleClick">
+                     MouseDoubleClick="QueueListBox_OnMouseDoubleClick"
+                     PreviewDragOver="PlaylistListBox_OnPreviewDragOver"
+                     Drop="PlaylistListBox_OnDrop">
                 <ListBox.ItemTemplate>
                     <DataTemplate>
                         <DockPanel LastChildFill="True">
@@ -532,32 +587,45 @@
                     </StackPanel>
                 </Grid>
             </Border>
-        </Grid>
+                    </Grid>
 
-        <DockPanel Grid.Row="3"
-                   Margin="12,0,12,12"
-                   LastChildFill="True">
-            <Button x:Name="PlaylistFilterClearButton"
-                    DockPanel.Dock="Right"
-                    Content="Clear"
-                    MinWidth="56"
-                    Height="32"
-                    Margin="8,0,0,0"
-                    Padding="10,2"
-                    VerticalAlignment="Center"
-                    Click="PlaylistFilterClearButton_OnClick"/>
-            <TextBlock DockPanel.Dock="Left"
-                       Text="Search:"
-                       VerticalAlignment="Center"
-                       Margin="0,0,8,0"
-                       Foreground="{DynamicResource App.Theme.ForegroundSubtle}"/>
-            <TextBox x:Name="PlaylistFilterTextBox"
-                     Height="32"
-                     Padding="6,0"
-                     VerticalContentAlignment="Center"
-                     Margin="0,0,0,0"
-                     TextChanged="PlaylistFilterTextBox_TextChanged"/>
-        </DockPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="YouTube">
+                <views:YoutubeTabView x:Name="YoutubeTab"/>
+            </TabItem>
+
+            <TabItem Header="Files">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button x:Name="NewPlaylistButton"
+                                Content="New playlist..."
+                                MinWidth="120"
+                                Height="30"
+                                Margin="0,0,6,0"
+                                Click="NewPlaylistButton_OnClick"/>
+                        <Button x:Name="SavePlaylistButton"
+                                Content="Save playlist..."
+                                MinWidth="110"
+                                Height="30"
+                                Margin="0,0,6,0"
+                                Click="SavePlaylistButton_OnClick"/>
+                        <Button x:Name="LoadPlaylistButton"
+                                Content="Load playlist..."
+                                MinWidth="110"
+                                Height="30"
+                                Margin="0,0,6,0"
+                                Click="LoadPlaylistButton_OnClick"/>
+                    </StackPanel>
+                    <views:LocalFilesTabView x:Name="LocalTab" Grid.Row="1"/>
+                </Grid>
+            </TabItem>
+        </TabControl>
         </Grid>
         </Grid>
         </Grid>

@@ -342,6 +342,28 @@
                                           Checked="KeepIncompletePlaylistOnCancelCheckBox_OnChecked"
                                           Unchecked="KeepIncompletePlaylistOnCancelCheckBox_OnUnchecked"/>
 
+                                <TextBlock Text="Drag &amp; drop"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Controls what happens when you drop local files/folders or browser tabs onto the playlist list."/>
+                                <CheckBox x:Name="PlaylistDragDropAppendCheckBox"
+                                          Content="Append dropped items to playlist (instead of replace)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="PlaylistDragDropAppendCheckBox_OnChecked"
+                                          Unchecked="PlaylistDragDropAppendCheckBox_OnUnchecked"/>
+                                <CheckBox x:Name="PlaylistDragDropDedupeCheckBox"
+                                          Content="Remove duplicates when appending dropped items"
+                                          Margin="0,0,0,12"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="PlaylistDragDropDedupeCheckBox_OnChecked"
+                                          Unchecked="PlaylistDragDropDedupeCheckBox_OnUnchecked"/>
+
                                 <TextBlock Text="Playlist export (M3U)"
                                            FontWeight="SemiBold"
                                            Margin="0,0,0,6"

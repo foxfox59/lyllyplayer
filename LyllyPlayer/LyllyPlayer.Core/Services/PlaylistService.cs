@@ -63,13 +63,10 @@ public sealed class PlaylistService
 
     /// <summary>
     /// Snapshot of the current catalog for autosave / last-playlist persistence.
-    /// Returns null when empty.
+     /// Returns a snapshot even when empty (so it can overwrite old last-playlist.json).
     /// </summary>
     public SavedPlaylist? BuildSavedPlaylistSnapshot(string name, string sourceType, string source)
     {
-        if (Entries.Count == 0)
-            return null;
-
         var originDict = OriginByVideoId.ToDictionary(
             k => k.Key,
             v => new SavedPlaylistOrigin(v.Value.Label, v.Value.Source),

@@ -1,0 +1,159 @@
+<UserControl x:Class="LyllyPlayer.Windows.YoutubeTabView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:LyllyPlayer"
+             Background="Transparent">
+    <Grid Background="Transparent">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <GroupBox Header="Import behavior"
+                  Grid.Row="0"
+                  Margin="0,0,0,8"
+                  Foreground="{DynamicResource App.Theme.Foreground}"
+                  BorderBrush="{DynamicResource App.Theme.Border}">
+            <StackPanel Orientation="Horizontal" Margin="8">
+                <RadioButton x:Name="ReplaceRadioButton" Content="Replace playlist" IsChecked="True" Margin="0,0,16,0"/>
+                <RadioButton x:Name="AppendRadioButton" Content="Append" Margin="0,0,16,0"/>
+                <CheckBox x:Name="GlobalDedupeCheckBox" Content="Remove duplicates" IsChecked="True"/>
+            </StackPanel>
+        </GroupBox>
+
+        <TabControl Grid.Row="1" Padding="10">
+            <TabItem Header="Search videos">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="140"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0" Text="Query"/>
+                    <TextBox x:Name="SearchVideosQueryTextBox" Grid.Row="0" Grid.Column="1" Height="32" MinWidth="360" HorizontalAlignment="Stretch"
+                             VerticalContentAlignment="Center" Padding="8,2"/>
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Margin="0,8,8,0" Text="Results"/>
+                    <TextBox x:Name="SearchVideosCountTextBox" Grid.Row="1" Grid.Column="1" Height="32" Margin="0,8,0,0" Text="50" Width="120" HorizontalAlignment="Left"
+                             VerticalContentAlignment="Center" Padding="8,2"/>
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Margin="0,8,8,0" Text="Min length (s)"/>
+                    <TextBox x:Name="SearchVideosMinLenTextBox" Grid.Row="2" Grid.Column="1" Height="32" Margin="0,8,0,0" Text="0" Width="120" HorizontalAlignment="Left"
+                             VerticalContentAlignment="Center" Padding="8,2"/>
+
+                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,12,0,0">
+                        <Button x:Name="SearchVideosButton" Content="Search" MinWidth="110" Height="30" Click="SearchVideosButton_OnClick"/>
+                        <TextBlock x:Name="SearchVideosStatusTextBlock" Margin="12,6,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Open URL">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="140"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0" Text="URL"/>
+                    <TextBox x:Name="OpenUrlTextBox" Grid.Row="0" Grid.Column="1" Height="32" MinWidth="360" HorizontalAlignment="Stretch"
+                             VerticalContentAlignment="Center" Padding="8,2"/>
+                    <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,12,0,0">
+                        <Button x:Name="OpenUrlButton" Content="Open URL" MinWidth="110" Height="30" Click="OpenUrlButton_OnClick"/>
+                        <TextBlock x:Name="OpenUrlStatusTextBlock" Margin="12,6,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                    <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Margin="0,12,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                               Text="Opens a YouTube URL/playlist, or a direct stream URL (Icecast/Shoutcast/etc)."/>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Search playlists">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="140"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0" Text="Query"/>
+                    <TextBox x:Name="SearchPlaylistsQueryTextBox" Grid.Row="0" Grid.Column="1" Height="32" MinWidth="360" HorizontalAlignment="Stretch"
+                             VerticalContentAlignment="Center" Padding="8,2"/>
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Margin="0,8,8,0" Text="Results"/>
+                    <TextBox x:Name="SearchPlaylistsCountTextBox" Grid.Row="1" Grid.Column="1" Height="32" Margin="0,8,0,0" Text="20" Width="120" HorizontalAlignment="Left"
+                             VerticalContentAlignment="Center" Padding="8,2"/>
+
+                    <ListBox x:Name="SearchPlaylistsResultsListBox" Grid.Row="2" Grid.ColumnSpan="2" Margin="0,12,0,8"
+                             MouseDoubleClick="SearchPlaylistsResultsListBox_OnMouseDoubleClick"/>
+
+                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,0">
+                        <Button x:Name="SearchPlaylistsButton" Content="Search" MinWidth="110" Height="30" Click="SearchPlaylistsButton_OnClick"/>
+                        <Button x:Name="ImportSelectedPlaylistButton" Content="Import selected" MinWidth="140" Height="30" Margin="8,0,0,0" Click="ImportSelectedPlaylistButton_OnClick"/>
+                        <TextBlock x:Name="SearchPlaylistsStatusTextBlock" Margin="12,6,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Import playlist">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="140"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0" Text="Playlist URL/ID"/>
+                    <TextBox x:Name="ImportPlaylistUrlTextBox" Grid.Row="0" Grid.Column="1" Height="32" MinWidth="360" HorizontalAlignment="Stretch"
+                             VerticalContentAlignment="Center" Padding="8,2"/>
+                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,12,0,0">
+                        <Button x:Name="ImportPlaylistButton" Content="Import" MinWidth="110" Height="30" Click="ImportPlaylistButton_OnClick"/>
+                        <TextBlock x:Name="ImportPlaylistStatusTextBlock" Margin="12,6,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="My playlists (best-effort)">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Requires yt-dlp cookies-from-browser. YouTube may block listing; if empty, paste a playlist URL in the Import tab." TextWrapping="Wrap"/>
+
+                    <ListBox x:Name="AccountPlaylistsListBox" Grid.Row="1" Margin="0,12,0,8"
+                             MouseDoubleClick="AccountPlaylistsListBox_OnMouseDoubleClick"/>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal">
+                        <Button x:Name="LoadAccountPlaylistsButton" Content="Load my playlists" MinWidth="140" Height="30" Click="LoadAccountPlaylistsButton_OnClick"/>
+                        <Button x:Name="ImportSelectedAccountPlaylistButton" Content="Import selected" MinWidth="140" Height="30" Margin="8,0,0,0" Click="ImportSelectedAccountPlaylistButton_OnClick"/>
+                        <TextBlock x:Name="AccountPlaylistsStatusTextBlock" Margin="12,6,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</UserControl>
+

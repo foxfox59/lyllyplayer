@@ -338,6 +338,19 @@
             </Setter>
         </Style>
 
+        <!-- Compact mono buttons (e.g. PL/L in MainWindow, playlist toolbars). -->
+        <Style x:Key="App.CompactMonoButton" TargetType="{x:Type Button}" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Width" Value="34"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="MinHeight" Value="20"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="FontFamily" Value="{StaticResource App.MonoFont}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        </Style>
+
         <!-- Same chrome template, but for ToggleButton (Always-on-top etc). -->
         <Style x:Key="App.ChromeTitleBarToggleButton" TargetType="{x:Type ToggleButton}">
             <Setter Property="OverridesDefaultStyle" Value="True"/>

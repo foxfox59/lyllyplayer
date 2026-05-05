@@ -81,8 +81,46 @@ public partial class MainWindow
                 _searchMinLengthSeconds = Math.Clamp(minLenSeconds, 0, 3600);
                 RequestPersistSnapshot();
             },
-            OpenYoutubeModalAsync: async (owner, ct) => await OpenYoutubeModalAsync(owner, ct).ConfigureAwait(true),
-            OpenLocalFilesModalAsync: async (owner, ct) => await OpenLocalFilesModalAsync(owner, ct).ConfigureAwait(true),
+            SearchYoutubeVideosAsync: async (query, count, minLenSeconds, append, removeDuplicates, ct) =>
+                await SearchYoutubeVideosAsync(query, count, minLenSeconds, append, removeDuplicates, ct).ConfigureAwait(true),
+            SearchYoutubePlaylistsAsync: async (query, count, ct) =>
+                await _ytDlp.ResolveYoutubePlaylistSearchAsync(query, count, ct).ConfigureAwait(true),
+            ListYoutubeAccountPlaylistsAsync: async (count, ct) =>
+                await _ytDlp.ResolveAccountPlaylistsBestEffortAsync(count, ct).ConfigureAwait(true),
+            ImportYoutubePlaylistAsync: async (urlOrId, append, dedupe, ct) =>
+                await ImportYoutubePlaylistAsync(urlOrId, append, dedupe, ct).ConfigureAwait(true),
+            TryGetYoutubePlaylistItemCountAsync: async (urlOrId, ct) =>
+                await _ytDlp.TryGetPlaylistItemCountBestEffortAsync(urlOrId, ct).ConfigureAwait(true),
+            OpenUrlAsync: async (url, ct) => await LoadUrlAsync(url, ct).ConfigureAwait(true),
+            GetLastYoutubeUrl: () => _lastYoutubeUrl,
+            SetLastYoutubeUrl: (url) =>
+            {
+                var t = PlaylistSourcePathHeuristics.SanitizePersistedLastYoutubeUrl(url);
+                if (!string.IsNullOrEmpty(t))
+                    _lastYoutubeUrl = t;
+            },
+            GetYoutubeImportAppendDefault: () => _youtubeImportAppend,
+            SetYoutubeImportAppendDefault: v =>
+            {
+                _youtubeImportAppend = v;
+                SaveSettingsSnapshot();
+            },
+            GetLocalImportAppendDefault: () => _localImportAppend,
+            SetLocalImportAppendDefault: v =>
+            {
+                _localImportAppend = v;
+                SaveSettingsSnapshot();
+            },
+            GetLocalImportRemoveDuplicatesDefault: () => _localImportRemoveDuplicates,
+            SetLocalImportRemoveDuplicatesDefault: v =>
+            {
+                _localImportRemoveDuplicates = v;
+                SaveSettingsSnapshot();
+            },
+            AddLocalFolderAsync: async (folder, append, dedupe, forceNoMetadata, ct, progress) =>
+                await AddFolderAsync(folder, append, dedupe, forceNoMetadata, ct, progress).ConfigureAwait(true),
+            AddLocalFilesAsync: async (files, append, dedupe, ct, progress) =>
+                await AddFilesAsync(files, append, dedupe, ct, progress).ConfigureAwait(true),
             ApplySortAsync: async (spec, ct) => await ApplyPlaylistSortAsync(spec, ct).ConfigureAwait(true),
             GetIsYoutubeSource: () => IsYoutubeLikeSource(_lastPlaylistSourceType),
             SavePlaylistToFileAsync: async (path, displayName) =>
@@ -157,6 +195,29 @@ public partial class MainWindow
                     SetStatusMessage("ERROR", "Load saved playlist failed.");
                 }
             },
+            NewPlaylistAsync: (ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                try { _engine.Stop(); } catch { /* ignore */ }
+                _pendingResumeSeconds = 0;
+                _pendingResumeVideoId = null;
+                ResetTimelineUiToStart();
+
+                _hasLoadedPlaylist = false;
+                _loadedPlaylistId = null;
+                _lastPlaylistSourceType = PlaylistSourceType.YouTube;
+                _lastLocalPlaylistPath = null;
+                _playlistSourceText = "";
+                _playlistIsCompound = false;
+                try { SetPlaylistTitle(null); } catch { /* ignore */ }
+                try { _playlistCore.Clear(); } catch { /* ignore */ }
+                _engine.SetQueue(_playlistCore.Entries, startIndex: -1, raiseNowPlayingChanged: false);
+                SetQueueList(Array.Empty<PlaylistEntry>(), selectedIndex: -1);
+                UpdateRefreshEnabled();
+                MarkLastPlaylistSnapshotDirty();
+                RequestPersistSnapshot();
+                return Task.CompletedTask;
+            },
             LoadEntriesAsync: async (entries, title, sourceKey, ct) =>
             {
                 // Infer type from source key; persisted separately.
@@ -181,18 +242,12 @@ public partial class MainWindow
                 await RefreshCurrentSourceAsync(preserveCurrentIfPossible: true, ct);
             },
             CleanInvalidItemsAsync: async (ct) => await CleanInvalidPlaylistItemsAsync(ct).ConfigureAwait(true),
+            RemoveDuplicatesAsync: async (ct) => await RemoveDuplicatePlaylistItemsAsync(ct).ConfigureAwait(true),
             CapturePlaylistForCancelRestore: BeginCancelPlaylistSnapshot,
             CommitPlaylistCancelRestore: CommitCancelPlaylistSnapshot,
             RollbackPlaylistCancelRestore: RollbackCancelPlaylistSnapshot,
             SourceChanged: (src) => _playlistSourceText = src,
             GetSource: () => _playlistSourceText,
-            GetLastYoutubeUrl: () => _lastYoutubeUrl,
-            SetLastYoutubeUrl: (url) =>
-            {
-                var t = PlaylistSourcePathHeuristics.SanitizePersistedLastYoutubeUrl(url);
-                if (!string.IsNullOrEmpty(t))
-                    _lastYoutubeUrl = t;
-            },
             GetFfmpegPath: () => _savedFfmpegPath ?? "",
             GetIncludeSubfoldersOnFolderLoad: () => _includeSubfoldersOnFolderLoad,
             GetReadMetadataOnLoad: () => _readMetadataOnLoad,
@@ -327,7 +382,9 @@ public partial class MainWindow
                 }
                 catch { /* ignore */ }
                 return Task.CompletedTask;
-            }
+            },
+            HandleDroppedLocalPathsAsync: async (paths, ct) => await HandleDroppedLocalPathsAsync(paths, ct).ConfigureAwait(true),
+            HandleDroppedUrlsAsync: async (urls, ct) => await HandleDroppedUrlsAsync(urls, ct).ConfigureAwait(true)
         ))
         {
             Owner = null,
@@ -720,6 +777,18 @@ public partial class MainWindow
             setExportM3uIncludeLyllyMetadata: (v) =>
             {
                 _exportM3uIncludeLyllyMetadata = v;
+                RequestPersistSnapshot();
+            },
+            getPlaylistDragDropAppend: () => _playlistDragDropAppend,
+            setPlaylistDragDropAppend: (v) =>
+            {
+                _playlistDragDropAppend = v;
+                RequestPersistSnapshot();
+            },
+            getPlaylistDragDropRemoveDuplicates: () => _playlistDragDropRemoveDuplicates,
+            setPlaylistDragDropRemoveDuplicates: (v) =>
+            {
+                _playlistDragDropRemoveDuplicates = v;
                 RequestPersistSnapshot();
             },
             getAppIconVisibility: () => _appIconVisibility,

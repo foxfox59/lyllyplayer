@@ -1,4 +1,4 @@
-using Microsoft.Win32;
+﻿using Microsoft.Win32;
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Input;
@@ -364,6 +364,8 @@ public partial class MainWindow : Window
     private bool _exportM3uIncludeLyllyMetadata = true;
     private bool _localImportAppend;
     private bool _localImportRemoveDuplicates;
+    private bool _playlistDragDropAppend = true;
+    private bool _playlistDragDropRemoveDuplicates = true;
     private readonly AppSettings _startupSettings;
     private readonly AppShell _shell = new();
     private PlaylistService _playlistCore => _shell.Playlist;
@@ -793,7 +795,9 @@ public partial class MainWindow : Window
         _exportM3uPreferRelativePaths = _startupSettings.ExportM3uPreferRelativePaths ?? false;
         _exportM3uIncludeLyllyMetadata = _startupSettings.ExportM3uIncludeLyllyMetadata ?? true;
         _localImportAppend = _startupSettings.LocalImportAppend ?? false;
-        _localImportRemoveDuplicates = _startupSettings.LocalImportRemoveDuplicates ?? false;
+        _localImportRemoveDuplicates = _startupSettings.LocalImportRemoveDuplicates ?? true;
+        _playlistDragDropAppend = _startupSettings.PlaylistDragDropAppend ?? true;
+        _playlistDragDropRemoveDuplicates = _startupSettings.PlaylistDragDropRemoveDuplicates ?? true;
 
         var yInit = ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp");
         _ytDlp = new YtDlpClient(yInit.EffectiveFileName);
@@ -3388,6 +3392,61 @@ public partial class MainWindow : Window
         }
     }
 
+    private Task<int> RemoveDuplicatePlaylistItemsAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            // Dedupe by VideoId (case-insensitive). Keep first occurrence; preserve ordering.
+            var entries = _playlistCore.Entries.ToList();
+            if (entries.Count <= 1)
+                return Task.FromResult(0);
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var kept = new List<PlaylistEntry>(entries.Count);
+            foreach (var e in entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (e is null)
+                    continue;
+                var id = (e.VideoId ?? "").Trim();
+                if (string.IsNullOrWhiteSpace(id))
+                    continue;
+                if (!seen.Add(id))
+                    continue;
+                kept.Add(e);
+            }
+
+            var removed = Math.Max(0, entries.Count - kept.Count);
+            if (removed == 0)
+                return Task.FromResult(0);
+
+            // Preserve current track if it still exists; otherwise keep nearest index.
+            var curId = _engine.GetCurrent()?.VideoId;
+            var oldIndex = _engine.CurrentIndex;
+
+            _playlistCore.ReplaceEntries(kept);
+            var newIndex = -1;
+            if (!string.IsNullOrWhiteSpace(curId))
+                newIndex = _playlistCore.Entries.FindIndex(e => string.Equals(e.VideoId, curId, StringComparison.OrdinalIgnoreCase));
+            if (newIndex < 0)
+                newIndex = _playlistCore.Entries.Count == 0 ? -1 : Math.Clamp(oldIndex, 0, _playlistCore.Entries.Count - 1);
+
+            _engine.SetQueue(_playlistCore.Entries, startIndex: newIndex, raiseNowPlayingChanged: true);
+            SetQueueList(_playlistCore.Entries, selectedIndex: -1);
+            UpdatePlaylistTitleDisplayForNowPlaying();
+            UpdateRefreshEnabled();
+            RequestPersistSnapshot();
+
+            return Task.FromResult(removed);
+        }
+        catch
+        {
+            return Task.FromResult(0);
+        }
+    }
+
     private void LyricsButton_OnClick(object sender, RoutedEventArgs e)
     {
         try
@@ -3653,12 +3712,14 @@ public partial class MainWindow : Window
             }
 
             // Append: preserve current playback. Search doesn't have a stable source URL, so treat as compound origin label.
-            AppendEntriesPreserveCurrent(
+            var (added, removedDupes) = AppendEntriesPreserveCurrent(
                 entries,
                 originLabel: title,
                 originSource: sourceKey,
                 removeDuplicates: removeDuplicates,
                 cancellationToken: cancellationToken);
+
+            TryShowAppendSummaryDialog("Playlist", added, removedDupes);
         }
         catch { throw; }
     }
@@ -3701,7 +3762,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        AppendEntriesPreserveCurrent(entries, originLabel: title, originSource: f, removeDuplicates, cancellationToken);
+        var (added, removedDupes) = AppendEntriesPreserveCurrent(entries, originLabel: title, originSource: f, removeDuplicates, cancellationToken);
+        TryShowAppendSummaryDialog("Playlist", added, removedDupes);
     }
 
     private async Task AddFilesAsync(IReadOnlyList<string> files, bool append, bool removeDuplicates, CancellationToken cancellationToken, IProgress<(int done, int total)>? progress = null)
@@ -3728,7 +3790,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        AppendEntriesPreserveCurrent(entries, originLabel: title, originSource: sourceKey, removeDuplicates, cancellationToken);
+        var (added, removedDupes) = AppendEntriesPreserveCurrent(entries, originLabel: title, originSource: sourceKey, removeDuplicates, cancellationToken);
+        TryShowAppendSummaryDialog("Playlist", added, removedDupes);
     }
 
     private async Task<List<PlaylistEntry>> LoadLocalFilesEntriesAsync(IReadOnlyList<string> files, bool readMetadata, CancellationToken ct, IProgress<(int done, int total)>? progress = null)
@@ -3791,7 +3854,7 @@ public partial class MainWindow : Window
         return res.ToList();
     }
 
-    private void AppendEntriesPreserveCurrent(
+    private (int added, int removedDuplicates) AppendEntriesPreserveCurrent(
         IReadOnlyList<PlaylistEntry> toAppend,
         string originLabel,
         string originSource,
@@ -3802,18 +3865,120 @@ public partial class MainWindow : Window
 
         var cur = _engine.GetCurrent();
 
-        var appended = toAppend?.ToList() ?? new List<PlaylistEntry>();
+        var existingCountBefore = 0;
+        try { existingCountBefore = _playlistCore.Entries?.Count ?? 0; } catch { existingCountBefore = 0; }
+
+        var appended0 = toAppend?.ToList() ?? new List<PlaylistEntry>();
+        var appended = appended0;
+        var removedDupes = 0;
         if (removeDuplicates)
-            appended = RemoveLocalDuplicatesByFullPath(appended);
+        {
+            // Dedupe against existing playlist by VideoId, and (for local entries) also by normalized full path.
+            var existingEntries = _playlistCore.Entries?.ToArray() ?? Array.Empty<PlaylistEntry>();
+            var existingVideoIds = new HashSet<string>(existingEntries.Select(e => e.VideoId), StringComparer.OrdinalIgnoreCase);
+            var existingLocalPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var existingLocalFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var e in existingEntries)
+            {
+                if (TryExtractLocalPathBestEffort(e.WebpageUrl, out var p))
+                {
+                    existingLocalPaths.Add(NormalizeLocalPathKey(p));
+                    try { existingVideoIds.Add(LocalPlaylistLoader.CreateLocalIdFromPath(p)); } catch { /* ignore */ }
+                }
+
+                var fn0 = NormalizeLocalFileNameKey(e.WebpageUrl ?? "");
+                if (!string.IsNullOrWhiteSpace(fn0))
+                    existingLocalFileNames.Add(fn0);
+            }
+
+            var acc = new List<PlaylistEntry>(appended0.Count);
+            var rejectByVideoId = 0;
+            var rejectByPath = 0;
+            var rejectByDerivedId = 0;
+            var rejectByFileName = 0;
+            var accepted = 0;
+            foreach (var e in appended0)
+            {
+                if (string.IsNullOrWhiteSpace(e.VideoId) || !existingVideoIds.Add(e.VideoId))
+                {
+                    rejectByVideoId++;
+                    continue;
+                }
+
+                if (TryExtractLocalPathBestEffort(e.WebpageUrl, out var p))
+                {
+                    var k = NormalizeLocalPathKey(p);
+                    if (!existingLocalPaths.Add(k))
+                    {
+                        rejectByPath++;
+                        continue;
+                    }
+
+                    try
+                    {
+                        var derivedId = LocalPlaylistLoader.CreateLocalIdFromPath(p);
+                        // Don't reject the entry just because the derived ID equals the entry's own VideoId.
+                        if (!string.Equals(derivedId, e.VideoId, StringComparison.OrdinalIgnoreCase) &&
+                            !existingVideoIds.Add(derivedId))
+                        {
+                            rejectByDerivedId++;
+                            continue;
+                        }
+                    }
+                    catch { /* ignore */ }
+                }
+
+                var fn = NormalizeLocalFileNameKey(e.WebpageUrl ?? "");
+                // File-name dedupe should only compare against *existing* playlist items,
+                // not collapse multiple distinct files in the newly appended folder that happen to share a name.
+                if (!string.IsNullOrWhiteSpace(fn) && existingLocalFileNames.Contains(fn))
+                {
+                    rejectByFileName++;
+                    continue;
+                }
+
+                acc.Add(e);
+                accepted++;
+            }
+
+            appended = acc;
+            removedDupes = Math.Max(0, appended0.Count - appended.Count);
+
+            try
+            {
+                if (appended0.Count > 0 && appended.Count == 0)
+                {
+                    var sample = appended0
+                        .Take(3)
+                        .Select(x => $"[{x.VideoId}] {(x.WebpageUrl ?? "")}")
+                        .ToList();
+                    AppLog.Info(
+                        "AppendEntriesPreserveCurrent: dedupe rejected all incoming " +
+                        $"(existing={existingCountBefore}, incoming={appended0.Count}, " +
+                        $"rejVid={rejectByVideoId}, rejPath={rejectByPath}, rejDerived={rejectByDerivedId}, rejName={rejectByFileName}, accepted={accepted}) " +
+                        $"sample={string.Join(" | ", sample)}",
+                        AppLogInfoTier.Diagnostic);
+                }
+            }
+            catch { /* ignore */ }
+        }
 
         if (appended.Count == 0)
-            return;
+        {
+            try
+            {
+                if (appended0.Count > 0)
+                    AppLog.Info($"AppendEntriesPreserveCurrent: nothing to append (existing={existingCountBefore}, incoming={appended0.Count}, removedDupes={removedDupes})", AppLogInfoTier.Diagnostic);
+            }
+            catch { /* ignore */ }
+            return (added: 0, removedDuplicates: removedDupes);
+        }
 
         _playlistIsCompound = true;
         UpdateRefreshEnabled();
 
         foreach (var e in appended)
-            _playlistCore.Entries.Add(e);
+            _playlistCore!.Entries.Add(e);
 
         // Per-item origins for appended entries.
         foreach (var e in appended)
@@ -3821,10 +3986,13 @@ public partial class MainWindow : Window
 
         // Rebuild play order around the current track; do not change playback.
         // RebuildEffectivePlayOrderPreserveCurrent(raiseNowPlayingChanged: false);
-        _engine.SetQueue(_playlistCore.Entries, startIndex: _engine.CurrentIndex); // , raiseNowPlayingChanged: false);
-        SetQueueList(_playlistCore.Entries, selectedIndex: -1);
+        var final = _playlistCore.Entries?.ToArray() ?? Array.Empty<PlaylistEntry>();
+        _engine.SetQueue(final, startIndex: _engine.CurrentIndex); // , raiseNowPlayingChanged: false);
+        SetQueueList(final, selectedIndex: -1);
         UpdatePlaylistTitleDisplayForNowPlaying();
         RequestPersistSnapshot();
+
+        return (added: appended.Count, removedDuplicates: removedDupes);
     }
 
     private List<PlaylistEntry> RemoveLocalDuplicatesByFullPath(List<PlaylistEntry> entries)
@@ -3853,8 +4021,78 @@ public partial class MainWindow : Window
 
     private static string NormalizeLocalPathKey(string path)
     {
-        try { return Path.GetFullPath(path).Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
+        try
+        {
+            var p = Path.GetFullPath(path).Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            // Normalize Win32 long path prefixes (\\?\ and \\?\UNC\) so paths compare equal.
+            if (p.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+                p = @"\\" + p.Substring(@"\\?\UNC\".Length);
+            else if (p.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase))
+                p = p.Substring(@"\\?\".Length);
+
+            return p;
+        }
         catch { return (path ?? "").Trim(); }
+    }
+
+    private static string NormalizeLocalFileNameKey(string pathOrUrl)
+    {
+        try
+        {
+            if (LocalPlaylistLoader.TryGetLocalPath(pathOrUrl, out var p))
+                return (Path.GetFileName(p) ?? "").Trim();
+        }
+        catch { /* ignore */ }
+
+        try { return (Path.GetFileName(pathOrUrl) ?? "").Trim(); }
+        catch { return ""; }
+    }
+
+    private static bool TryExtractLocalPathBestEffort(string? webpageUrlOrPath, out string path)
+    {
+        path = "";
+        if (string.IsNullOrWhiteSpace(webpageUrlOrPath))
+            return false;
+
+        var s = webpageUrlOrPath.Trim();
+
+        try
+        {
+            if (Uri.TryCreate(s, UriKind.Absolute, out var uri) &&
+                uri.IsFile &&
+                !string.IsNullOrWhiteSpace(uri.LocalPath))
+            {
+                path = uri.LocalPath;
+                return true;
+            }
+        }
+        catch { /* ignore */ }
+
+        try
+        {
+            if (Path.IsPathRooted(s))
+            {
+                path = s;
+                return true;
+            }
+        }
+        catch { /* ignore */ }
+
+        return false;
+    }
+
+    private static void TryShowAppendSummaryDialog(string title, int added, int removedDuplicates)
+    {
+        try
+        {
+            var owner = System.Windows.Application.Current?.MainWindow;
+            var msg = removedDuplicates > 0
+                ? $"Added {added} items.\nSkipped {removedDuplicates} duplicates."
+                : $"Added {added} items.";
+            System.Windows.MessageBox.Show(owner, msg, title, MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch { /* ignore */ }
     }
 
     private async Task ImportYoutubePlaylistAsync(string playlistUrlOrId, bool append, bool dedupe, CancellationToken cancellationToken)
@@ -3914,8 +4152,10 @@ public partial class MainWindow : Window
             try
             {
                 var added = Math.Max(0, merged.Count - beforeCount);
+                var removedDupes = dedupe ? Math.Max(0, imported.Count - added) : 0;
                 var namePart = string.IsNullOrWhiteSpace(plName) ? src : $"\"{plName}\"";
                 SetStatusMessage("INFO", $"Appended playlist: {namePart} (+{added} items).");
+                TryShowAppendSummaryDialog("Playlist", added, removedDupes);
             }
             catch { /* ignore */ }
         }
@@ -3932,6 +4172,69 @@ public partial class MainWindow : Window
         MarkLastPlaylistSnapshotDirty();
         RequestPersistSnapshot();
         UpdatePlaylistTitleDisplayForNowPlaying();
+    }
+
+    private async Task HandleDroppedLocalPathsAsync(IReadOnlyList<string> paths, CancellationToken ct)
+    {
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            if (paths is null || paths.Count == 0)
+                return;
+
+            // Drag/drop policy: folders are always recursive; unsupported files are ignored silently.
+            var files = LocalPlaylistLoader.ExpandToSupportedAudioFilesRecursive(paths, ct);
+            if (files.Count == 0)
+                return;
+
+            // Use the Playlist drag/drop defaults (append/replace + dedupe).
+            // Dedupe affects append only, but AddFilesAsync applies it safely either way.
+            await AddFilesAsync(
+                files,
+                append: _playlistDragDropAppend,
+                removeDuplicates: _playlistDragDropRemoveDuplicates,
+                ct).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
+        }
+        catch
+        {
+            // ignore (drop is best-effort)
+        }
+    }
+
+    private async Task HandleDroppedUrlsAsync(IReadOnlyList<string> urls, CancellationToken ct)
+    {
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            if (urls is null || urls.Count == 0)
+                return;
+
+            var list = urls.Where(u => !string.IsNullOrWhiteSpace(u)).Select(u => u.Trim()).Where(u => u.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (list.Count == 0)
+                return;
+
+            // Use the Playlist drag/drop defaults. For multiple dropped URLs, never "replace" more than once.
+            var appendForFirst = _playlistDragDropAppend;
+            for (var i = 0; i < list.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var append = i == 0 ? appendForFirst : true;
+                var dedupe = _playlistDragDropRemoveDuplicates;
+                await ImportYoutubePlaylistAsync(list[i], append: append, dedupe: dedupe, ct).ConfigureAwait(true);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
+        }
+        catch
+        {
+            // ignore (drop is best-effort)
+        }
     }
 
     private Task ApplyPlaylistSortAsync(PlaylistSortSpec spec, CancellationToken cancellationToken)
@@ -6012,9 +6315,6 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (_playlistCore.Entries is null || _playlistCore.Entries.Count == 0)
-                return;
-
             var snap = CaptureLastPlaylistSnapshotForWrite();
             if (snap is not null)
                 LastPlaylistSnapshotStore.Save(snap);
@@ -6094,7 +6394,21 @@ public partial class MainWindow : Window
         try
         {
             if (snap.Entries is null || snap.Entries.Count == 0)
-                return false;
+            {
+                // Persisted "empty playlist" snapshot.
+                _hasLoadedPlaylist = false;
+                _loadedPlaylistId = null;
+                _lastPlaylistSourceType = ParsePlaylistSourceType(snap.SourceType);
+                _playlistSourceText = snap.Source ?? "";
+                _playlistWindow?.SetSourceText(_playlistSourceText);
+                try { SetPlaylistTitle(null); } catch { /* ignore */ }
+                try { _playlistCore.Clear(); } catch { /* ignore */ }
+                _engine.SetQueue(_playlistCore.Entries, startIndex: -1, raiseNowPlayingChanged: false);
+                SetQueueList(Array.Empty<PlaylistEntry>(), selectedIndex: -1);
+                UpdateRefreshEnabled();
+                RequestPersistSnapshot();
+                return true;
+            }
 
             _lastPlaylistSourceType = ParsePlaylistSourceType(snap.SourceType);
             _playlistSourceText = snap.Source ?? "";

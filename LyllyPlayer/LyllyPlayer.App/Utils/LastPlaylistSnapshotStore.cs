@@ -31,6 +31,21 @@ public static class LastPlaylistSnapshotStore
         File.WriteAllText(path, json);
     }
 
+    /// <summary>Deletes <c>last-playlist.json</c> if it exists.</summary>
+    public static void Clear()
+    {
+        try
+        {
+            var path = GetSnapshotPath();
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
     /// <param name="fileWasUnreadable">
     /// True when <c>last-playlist.json</c> exists but could not be parsed (oversized, invalid JSON, etc.).
     /// </param>

@@ -19,6 +19,8 @@ using LyllyPlayer.Models;
 using LyllyPlayer.Utils;
 using LyllyPlayer.ShellServices;
 using System.Threading;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace LyllyPlayer.Windows;
 
@@ -38,22 +40,36 @@ public partial class PlaylistWindow : Window
     private readonly Func<string, Task> _loadUrlAsync;
     private readonly Func<(int count, int minLengthSeconds)> _getSearchDefaults;
     private readonly Action<int, int> _setSearchDefaults;
-    private readonly Func<Window, CancellationToken, Task> _openYoutubeModalAsync;
-    private readonly Func<Window, CancellationToken, Task> _openLocalFilesModalAsync;
+    private readonly Func<string, int, int, bool, bool, CancellationToken, Task> _searchYoutubeVideosAsync;
+    private readonly Func<string, int, CancellationToken, Task<IReadOnlyList<YoutubePlaylistHit>>> _searchYoutubePlaylistsAsync;
+    private readonly Func<int, CancellationToken, Task<IReadOnlyList<YoutubePlaylistHit>>> _listYoutubeAccountPlaylistsAsync;
+    private readonly Func<string, bool, bool, CancellationToken, Task> _importYoutubePlaylistAsync;
+    private readonly Func<string, CancellationToken, Task<int?>> _tryGetYoutubePlaylistItemCountAsync;
+    private readonly Func<string, CancellationToken, Task> _openUrlAsync;
+    private readonly Func<string> _getLastYoutubeUrl;
+    private readonly Action<string> _setLastYoutubeUrl;
+    private readonly Func<bool> _getYoutubeImportAppendDefault;
+    private readonly Action<bool> _setYoutubeImportAppendDefault;
+    private readonly Func<bool> _getLocalImportAppendDefault;
+    private readonly Action<bool> _setLocalImportAppendDefault;
+    private readonly Func<bool> _getLocalImportRemoveDuplicatesDefault;
+    private readonly Action<bool> _setLocalImportRemoveDuplicatesDefault;
+    private readonly Func<string, bool, bool, bool, CancellationToken, IProgress<(int done, int total)>?, Task> _addLocalFolderAsync;
+    private readonly Func<IReadOnlyList<string>, bool, bool, CancellationToken, IProgress<(int done, int total)>?, Task> _addLocalFilesAsync;
     private readonly Func<PlaylistSortSpec, CancellationToken, Task> _applySortAsync;
     private readonly Func<bool> _getIsYoutubeSource;
     private readonly Func<string, string, Task> _savePlaylistToFileAsync;
     private readonly Func<string, Task> _loadPlaylistFromFileAsync;
+    private readonly Func<CancellationToken, Task> _newPlaylistAsync;
     private readonly Func<IReadOnlyList<PlaylistEntry>, string?, string, CancellationToken, Task> _loadEntriesAsync;
     private readonly Func<CancellationToken, Task> _refreshAsync;
     private readonly Func<CancellationToken, Task<int>> _cleanInvalidItemsAsync;
+    private readonly Func<CancellationToken, Task<int>> _removeDuplicatesAsync;
     private readonly Action? _capturePlaylistForCancelRestore;
     private readonly Action? _commitPlaylistCancelRestore;
     private readonly Action? _rollbackPlaylistCancelRestore;
     private readonly Action<string> _sourceChanged;
     private readonly Func<string> _getSource;
-    private readonly Func<string> _getLastYoutubeUrl;
-    private readonly Action<string> _setLastYoutubeUrl;
     private readonly Func<string> _getFfmpegPath;
     private readonly Func<bool> _getIncludeSubfoldersOnFolderLoad;
     private readonly Func<bool> _getReadMetadataOnLoad;
@@ -64,6 +80,8 @@ public partial class PlaylistWindow : Window
     private readonly Func<string, Task> _doubleClickPlayAsync;
     private readonly Func<PlaylistEntry, Task> _addToQueueAsync;
     private readonly Func<Guid, Task> _removeQueuedInstanceAsync;
+    private readonly Func<IReadOnlyList<string>, CancellationToken, Task> _handleDroppedLocalPathsAsync;
+    private readonly Func<IReadOnlyList<string>, CancellationToken, Task> _handleDroppedUrlsAsync;
     private int _lastClickedIndex = -1;
     private int _centerRequestId;
     /// <summary>Avoid one frame at the top of the list before <see cref="CenterListBoxOnQueueItem"/> runs (initial open).</summary>
@@ -102,22 +120,36 @@ public partial class PlaylistWindow : Window
             ops.LoadUrlAsync,
             ops.GetSearchDefaults,
             ops.SetSearchDefaults,
-            ops.OpenYoutubeModalAsync,
-            ops.OpenLocalFilesModalAsync,
+            ops.SearchYoutubeVideosAsync,
+            ops.SearchYoutubePlaylistsAsync,
+            ops.ListYoutubeAccountPlaylistsAsync,
+            ops.ImportYoutubePlaylistAsync,
+            ops.TryGetYoutubePlaylistItemCountAsync,
+            ops.OpenUrlAsync,
+            ops.GetLastYoutubeUrl,
+            ops.SetLastYoutubeUrl,
+            ops.GetYoutubeImportAppendDefault,
+            ops.SetYoutubeImportAppendDefault,
+            ops.GetLocalImportAppendDefault,
+            ops.SetLocalImportAppendDefault,
+            ops.GetLocalImportRemoveDuplicatesDefault,
+            ops.SetLocalImportRemoveDuplicatesDefault,
+            ops.AddLocalFolderAsync,
+            ops.AddLocalFilesAsync,
             ops.ApplySortAsync,
             ops.GetIsYoutubeSource,
             ops.SavePlaylistToFileAsync,
             ops.LoadPlaylistFromFileAsync,
+            ops.NewPlaylistAsync,
             ops.LoadEntriesAsync,
             ops.RefreshAsync,
             ops.CleanInvalidItemsAsync,
+            ops.RemoveDuplicatesAsync,
             ops.CapturePlaylistForCancelRestore,
             ops.CommitPlaylistCancelRestore,
             ops.RollbackPlaylistCancelRestore,
             ops.SourceChanged,
             ops.GetSource,
-            ops.GetLastYoutubeUrl,
-            ops.SetLastYoutubeUrl,
             ops.GetFfmpegPath,
             ops.GetIncludeSubfoldersOnFolderLoad,
             ops.GetReadMetadataOnLoad,
@@ -127,7 +159,9 @@ public partial class PlaylistWindow : Window
             ops.SelectedVideoIdChanged,
             ops.DoubleClickPlayAsync,
             ops.AddToQueueAsync,
-            ops.RemoveQueuedInstanceAsync)
+            ops.RemoveQueuedInstanceAsync,
+            ops.HandleDroppedLocalPathsAsync,
+            ops.HandleDroppedUrlsAsync)
     {
     }
 
@@ -135,22 +169,36 @@ public partial class PlaylistWindow : Window
         Func<string, Task> loadUrlAsync,
         Func<(int count, int minLengthSeconds)> getSearchDefaults,
         Action<int, int> setSearchDefaults,
-        Func<Window, CancellationToken, Task> openYoutubeModalAsync,
-        Func<Window, CancellationToken, Task> openLocalFilesModalAsync,
+        Func<string, int, int, bool, bool, CancellationToken, Task> searchYoutubeVideosAsync,
+        Func<string, int, CancellationToken, Task<IReadOnlyList<YoutubePlaylistHit>>> searchYoutubePlaylistsAsync,
+        Func<int, CancellationToken, Task<IReadOnlyList<YoutubePlaylistHit>>> listYoutubeAccountPlaylistsAsync,
+        Func<string, bool, bool, CancellationToken, Task> importYoutubePlaylistAsync,
+        Func<string, CancellationToken, Task<int?>> tryGetYoutubePlaylistItemCountAsync,
+        Func<string, CancellationToken, Task> openUrlAsync,
+        Func<string> getLastYoutubeUrl,
+        Action<string> setLastYoutubeUrl,
+        Func<bool> getYoutubeImportAppendDefault,
+        Action<bool> setYoutubeImportAppendDefault,
+        Func<bool> getLocalImportAppendDefault,
+        Action<bool> setLocalImportAppendDefault,
+        Func<bool> getLocalImportRemoveDuplicatesDefault,
+        Action<bool> setLocalImportRemoveDuplicatesDefault,
+        Func<string, bool, bool, bool, CancellationToken, IProgress<(int done, int total)>?, Task> addLocalFolderAsync,
+        Func<IReadOnlyList<string>, bool, bool, CancellationToken, IProgress<(int done, int total)>?, Task> addLocalFilesAsync,
         Func<PlaylistSortSpec, CancellationToken, Task> applySortAsync,
         Func<bool> getIsYoutubeSource,
         Func<string, string, Task> savePlaylistToFileAsync,
         Func<string, Task> loadPlaylistFromFileAsync,
+        Func<CancellationToken, Task> newPlaylistAsync,
         Func<IReadOnlyList<PlaylistEntry>, string?, string, CancellationToken, Task> loadEntriesAsync,
         Func<CancellationToken, Task> refreshAsync,
         Func<CancellationToken, Task<int>> cleanInvalidItemsAsync,
+        Func<CancellationToken, Task<int>> removeDuplicatesAsync,
         Action? capturePlaylistForCancelRestore,
         Action? commitPlaylistCancelRestore,
         Action? rollbackPlaylistCancelRestore,
         Action<string> sourceChanged,
         Func<string> getSource,
-        Func<string> getLastYoutubeUrl,
-        Action<string> setLastYoutubeUrl,
         Func<string> getFfmpegPath,
         Func<bool> getIncludeSubfoldersOnFolderLoad,
         Func<bool> getReadMetadataOnLoad,
@@ -160,21 +208,39 @@ public partial class PlaylistWindow : Window
         Action<string> selectedVideoIdChanged,
         Func<string, Task> doubleClickPlayAsync,
         Func<PlaylistEntry, Task> addToQueueAsync,
-        Func<Guid, Task> removeQueuedInstanceAsync
+        Func<Guid, Task> removeQueuedInstanceAsync,
+        Func<IReadOnlyList<string>, CancellationToken, Task> handleDroppedLocalPathsAsync,
+        Func<IReadOnlyList<string>, CancellationToken, Task> handleDroppedUrlsAsync
     )
     {
         _loadUrlAsync = loadUrlAsync;
         _getSearchDefaults = getSearchDefaults;
         _setSearchDefaults = setSearchDefaults;
-        _openYoutubeModalAsync = openYoutubeModalAsync;
-        _openLocalFilesModalAsync = openLocalFilesModalAsync;
+        _searchYoutubeVideosAsync = searchYoutubeVideosAsync;
+        _searchYoutubePlaylistsAsync = searchYoutubePlaylistsAsync;
+        _listYoutubeAccountPlaylistsAsync = listYoutubeAccountPlaylistsAsync;
+        _importYoutubePlaylistAsync = importYoutubePlaylistAsync;
+        _tryGetYoutubePlaylistItemCountAsync = tryGetYoutubePlaylistItemCountAsync;
+        _openUrlAsync = openUrlAsync;
+        _getLastYoutubeUrl = getLastYoutubeUrl;
+        _setLastYoutubeUrl = setLastYoutubeUrl;
+        _getYoutubeImportAppendDefault = getYoutubeImportAppendDefault;
+        _setYoutubeImportAppendDefault = setYoutubeImportAppendDefault;
+        _getLocalImportAppendDefault = getLocalImportAppendDefault;
+        _setLocalImportAppendDefault = setLocalImportAppendDefault;
+        _getLocalImportRemoveDuplicatesDefault = getLocalImportRemoveDuplicatesDefault;
+        _setLocalImportRemoveDuplicatesDefault = setLocalImportRemoveDuplicatesDefault;
+        _addLocalFolderAsync = addLocalFolderAsync;
+        _addLocalFilesAsync = addLocalFilesAsync;
         _applySortAsync = applySortAsync;
         _getIsYoutubeSource = getIsYoutubeSource;
         _savePlaylistToFileAsync = savePlaylistToFileAsync;
         _loadPlaylistFromFileAsync = loadPlaylistFromFileAsync;
+        _newPlaylistAsync = newPlaylistAsync;
         _loadEntriesAsync = loadEntriesAsync;
         _refreshAsync = refreshAsync;
         _cleanInvalidItemsAsync = cleanInvalidItemsAsync;
+        _removeDuplicatesAsync = removeDuplicatesAsync;
         _capturePlaylistForCancelRestore = capturePlaylistForCancelRestore;
         _commitPlaylistCancelRestore = commitPlaylistCancelRestore;
         _rollbackPlaylistCancelRestore = rollbackPlaylistCancelRestore;
@@ -192,11 +258,46 @@ public partial class PlaylistWindow : Window
         _doubleClickPlayAsync = doubleClickPlayAsync;
         _addToQueueAsync = addToQueueAsync;
         _removeQueuedInstanceAsync = removeQueuedInstanceAsync;
+        _handleDroppedLocalPathsAsync = handleDroppedLocalPathsAsync;
+        _handleDroppedUrlsAsync = handleDroppedUrlsAsync;
 
         InitializeComponent();
 
         UpdateTitleFromSource(_getSource());
         InitializeSortUi();
+
+        // Wire tab content (created in XAML) with backend callbacks.
+        try
+        {
+            var searchDefaults = _getSearchDefaults();
+            YoutubeTab.Initialize(
+                searchVideosAsync: _searchYoutubeVideosAsync,
+                searchPlaylistsAsync: _searchYoutubePlaylistsAsync,
+                listAccountPlaylistsAsync: _listYoutubeAccountPlaylistsAsync,
+                importPlaylistAsync: _importYoutubePlaylistAsync,
+                tryGetPlaylistItemCountAsync: _tryGetYoutubePlaylistItemCountAsync,
+                getLastUrl: _getLastYoutubeUrl,
+                setLastUrl: _setLastYoutubeUrl,
+                openUrlAsync: _openUrlAsync,
+                searchDefaults: searchDefaults,
+                importAppendDefault: _getYoutubeImportAppendDefault(),
+                setImportAppendDefault: _setYoutubeImportAppendDefault);
+        }
+        catch { /* ignore */ }
+
+        try
+        {
+            LocalTab.Initialize(
+                getAppendDefault: _getLocalImportAppendDefault,
+                setAppendDefault: _setLocalImportAppendDefault,
+                getRemoveDuplicatesDefault: _getLocalImportRemoveDuplicatesDefault,
+                setRemoveDuplicatesDefault: _setLocalImportRemoveDuplicatesDefault,
+                getReadMetadataOnLoad: _getReadMetadataOnLoad,
+                getIncludeSubfoldersOnFolderLoad: _getIncludeSubfoldersOnFolderLoad,
+                addFolderAsync: _addLocalFolderAsync,
+                addFilesAsync: _addLocalFilesAsync);
+        }
+        catch { /* ignore */ }
 
         _playlistFilterDebounceTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -214,6 +315,78 @@ public partial class PlaylistWindow : Window
                 // ignore
             }
         };
+    }
+
+    private void PlaylistListBox_OnPreviewDragOver(object sender, System.Windows.DragEventArgs e)
+    {
+        try
+        {
+            if (_busyCount > 0)
+            {
+                e.Effects = System.Windows.DragDropEffects.None;
+                e.Handled = true;
+                return;
+            }
+
+            var data = e.Data;
+            if (data is null)
+            {
+                e.Effects = System.Windows.DragDropEffects.None;
+                e.Handled = true;
+                return;
+            }
+
+            if (PlaylistDragDropHelper.CanAccept(data))
+                e.Effects = System.Windows.DragDropEffects.Copy;
+            else
+                e.Effects = System.Windows.DragDropEffects.None;
+
+            e.Handled = true;
+        }
+        catch
+        {
+            e.Effects = System.Windows.DragDropEffects.None;
+            e.Handled = true;
+        }
+    }
+
+    private async void PlaylistListBox_OnDrop(object sender, System.Windows.DragEventArgs e)
+    {
+        try
+        {
+            if (_busyCount > 0)
+                return;
+
+            if (e.Data is null)
+                return;
+
+            var payload = PlaylistDragDropHelper.ExtractBestEffort(e.Data);
+            if (payload.LocalPaths.Count == 0 && payload.Urls.Count == 0)
+                return;
+
+            using var cts = new CancellationTokenSource();
+            Interlocked.Increment(ref _busyCount);
+            SetLoadEnabled(false);
+            SetBusy("Adding to playlist...", cts);
+            try
+            {
+                if (payload.LocalPaths.Count > 0)
+                    await _handleDroppedLocalPathsAsync(payload.LocalPaths, cts.Token).ConfigureAwait(true);
+
+                if (payload.Urls.Count > 0)
+                    await _handleDroppedUrlsAsync(payload.Urls, cts.Token).ConfigureAwait(true);
+            }
+            finally
+            {
+                ClearBusy();
+                Interlocked.Decrement(ref _busyCount);
+                SetLoadEnabled(true);
+            }
+        }
+        catch
+        {
+            // silently ignore (drag/drop is best-effort UX)
+        }
     }
 
     private void InitializeSortUi()
@@ -520,8 +693,6 @@ public partial class PlaylistWindow : Window
     {
         if (_busyCount > 0)
             enabled = false;
-        SearchYoutubeButton.IsEnabled = enabled;
-        LoadFolderButton.IsEnabled = enabled;
         SavePlaylistButton.IsEnabled = enabled;
         LoadPlaylistButton.IsEnabled = enabled;
         try { PlaylistFilterTextBox.IsEnabled = enabled; } catch { /* ignore */ }
@@ -816,38 +987,7 @@ public partial class PlaylistWindow : Window
         catch { }
     }
 
-    // Load URL moved into the YouTube modal.
-
-    private async void SearchYoutubeButton_OnClick(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            if (_busyCount > 0)
-                return;
-            using var cts = new CancellationTokenSource();
-            Interlocked.Increment(ref _busyCount);
-            SetLoadEnabled(false);
-            try
-            {
-                SetBusy("YouTube...");
-                await _openYoutubeModalAsync(this, cts.Token);
-            }
-            finally
-            {
-                ClearBusy();
-                Interlocked.Decrement(ref _busyCount);
-                SetLoadEnabled(true);
-            }
-        }
-        catch (Exception ex)
-        {
-            try
-            {
-                System.Windows.MessageBox.Show(this, $"YouTube failed.\n\n{ex.Message}", "YouTube", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-            catch { /* ignore */ }
-        }
-    }
+    // YouTube is now a tab (no modal).
 
     private async void SavePlaylistButton_OnClick(object sender, RoutedEventArgs e)
     {
@@ -908,6 +1048,42 @@ public partial class PlaylistWindow : Window
             try
             {
                 await _loadPlaylistFromFileAsync(path);
+            }
+            finally
+            {
+                ClearBusy();
+                Interlocked.Decrement(ref _busyCount);
+                SetLoadEnabled(true);
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private async void NewPlaylistButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_busyCount > 0)
+                return;
+
+            var res = System.Windows.MessageBox.Show(
+                GetDialogOwnerWindow(),
+                "This will clear the current playlist.\n\nContinue?",
+                "New playlist",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning);
+            if (res != MessageBoxResult.OK)
+                return;
+
+            Interlocked.Increment(ref _busyCount);
+            SetLoadEnabled(false);
+            SetBusy("Clearing...");
+            try
+            {
+                await _newPlaylistAsync(CancellationToken.None).ConfigureAwait(true);
             }
             finally
             {
@@ -996,20 +1172,7 @@ public partial class PlaylistWindow : Window
         }
     }
 
-    private async void LoadFolderButton_OnClick(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            if (_busyCount > 0)
-                return;
-
-            await _openLocalFilesModalAsync(GetDialogOwnerWindow(), CancellationToken.None);
-        }
-        catch
-        {
-            // ignore
-        }
-    }
+    // Local / YouTube are now tabs (no modal buttons).
 
     private async void RefreshButton_OnClick(object sender, RoutedEventArgs e)
     {
@@ -1075,7 +1238,7 @@ public partial class PlaylistWindow : Window
         }
     }
 
-    private async void CleanInvalidItemsButton_OnClick(object sender, RoutedEventArgs e)
+    private async void RemoveMissingButton_OnClick(object sender, RoutedEventArgs e)
     {
         if (_busyCount > 0)
             return;
@@ -1083,7 +1246,7 @@ public partial class PlaylistWindow : Window
         using var cts = new CancellationTokenSource();
         Interlocked.Increment(ref _busyCount);
         SetLoadEnabled(false);
-        SetBusy("Cleaning invalid items...", cts);
+        SetBusy("Removing missing items...", cts);
         int removedCount = 0;
         try
         {
@@ -1103,18 +1266,67 @@ public partial class PlaylistWindow : Window
             Interlocked.Decrement(ref _busyCount);
             SetLoadEnabled(true);
 
-            // --- Visual feedback ---
             if (removedCount > 0)
             {
-                System.Windows.MessageBox.Show(
-                    this,
-                    $"Removed {removedCount} invalid item{(removedCount == 1 ? "" : "s")} from the playlist.",
-                    "LyllyPlayer",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
+                try
+                {
+                    System.Windows.MessageBox.Show(
+                        this,
+                        $"Removed missing {removedCount} item{(removedCount == 1 ? "" : "s")} from the playlist.",
+                        "LyllyPlayer",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+                catch { /* ignore */ }
             }
         }
     }
+
+    private async void RemoveDuplicatesButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (_busyCount > 0)
+            return;
+
+        using var cts = new CancellationTokenSource();
+        Interlocked.Increment(ref _busyCount);
+        SetLoadEnabled(false);
+        SetBusy("Removing duplicates...", cts);
+        var removed = 0;
+        try
+        {
+            removed = await _removeDuplicatesAsync(cts.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            // cancel: ignore
+        }
+        catch
+        {
+            // ignore
+        }
+        finally
+        {
+            ClearBusy();
+            Interlocked.Decrement(ref _busyCount);
+            SetLoadEnabled(true);
+
+            if (removed > 0)
+            {
+                try
+                {
+                    System.Windows.MessageBox.Show(
+                        this,
+                        $"Removed {removed} duplicate item{(removed == 1 ? "" : "s")} from the playlist.",
+                        "LyllyPlayer",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+                catch { /* ignore */ }
+            }
+        }
+    }
+
+    // (legacy CleanInvalidItemsButton removed; replaced by "Remove Missing")
 
     // Source is reflected in window title; loading happens via dialog.
 

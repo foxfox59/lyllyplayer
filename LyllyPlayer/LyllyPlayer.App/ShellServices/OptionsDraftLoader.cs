@@ -49,6 +49,8 @@ public static class OptionsDraftLoader
         Func<bool> getExportM3uIncludeYoutube,
         Func<bool> getExportM3uPreferRelativePaths,
         Func<bool> getExportM3uIncludeLyllyMetadata,
+        Func<bool> getPlaylistDragDropAppend,
+        Func<bool> getPlaylistDragDropRemoveDuplicates,
         Func<string> getAppIconVisibility,
         Func<string> getAudioQuality,
         Func<string?> getAudioOutputDevice,
@@ -129,6 +131,8 @@ public static class OptionsDraftLoader
         try { d.ExportM3uIncludeYoutube = getExportM3uIncludeYoutube(); } catch { d.ExportM3uIncludeYoutube = true; }
         try { d.ExportM3uPreferRelativePaths = getExportM3uPreferRelativePaths(); } catch { d.ExportM3uPreferRelativePaths = false; }
         try { d.ExportM3uIncludeLyllyMetadata = getExportM3uIncludeLyllyMetadata(); } catch { d.ExportM3uIncludeLyllyMetadata = true; }
+        try { d.PlaylistDragDropAppend = getPlaylistDragDropAppend(); } catch { d.PlaylistDragDropAppend = true; }
+        try { d.PlaylistDragDropRemoveDuplicates = getPlaylistDragDropRemoveDuplicates(); } catch { d.PlaylistDragDropRemoveDuplicates = true; }
         try { d.AppIconVisibility = SettingsStore.NormalizeAppIconVisibility(getAppIconVisibility()); } catch { d.AppIconVisibility = "TaskbarOnly"; }
 
         try

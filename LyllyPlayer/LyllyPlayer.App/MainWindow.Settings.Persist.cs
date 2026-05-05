@@ -256,6 +256,8 @@ public partial class MainWindow
             ExportM3uIncludeLyllyMetadata: _exportM3uIncludeLyllyMetadata,
             LocalImportAppend: _localImportAppend,
             LocalImportRemoveDuplicates: _localImportRemoveDuplicates,
+            PlaylistDragDropAppend: _playlistDragDropAppend,
+            PlaylistDragDropRemoveDuplicates: _playlistDragDropRemoveDuplicates,
             AudioQuality: _audioQuality,
             AudioOutputDevice: string.IsNullOrWhiteSpace(_audioOutputDevice) ? null : _audioOutputDevice,
             AudioNormalize: _audioNormalizeEnabled,

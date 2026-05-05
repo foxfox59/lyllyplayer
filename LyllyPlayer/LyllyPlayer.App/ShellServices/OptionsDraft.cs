@@ -56,6 +56,8 @@ public sealed class OptionsDraft
     public bool ExportM3uIncludeYoutube;
     public bool ExportM3uPreferRelativePaths;
     public bool ExportM3uIncludeLyllyMetadata;
+    public bool PlaylistDragDropAppend = true;
+    public bool PlaylistDragDropRemoveDuplicates = true;
     public string AppIconVisibility = "TaskbarOnly";
 
     public string AudioQuality = "Auto";

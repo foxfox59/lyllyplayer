@@ -108,6 +108,10 @@ public partial class OptionsWindow : Window
     private readonly Action<bool> _setExportM3uPreferRelativePaths;
     private readonly Func<bool> _getExportM3uIncludeLyllyMetadata;
     private readonly Action<bool> _setExportM3uIncludeLyllyMetadata;
+    private readonly Func<bool> _getPlaylistDragDropAppend;
+    private readonly Action<bool> _setPlaylistDragDropAppend;
+    private readonly Func<bool> _getPlaylistDragDropRemoveDuplicates;
+    private readonly Action<bool> _setPlaylistDragDropRemoveDuplicates;
     private readonly Func<string> _getAppIconVisibility;
     private readonly Action<string> _setAppIconVisibility;
     private readonly Func<string> _getAppLogLevel;
@@ -243,6 +247,10 @@ public partial class OptionsWindow : Window
         Action<bool> setExportM3uPreferRelativePaths,
         Func<bool> getExportM3uIncludeLyllyMetadata,
         Action<bool> setExportM3uIncludeLyllyMetadata,
+        Func<bool> getPlaylistDragDropAppend,
+        Action<bool> setPlaylistDragDropAppend,
+        Func<bool> getPlaylistDragDropRemoveDuplicates,
+        Action<bool> setPlaylistDragDropRemoveDuplicates,
         Func<string> getAppIconVisibility,
         Action<string> setAppIconVisibility,
         Func<string> getAppLogLevel,
@@ -358,6 +366,10 @@ public partial class OptionsWindow : Window
         _setExportM3uPreferRelativePaths = setExportM3uPreferRelativePaths;
         _getExportM3uIncludeLyllyMetadata = getExportM3uIncludeLyllyMetadata;
         _setExportM3uIncludeLyllyMetadata = setExportM3uIncludeLyllyMetadata;
+        _getPlaylistDragDropAppend = getPlaylistDragDropAppend;
+        _setPlaylistDragDropAppend = setPlaylistDragDropAppend;
+        _getPlaylistDragDropRemoveDuplicates = getPlaylistDragDropRemoveDuplicates;
+        _setPlaylistDragDropRemoveDuplicates = setPlaylistDragDropRemoveDuplicates;
         _getAppIconVisibility = getAppIconVisibility;
         _setAppIconVisibility = setAppIconVisibility;
         _getAppLogLevel = getAppLogLevel;
@@ -473,6 +485,8 @@ public partial class OptionsWindow : Window
             _getExportM3uIncludeYoutube,
             _getExportM3uPreferRelativePaths,
             _getExportM3uIncludeLyllyMetadata,
+            _getPlaylistDragDropAppend,
+            _getPlaylistDragDropRemoveDuplicates,
             _getAppIconVisibility,
             _getAudioQuality,
             _getAudioOutputDevice,
@@ -624,6 +638,8 @@ public partial class OptionsWindow : Window
         }
         catch { /* ignore */ }
         try { KeepIncompletePlaylistOnCancelCheckBox.IsChecked = _draft.KeepIncompletePlaylistOnCancel; } catch { /* ignore */ }
+        try { PlaylistDragDropAppendCheckBox.IsChecked = _draft.PlaylistDragDropAppend; } catch { /* ignore */ }
+        try { PlaylistDragDropDedupeCheckBox.IsChecked = _draft.PlaylistDragDropRemoveDuplicates; } catch { /* ignore */ }
         try { LyricsEnabledCheckBox.IsChecked = _draft.LyricsEnabled; } catch { /* ignore */ }
         try { LyricsLocalFilesEnabledCheckBox.IsChecked = _draft.LyricsLocalFilesEnabled; } catch { /* ignore */ }
         try { ExportM3uIncludeYoutubeCheckBox.IsChecked = _draft.ExportM3uIncludeYoutube; } catch { /* ignore */ }
@@ -1798,6 +1814,38 @@ public partial class OptionsWindow : Window
         _draft.KeepIncompletePlaylistOnCancel = false;
     }
 
+    private void PlaylistDragDropAppendCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.PlaylistDragDropAppend = true;
+        try { _setPlaylistDragDropAppend(true); } catch { /* ignore */ }
+    }
+
+    private void PlaylistDragDropAppendCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.PlaylistDragDropAppend = false;
+        try { _setPlaylistDragDropAppend(false); } catch { /* ignore */ }
+    }
+
+    private void PlaylistDragDropDedupeCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.PlaylistDragDropRemoveDuplicates = true;
+        try { _setPlaylistDragDropRemoveDuplicates(true); } catch { /* ignore */ }
+    }
+
+    private void PlaylistDragDropDedupeCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.PlaylistDragDropRemoveDuplicates = false;
+        try { _setPlaylistDragDropRemoveDuplicates(false); } catch { /* ignore */ }
+    }
+
     private void LyricsEnabledCheckBox_OnChecked(object sender, RoutedEventArgs e)
     {
         if (_suppressBackgroundUiEvents)
@@ -2436,6 +2484,8 @@ public partial class OptionsWindow : Window
         try { _setCompactModeHidesAuxWindows(_draft.CompactModeHidesAuxWindows); } catch { /* ignore */ }
         try { _setCompactModeLayout(SettingsStore.NormalizeCompactModeLayout(_draft.CompactModeLayout)); } catch { /* ignore */ }
         try { _setKeepIncompletePlaylistOnCancel(_draft.KeepIncompletePlaylistOnCancel); } catch { /* ignore */ }
+        try { _setPlaylistDragDropAppend(_draft.PlaylistDragDropAppend); } catch { /* ignore */ }
+        try { _setPlaylistDragDropRemoveDuplicates(_draft.PlaylistDragDropRemoveDuplicates); } catch { /* ignore */ }
         try { _setLyricsEnabled(_draft.LyricsEnabled); } catch { /* ignore */ }
         try { _setLyricsLocalFilesEnabled(_draft.LyricsLocalFilesEnabled); } catch { /* ignore */ }
         try { _setExportM3uIncludeYoutube(_draft.ExportM3uIncludeYoutube); } catch { /* ignore */ }

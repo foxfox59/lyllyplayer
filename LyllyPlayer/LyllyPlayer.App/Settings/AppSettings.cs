@@ -126,6 +126,10 @@ public sealed record AppSettings(
     bool? LocalImportAppend,
     /// <summary>Last used Local files import behavior: remove duplicates (local: full path).</summary>
     bool? LocalImportRemoveDuplicates,
+    /// <summary>Drag/drop into playlist: true = Append, false = Replace.</summary>
+    bool? PlaylistDragDropAppend,
+    /// <summary>Drag/drop into playlist: when appending, remove duplicates (local: full path, youtube: video id).</summary>
+    bool? PlaylistDragDropRemoveDuplicates,
     string? AudioQuality,
     string? AudioOutputDevice,
     /// <summary>When true, applies lightweight real-time AGC (NAudio path). (Stored setting name kept for backward compatibility.)</summary>
