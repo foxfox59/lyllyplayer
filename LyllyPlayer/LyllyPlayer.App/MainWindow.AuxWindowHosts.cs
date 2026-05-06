@@ -156,39 +156,7 @@ public partial class MainWindow
             {
                 try
                 {
-                    var result = _playlistFiles.LoadSavedPlaylist(path);
-                    if (!result.Success)
-                    {
-                        System.Windows.MessageBox.Show(
-                            this,
-                            result.ErrorMessage ?? "Could not load the playlist file.",
-                            "LyllyPlayer",
-                            MessageBoxButton.OK,
-                            MessageBoxImage.Warning);
-                        SetStatusMessage("ERROR", "Load saved playlist failed.");
-                        return;
-                    }
-
-                    var pl = result.Playlist!;
-                    if (result.Entries.Count == 0)
-                    {
-                        System.Windows.MessageBox.Show(
-                            this,
-                            "The playlist file is valid but contains no playable tracks.",
-                            "LyllyPlayer",
-                            MessageBoxButton.OK,
-                            MessageBoxImage.Information);
-                    }
-
-                    _lastPlaylistSourceType = ParsePlaylistSourceType(pl.SourceType);
-                    _lastLocalPlaylistPath = path;
-                    _playlistSourceText = path;
-                        _playlistWindow?.SetSourceText(path);
-
-                    await LoadPlaylistFromEntriesAsync(result.Entries, title: pl.Name, sourceKey: path, isStartupAutoLoad: false);
-                    ApplySavedPlaylistOriginsIfAny(pl, result.Entries);
-                    UpdateRefreshEnabled();
-                    UpdatePlaylistTitleDisplayForNowPlaying();
+                    await PromptAndOpenPlaylistFromFileAsync(path).ConfigureAwait(true);
                 }
                 catch (Exception ex)
                 {
@@ -743,6 +711,61 @@ public partial class MainWindow
                 RequestPersistSnapshot();
             },
             openBackgroundDesigner: () => OpenBackgroundDesigner(),
+            associateFiles: () =>
+            {
+                try
+                {
+                    FileAssociationRegistrar.RegisterPerUser(".lyllytheme", "LyllyPlayer.Theme", "LyllyPlayer theme");
+                    FileAssociationRegistrar.RegisterPerUser(".lyllylist", "LyllyPlayer.Playlist", "LyllyPlayer playlist");
+                }
+                catch (Exception ex)
+                {
+                    try
+                    {
+                        System.Windows.MessageBox.Show(
+                            this,
+                            "Failed to associate files.\n\n" + ex.Message,
+                            "LyllyPlayer",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                    }
+                    catch { /* ignore */ }
+                }
+            },
+            removeFileAssociations: () =>
+            {
+                try
+                {
+                    FileAssociationRegistrar.UnregisterPerUser(".lyllytheme", "LyllyPlayer.Theme");
+                    FileAssociationRegistrar.UnregisterPerUser(".lyllylist", "LyllyPlayer.Playlist");
+                }
+                catch (Exception ex)
+                {
+                    try
+                    {
+                        System.Windows.MessageBox.Show(
+                            this,
+                            "Failed to remove associations.\n\n" + ex.Message,
+                            "LyllyPlayer",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                    }
+                    catch { /* ignore */ }
+                }
+            },
+            getFileAssociationsStatus: () =>
+            {
+                try
+                {
+                    var a = FileAssociationRegistrar.IsAssociatedWithThisAppPerUser(".lyllytheme", "LyllyPlayer.Theme");
+                    var b = FileAssociationRegistrar.IsAssociatedWithThisAppPerUser(".lyllylist", "LyllyPlayer.Playlist");
+                    return $".lyllytheme: {(a ? "associated" : "not associated")}\n.lyllylist: {(b ? "associated" : "not associated")}";
+                }
+                catch
+                {
+                    return "(status unavailable)";
+                }
+            },
             getAppTitleMode: () => _appTitleMode,
             setAppTitleMode: (m) =>
             {

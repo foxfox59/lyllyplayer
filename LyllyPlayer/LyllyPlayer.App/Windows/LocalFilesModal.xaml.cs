@@ -9,6 +9,12 @@ namespace LyllyPlayer.Windows;
 
 public partial class LocalFilesModal : Window
 {
+    private sealed class Win32OwnerWrapper : System.Windows.Forms.IWin32Window
+    {
+        public IntPtr Handle { get; }
+        public Win32OwnerWrapper(IntPtr handle) => Handle = handle;
+    }
+
     private readonly Func<bool> _getAppendDefault;
     private readonly Action<bool> _setAppendDefault;
     private readonly Func<bool> _getRemoveDuplicatesDefault;
@@ -160,8 +166,25 @@ public partial class LocalFilesModal : Window
                 ShowNewFolderButton = false,
             };
 
-            if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
-                return;
+            try
+            {
+                var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+                if (hwnd != IntPtr.Zero)
+                {
+                    if (dlg.ShowDialog(new Win32OwnerWrapper(hwnd)) != System.Windows.Forms.DialogResult.OK)
+                        return;
+                }
+                else
+                {
+                    if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+                        return;
+                }
+            }
+            catch
+            {
+                if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+                    return;
+            }
 
             var folder = dlg.SelectedPath;
             if (string.IsNullOrWhiteSpace(folder))

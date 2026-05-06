@@ -11,6 +11,12 @@ namespace LyllyPlayer.Windows;
 
 public partial class LocalFilesTabView : System.Windows.Controls.UserControl
 {
+    private sealed class Win32OwnerWrapper : System.Windows.Forms.IWin32Window
+    {
+        public IntPtr Handle { get; }
+        public Win32OwnerWrapper(IntPtr handle) => Handle = handle;
+    }
+
     private Func<bool>? _getAppendDefault;
     private Action<bool>? _setAppendDefault;
     private Func<bool>? _getRemoveDuplicatesDefault;
@@ -149,8 +155,26 @@ public partial class LocalFilesTabView : System.Windows.Controls.UserControl
                 ShowNewFolderButton = false,
             };
 
-            if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
-                return;
+            try
+            {
+                var owner = Window.GetWindow(this);
+                var hwnd = owner is not null ? new System.Windows.Interop.WindowInteropHelper(owner).Handle : IntPtr.Zero;
+                if (hwnd != IntPtr.Zero)
+                {
+                    if (dlg.ShowDialog(new Win32OwnerWrapper(hwnd)) != System.Windows.Forms.DialogResult.OK)
+                        return;
+                }
+                else
+                {
+                    if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+                        return;
+                }
+            }
+            catch
+            {
+                if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+                    return;
+            }
 
             var folder = dlg.SelectedPath;
             if (string.IsNullOrWhiteSpace(folder))

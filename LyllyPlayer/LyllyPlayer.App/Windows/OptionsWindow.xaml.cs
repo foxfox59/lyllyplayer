@@ -24,7 +24,7 @@ public partial class OptionsWindow : Window
     }
 
     private Window GetDialogOwnerWindow()
-        => System.Windows.Application.Current?.MainWindow ?? this;
+        => DialogOwnerHelper.GetBestOwnerWindow() ?? this;
 
     private bool _suppressAutoRefreshEvent;
     private bool _suppressOptionsTabSelection;
@@ -153,6 +153,9 @@ public partial class OptionsWindow : Window
     private readonly Action<LyllyPlayer.Settings.RectN?> _setBackgroundUserDefinedOptionsLog;
     private readonly Func<LyllyPlayer.Settings.RectN?> _getBackgroundUserDefinedLyrics;
     private readonly Action<LyllyPlayer.Settings.RectN?> _setBackgroundUserDefinedLyrics;
+    private readonly Action? _associateFiles;
+    private readonly Action? _removeFileAssociations;
+    private readonly Func<string>? _getFileAssociationsStatus;
 
     private OptionsDraft _draft = new();
 
@@ -207,6 +210,9 @@ public partial class OptionsWindow : Window
         Func<LyllyPlayer.Settings.RectN?> getBackgroundUserDefinedLyrics,
         Action<LyllyPlayer.Settings.RectN?> setBackgroundUserDefinedLyrics,
         Action openBackgroundDesigner,
+        Action associateFiles,
+        Action removeFileAssociations,
+        Func<string> getFileAssociationsStatus,
         Func<string> getAppTitleMode,
         Action<string> setAppTitleMode,
         Func<string> getCustomAppTitle,
@@ -326,6 +332,9 @@ public partial class OptionsWindow : Window
         _getBackgroundUserDefinedLyrics = getBackgroundUserDefinedLyrics;
         _setBackgroundUserDefinedLyrics = setBackgroundUserDefinedLyrics;
         _openBackgroundDesigner = openBackgroundDesigner;
+        _associateFiles = associateFiles;
+        _removeFileAssociations = removeFileAssociations;
+        _getFileAssociationsStatus = getFileAssociationsStatus;
         _getAppTitleMode = getAppTitleMode;
         _setAppTitleMode = setAppTitleMode;
         _getCustomAppTitle = getCustomAppTitle;
@@ -439,6 +448,33 @@ public partial class OptionsWindow : Window
             };
         LoadDraftFromCurrent();
         RefreshUi();
+        try { RefreshFileAssociationsStatus(); } catch { /* ignore */ }
+
+        try { Activated += (_, _) => { try { RefreshFileAssociationsStatus(); } catch { /* ignore */ } }; } catch { /* ignore */ }
+    }
+
+    private void RefreshFileAssociationsStatus()
+    {
+        try
+        {
+            FileAssociationsStatusTextBlock.Text = _getFileAssociationsStatus?.Invoke() ?? "(unavailable)";
+        }
+        catch
+        {
+            try { FileAssociationsStatusTextBlock.Text = "(status unavailable)"; } catch { /* ignore */ }
+        }
+    }
+
+    private void AssociateFilesButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try { _associateFiles?.Invoke(); } catch { /* ignore */ }
+        try { RefreshFileAssociationsStatus(); } catch { /* ignore */ }
+    }
+
+    private void RemoveFileAssociationsButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try { _removeFileAssociations?.Invoke(); } catch { /* ignore */ }
+        try { RefreshFileAssociationsStatus(); } catch { /* ignore */ }
     }
 
     private void LoadDraftFromCurrent()
@@ -1410,10 +1446,10 @@ public partial class OptionsWindow : Window
             var dlg = new Microsoft.Win32.SaveFileDialog
             {
                 Title = "Save theme",
-                Filter = "Theme JSON (*.json)|*.json|All files (*.*)|*.*",
+                Filter = "Lylly theme (*.lyllytheme)|*.lyllytheme|Theme JSON (legacy) (*.json)|*.json|All files (*.*)|*.*",
                 AddExtension = true,
-                DefaultExt = ".json",
-                FileName = "theme.json",
+                DefaultExt = ".lyllytheme",
+                FileName = "theme.lyllytheme",
                 OverwritePrompt = true
             };
             if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
@@ -1453,7 +1489,7 @@ public partial class OptionsWindow : Window
             var dlg = new Microsoft.Win32.OpenFileDialog
             {
                 Title = "Load theme",
-                Filter = "Theme JSON (*.json)|*.json|All files (*.*)|*.*",
+                Filter = "Lylly theme (*.lyllytheme;*.json)|*.lyllytheme;*.json|Lylly theme (*.lyllytheme)|*.lyllytheme|Theme JSON (legacy) (*.json)|*.json|All files (*.*)|*.*",
                 CheckFileExists = true,
                 Multiselect = false
             };

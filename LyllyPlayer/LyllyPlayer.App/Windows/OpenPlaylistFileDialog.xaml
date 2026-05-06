@@ -1,0 +1,47 @@
+<Window x:Class="LyllyPlayer.Windows.OpenPlaylistFileDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Open playlist"
+        Width="420"
+        Height="190"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False">
+    <Border Background="{DynamicResource App.Theme.Surface}"
+            BorderBrush="{DynamicResource App.Theme.Border}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="14">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0"
+                       Text="How do you want to open this playlist?"
+                       FontFamily="{StaticResource App.MonoFont}"
+                       Foreground="{DynamicResource App.Theme.Foreground}"
+                       FontSize="13"
+                       Margin="0,0,0,10"/>
+
+            <TextBlock Grid.Row="1"
+                       x:Name="PathTextBlock"
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                       FontFamily="{StaticResource App.MonoFont}"
+                       FontSize="11"/>
+
+            <StackPanel Grid.Row="2"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Margin="0,14,0,0">
+                <Button MinWidth="92" Margin="0,0,8,0" Content="Append" Click="AppendButton_OnClick"/>
+                <Button MinWidth="92" Margin="0,0,8,0" Content="Replace" Click="ReplaceButton_OnClick"/>
+                <Button MinWidth="92" Content="Cancel" Click="CancelButton_OnClick"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>
+

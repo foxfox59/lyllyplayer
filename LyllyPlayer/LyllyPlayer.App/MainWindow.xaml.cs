@@ -31,6 +31,136 @@ namespace LyllyPlayer;
 
 public partial class MainWindow : Window
 {
+    private int _externalOpenRequestId;
+
+    // Prefer topmost/active window as dialog owner.
+
+    public void HandleExternalOpenFileRequestBestEffort(string path)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            var p = path.Trim().Trim('"');
+            if (!FileOpenIpc.LooksLikeSupportedFileOpenArg(p))
+                return;
+
+            var requestId = Interlocked.Increment(ref _externalOpenRequestId);
+            Dispatcher.BeginInvoke(async () =>
+            {
+                if (requestId != _externalOpenRequestId)
+                    return;
+
+                try { await HandleExternalOpenFileRequestCoreAsync(p).ConfigureAwait(true); }
+                catch { /* ignore */ }
+            }, DispatcherPriority.Loaded);
+        }
+        catch { /* ignore */ }
+    }
+
+    private async Task HandleExternalOpenFileRequestCoreAsync(string path)
+    {
+        var p = (path ?? "").Trim().Trim('"');
+        if (!FileOpenIpc.LooksLikeSupportedFileOpenArg(p))
+            return;
+
+        var ext = "";
+        try { ext = (System.IO.Path.GetExtension(p) ?? "").Trim().ToLowerInvariant(); } catch { ext = ""; }
+
+        if (ext == ".lyllytheme")
+        {
+            await ApplyThemeFromFileBestEffortAsync(p).ConfigureAwait(true);
+            return;
+        }
+
+        if (ext == ".lyllylist")
+        {
+            await PromptAndOpenPlaylistFromFileAsync(p).ConfigureAwait(true);
+            return;
+        }
+    }
+
+    private Task ApplyThemeFromFileBestEffortAsync(string path)
+    {
+        try
+        {
+            var json = SafeJson.ReadUtf8TextForJson(path, SafeJson.MaxThemeImportFileBytes);
+            var theme = System.Text.Json.JsonSerializer.Deserialize<ThemeSettings>(json, SafeJson.CreateDeserializerOptions());
+            if (theme is null)
+                return Task.CompletedTask;
+
+            ApplyThemeSettings(theme);
+        }
+        catch { /* ignore */ }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task PromptAndOpenPlaylistFromFileAsync(string path)
+    {
+        try
+        {
+            var owner = DialogOwnerHelper.GetBestOwnerWindow() ?? this;
+            var dlg = new OpenPlaylistFileDialog(path) { Owner = owner };
+            dlg.ShowActivated = true;
+            _ = dlg.ShowDialog();
+            var mode = dlg.Mode;
+            if (mode == PlaylistOpenMode.Cancel)
+                return;
+
+            var result = _playlistFiles.LoadSavedPlaylist(path);
+            if (!result.Success || result.Playlist is null)
+            {
+                try
+                {
+                    System.Windows.MessageBox.Show(
+                        owner,
+                        result.ErrorMessage ?? "Could not load the playlist file.",
+                        "LyllyPlayer",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+                catch { /* ignore */ }
+                return;
+            }
+
+            var entries = result.Entries;
+            var pl = result.Playlist;
+            var title = pl.Name;
+
+            if (mode == PlaylistOpenMode.Replace)
+            {
+                _lastPlaylistSourceType = ParsePlaylistSourceType(pl.SourceType);
+                _lastLocalPlaylistPath = path;
+                _playlistSourceText = path;
+                _playlistWindow?.SetSourceText(path);
+
+                await LoadPlaylistFromEntriesAsync(entries, title: title, sourceKey: path, isStartupAutoLoad: false).ConfigureAwait(true);
+                ApplySavedPlaylistOriginsIfAny(pl, entries);
+                UpdateRefreshEnabled();
+                UpdatePlaylistTitleDisplayForNowPlaying();
+                return;
+            }
+
+            _playlistIsCompound = true;
+            var removeDupes = _localImportRemoveDuplicates;
+            var (added, removedDupes) = AppendEntriesPreserveCurrent(
+                entries,
+                originLabel: string.IsNullOrWhiteSpace(title) ? "Playlist" : title,
+                originSource: path,
+                removeDuplicates: removeDupes,
+                cancellationToken: CancellationToken.None);
+            TryShowAppendSummaryDialog("Playlist", added, removedDupes);
+
+            try { ApplySavedPlaylistOriginsIfAny(pl, entries); } catch { /* ignore */ }
+
+            UpdateRefreshEnabled();
+            UpdatePlaylistTitleDisplayForNowPlaying();
+        }
+        catch { /* ignore */ }
+    }
+
     public static readonly DependencyProperty IsAlwaysOnTopUiProperty =
         DependencyProperty.Register(nameof(IsAlwaysOnTopUi), typeof(bool), typeof(MainWindow), new PropertyMetadata(false));
 

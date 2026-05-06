@@ -35,7 +35,7 @@ public partial class PlaylistWindow : Window
     }
 
     private Window GetDialogOwnerWindow()
-        => System.Windows.Application.Current?.MainWindow ?? this;
+        => DialogOwnerHelper.GetBestOwnerWindow() ?? this;
 
     private readonly Func<string, Task> _loadUrlAsync;
     private readonly Func<(int count, int minLengthSeconds)> _getSearchDefaults;

@@ -525,6 +525,35 @@
                                                  Content="Notification area only"
                                                  Checked="AppIconTrayOnlyRadio_OnChecked"/>
                                 </StackPanel>
+
+                                <TextBlock Text="File associations"
+                                           FontWeight="SemiBold"
+                                           Margin="0,16,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Register .lyllytheme and .lyllylist for the current Windows user. This enables Explorer icons and double-click open."/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <Button x:Name="AssociateFilesButton"
+                                            MinWidth="160"
+                                            Height="30"
+                                            Margin="0,0,8,0"
+                                            Content="Associate files…"
+                                            Click="AssociateFilesButton_OnClick"/>
+                                    <Button x:Name="RemoveFileAssociationsButton"
+                                            MinWidth="160"
+                                            Height="30"
+                                            Content="Remove associations"
+                                            Click="RemoveFileAssociationsButton_OnClick"/>
+                                </StackPanel>
+                                <TextBlock x:Name="FileAssociationsStatusTextBlock"
+                                           TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="(status)"
+                                           Margin="0,0,0,0"/>
                             </StackPanel>
                         </ScrollViewer>
                     </TabItem>

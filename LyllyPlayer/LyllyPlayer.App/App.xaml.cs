@@ -13,6 +13,8 @@ namespace LyllyPlayer;
 public partial class App : System.Windows.Application
 {
     private Mutex? _singleInstanceMutex;
+    private CancellationTokenSource? _openIpcCts;
+    private IDisposable? _openIpcServer;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -23,6 +25,48 @@ public partial class App : System.Windows.Application
         try { LibVlcHost.EnsureInitialized(); } catch { /* logged on first real use */ }
 
         base.OnStartup(e);
+
+        // Primary instance only: start IPC server for Explorer "open with" / file associations.
+        try
+        {
+            _openIpcCts = new CancellationTokenSource();
+            _openIpcServer = FileOpenIpc.StartServerBestEffort(path =>
+            {
+                try
+                {
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        try
+                        {
+                            if (System.Windows.Application.Current?.MainWindow is MainWindow mw)
+                                mw.HandleExternalOpenFileRequestBestEffort(path);
+                        }
+                        catch { /* ignore */ }
+                    });
+                }
+                catch { /* ignore */ }
+            }, _openIpcCts.Token);
+        }
+        catch { /* ignore */ }
+
+        // Cold-start: handle file open args after MainWindow exists.
+        try
+        {
+            var p = FileOpenIpc.TryGetFirstSupportedPathFromArgs(e.Args);
+            if (!string.IsNullOrWhiteSpace(p))
+            {
+                Dispatcher.BeginInvoke(() =>
+                {
+                    try
+                    {
+                        if (System.Windows.Application.Current?.MainWindow is MainWindow mw)
+                            mw.HandleExternalOpenFileRequestBestEffort(p!);
+                    }
+                    catch { /* ignore */ }
+                }, DispatcherPriority.Loaded);
+            }
+        }
+        catch { /* ignore */ }
     }
 
     public App()
@@ -35,6 +79,29 @@ public partial class App : System.Windows.Application
             _singleInstanceMutex = new Mutex(initiallyOwned: true, name: @"Local\LyllyPlayer_9B8C4C2B0B984C1C8AB9D4B9E3B6A1C1", createdNew: out var createdNew);
             if (!createdNew)
             {
+                // If we were launched with a supported file path (Explorer association), forward it to the primary instance.
+                // Do this before showing the "already running" popup.
+                try
+                {
+                    var args = Environment.GetCommandLineArgs();
+                    var p = FileOpenIpc.TryGetFirstSupportedPathFromArgs(args);
+                    if (!string.IsNullOrWhiteSpace(p))
+                    {
+                        try
+                        {
+                            // Best-effort synchronous wait (very short): this is the second instance, so we want to exit ASAP.
+                            var ok = FileOpenIpc.TrySendOpenFileRequestAsync(p!, timeoutMs: 400).GetAwaiter().GetResult();
+                            if (ok)
+                            {
+                                Environment.Exit(0);
+                                return;
+                            }
+                        }
+                        catch { /* ignore */ }
+                    }
+                }
+                catch { /* ignore */ }
+
                 try
                 {
                     System.Windows.MessageBox.Show(
@@ -71,6 +138,12 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        try { _openIpcCts?.Cancel(); } catch { /* ignore */ }
+        try { _openIpcServer?.Dispose(); } catch { /* ignore */ }
+        _openIpcServer = null;
+        try { _openIpcCts?.Dispose(); } catch { /* ignore */ }
+        _openIpcCts = null;
+
         try { _singleInstanceMutex?.ReleaseMutex(); } catch { /* ignore */ }
         try { _singleInstanceMutex?.Dispose(); } catch { /* ignore */ }
         _singleInstanceMutex = null;
