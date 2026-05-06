@@ -1428,6 +1428,12 @@ public partial class OptionsWindow : Window
                 BackgroundAlpha: _draft.BackgroundAlpha,
                 BackgroundScrimPercent: _draft.BackgroundScrimPercent,
                 BackgroundImageStretch: SettingsStore.NormalizeBackgroundImageStretch(_draft.BackgroundImageStretch),
+                BackgroundUserDefinedMainNormal: _draft.BackgroundUserDefinedMainNormal,
+                BackgroundUserDefinedMainCompact: _draft.BackgroundUserDefinedMainCompact,
+                BackgroundUserDefinedMainUltra: _draft.BackgroundUserDefinedMainUltra,
+                BackgroundUserDefinedPlaylist: _draft.BackgroundUserDefinedPlaylist,
+                BackgroundUserDefinedOptionsLog: _draft.BackgroundUserDefinedOptionsLog,
+                BackgroundUserDefinedLyrics: _draft.BackgroundUserDefinedLyrics,
                 AppTitleMode: _draft.AppTitleMode,
                 CustomAppTitle: _draft.CustomAppTitle,
                 UiScalePercent: _draft.UiScalePercent,
@@ -1506,6 +1512,12 @@ public partial class OptionsWindow : Window
                             || string.Equals(n, "BackgroundAlpha", StringComparison.OrdinalIgnoreCase)
                             || string.Equals(n, "BackgroundScrimPercent", StringComparison.OrdinalIgnoreCase)
                             || string.Equals(n, "BackgroundImageStretch", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(n, "BackgroundUserDefinedMainNormal", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(n, "BackgroundUserDefinedMainCompact", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(n, "BackgroundUserDefinedMainUltra", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(n, "BackgroundUserDefinedPlaylist", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(n, "BackgroundUserDefinedOptionsLog", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(n, "BackgroundUserDefinedLyrics", StringComparison.OrdinalIgnoreCase)
                             || string.Equals(n, "AppTitleMode", StringComparison.OrdinalIgnoreCase)
                             || string.Equals(n, "CustomAppTitle", StringComparison.OrdinalIgnoreCase)
                             || string.Equals(n, "UiScalePercent", StringComparison.OrdinalIgnoreCase)
@@ -1576,6 +1588,12 @@ public partial class OptionsWindow : Window
                 && theme.BackgroundAlpha is null
                 && theme.BackgroundScrimPercent is null
                 && theme.BackgroundImageStretch is null
+                && theme.BackgroundUserDefinedMainNormal is null
+                && theme.BackgroundUserDefinedMainCompact is null
+                && theme.BackgroundUserDefinedMainUltra is null
+                && theme.BackgroundUserDefinedPlaylist is null
+                && theme.BackgroundUserDefinedOptionsLog is null
+                && theme.BackgroundUserDefinedLyrics is null
                 && theme.AppTitleMode is null
                 && theme.CustomAppTitle is null
                 && theme.UiScalePercent is null
@@ -1599,6 +1617,12 @@ public partial class OptionsWindow : Window
             if (theme.BackgroundAlpha is >= 0 and <= 255) _draft.BackgroundAlpha = theme.BackgroundAlpha.Value;
             if (theme.BackgroundScrimPercent is >= 0 and <= 80) _draft.BackgroundScrimPercent = theme.BackgroundScrimPercent.Value;
             _draft.BackgroundImageStretch = SettingsStore.NormalizeBackgroundImageStretch(theme.BackgroundImageStretch ?? _draft.BackgroundImageStretch);
+            _draft.BackgroundUserDefinedMainNormal = theme.BackgroundUserDefinedMainNormal ?? LyllyPlayer.Settings.RectN.Full;
+            _draft.BackgroundUserDefinedMainCompact = theme.BackgroundUserDefinedMainCompact ?? LyllyPlayer.Settings.RectN.Full;
+            _draft.BackgroundUserDefinedMainUltra = theme.BackgroundUserDefinedMainUltra ?? LyllyPlayer.Settings.RectN.Full;
+            _draft.BackgroundUserDefinedPlaylist = theme.BackgroundUserDefinedPlaylist ?? LyllyPlayer.Settings.RectN.Full;
+            _draft.BackgroundUserDefinedOptionsLog = theme.BackgroundUserDefinedOptionsLog ?? LyllyPlayer.Settings.RectN.Full;
+            _draft.BackgroundUserDefinedLyrics = theme.BackgroundUserDefinedLyrics ?? LyllyPlayer.Settings.RectN.Full;
             _draft.AppTitleMode = string.IsNullOrWhiteSpace(theme.AppTitleMode) ? _draft.AppTitleMode : theme.AppTitleMode.Trim();
             _draft.CustomAppTitle = theme.CustomAppTitle ?? _draft.CustomAppTitle;
             if (theme.UiScalePercent is >= 50 and <= 200) _draft.UiScalePercent = theme.UiScalePercent.Value;

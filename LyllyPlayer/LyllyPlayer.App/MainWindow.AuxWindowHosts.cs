@@ -701,17 +701,47 @@ public partial class MainWindow
                 RequestPersistSnapshot();
             },
             getBackgroundUserDefinedMainNormal: () => _backgroundUserDefinedMainNormal,
-            setBackgroundUserDefinedMainNormal: (r) => { _backgroundUserDefinedMainNormal = r; },
+            setBackgroundUserDefinedMainNormal: (r) =>
+            {
+                _backgroundUserDefinedMainNormal = r;
+                ApplyBackgroundFromSettings();
+                RequestPersistSnapshot();
+            },
             getBackgroundUserDefinedMainCompact: () => _backgroundUserDefinedMainCompact,
-            setBackgroundUserDefinedMainCompact: (r) => { _backgroundUserDefinedMainCompact = r; },
+            setBackgroundUserDefinedMainCompact: (r) =>
+            {
+                _backgroundUserDefinedMainCompact = r;
+                ApplyBackgroundFromSettings();
+                RequestPersistSnapshot();
+            },
             getBackgroundUserDefinedMainUltra: () => _backgroundUserDefinedMainUltra,
-            setBackgroundUserDefinedMainUltra: (r) => { _backgroundUserDefinedMainUltra = r; },
+            setBackgroundUserDefinedMainUltra: (r) =>
+            {
+                _backgroundUserDefinedMainUltra = r;
+                ApplyBackgroundFromSettings();
+                RequestPersistSnapshot();
+            },
             getBackgroundUserDefinedPlaylist: () => _backgroundUserDefinedPlaylist,
-            setBackgroundUserDefinedPlaylist: (r) => { _backgroundUserDefinedPlaylist = r; },
+            setBackgroundUserDefinedPlaylist: (r) =>
+            {
+                _backgroundUserDefinedPlaylist = r;
+                ApplyBackgroundFromSettings();
+                RequestPersistSnapshot();
+            },
             getBackgroundUserDefinedOptionsLog: () => _backgroundUserDefinedOptionsLog,
-            setBackgroundUserDefinedOptionsLog: (r) => { _backgroundUserDefinedOptionsLog = r; },
+            setBackgroundUserDefinedOptionsLog: (r) =>
+            {
+                _backgroundUserDefinedOptionsLog = r;
+                ApplyBackgroundFromSettings();
+                RequestPersistSnapshot();
+            },
             getBackgroundUserDefinedLyrics: () => _backgroundUserDefinedLyrics,
-            setBackgroundUserDefinedLyrics: (r) => { _backgroundUserDefinedLyrics = r; },
+            setBackgroundUserDefinedLyrics: (r) =>
+            {
+                _backgroundUserDefinedLyrics = r;
+                ApplyBackgroundFromSettings();
+                RequestPersistSnapshot();
+            },
             openBackgroundDesigner: () => OpenBackgroundDesigner(),
             getAppTitleMode: () => _appTitleMode,
             setAppTitleMode: (m) =>

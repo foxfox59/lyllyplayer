@@ -11388,6 +11388,12 @@ public partial class MainWindow : Window
             BackgroundAlpha: _backgroundAlpha,
             BackgroundScrimPercent: _backgroundScrimPercent,
             BackgroundImageStretch: _backgroundImageStretch,
+            BackgroundUserDefinedMainNormal: _backgroundUserDefinedMainNormal,
+            BackgroundUserDefinedMainCompact: _backgroundUserDefinedMainCompact,
+            BackgroundUserDefinedMainUltra: _backgroundUserDefinedMainUltra,
+            BackgroundUserDefinedPlaylist: _backgroundUserDefinedPlaylist,
+            BackgroundUserDefinedOptionsLog: _backgroundUserDefinedOptionsLog,
+            BackgroundUserDefinedLyrics: _backgroundUserDefinedLyrics,
             AppTitleMode: _appTitleMode,
             CustomAppTitle: _customAppTitle,
             UiScalePercent: _uiScalePercent,
@@ -11407,6 +11413,12 @@ public partial class MainWindow : Window
             _backgroundAlpha = t.BackgroundAlpha is >= 0 and <= 255 ? t.BackgroundAlpha.Value : _backgroundAlpha;
             _backgroundScrimPercent = t.BackgroundScrimPercent is >= 0 and <= 80 ? t.BackgroundScrimPercent.Value : _backgroundScrimPercent;
             _backgroundImageStretch = SettingsStore.NormalizeBackgroundImageStretch(t.BackgroundImageStretch ?? _backgroundImageStretch);
+            _backgroundUserDefinedMainNormal = t.BackgroundUserDefinedMainNormal;
+            _backgroundUserDefinedMainCompact = t.BackgroundUserDefinedMainCompact;
+            _backgroundUserDefinedMainUltra = t.BackgroundUserDefinedMainUltra;
+            _backgroundUserDefinedPlaylist = t.BackgroundUserDefinedPlaylist;
+            _backgroundUserDefinedOptionsLog = t.BackgroundUserDefinedOptionsLog;
+            _backgroundUserDefinedLyrics = t.BackgroundUserDefinedLyrics;
             _appTitleMode = string.IsNullOrWhiteSpace(t.AppTitleMode) ? _appTitleMode : t.AppTitleMode.Trim();
             _customAppTitle = t.CustomAppTitle ?? _customAppTitle;
             _uiScalePercent = t.UiScalePercent is >= 50 and <= 200 ? t.UiScalePercent.Value : _uiScalePercent;
