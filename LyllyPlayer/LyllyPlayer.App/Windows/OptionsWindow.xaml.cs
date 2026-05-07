@@ -127,6 +127,8 @@ public partial class OptionsWindow : Window
     private readonly Action<string?> _setAudioOutputDevice;
     private readonly Func<bool> _getAudioNormalize;
     private readonly Action<bool> _setAudioNormalize;
+    private readonly Func<bool> _getVlcAudioCallbacksEnabled;
+    private readonly Action<bool> _setVlcAudioCallbacksEnabled;
     private readonly Func<string> _getOptionsSelectedTab;
     private readonly Action<string> _setOptionsSelectedTab;
     private readonly Func<string> _getLameEncoderPath;
@@ -270,6 +272,8 @@ public partial class OptionsWindow : Window
         Action<string?> setAudioOutputDevice,
         Func<bool> getAudioNormalize,
         Action<bool> setAudioNormalize,
+        Func<bool> getVlcAudioCallbacksEnabled,
+        Action<bool> setVlcAudioCallbacksEnabled,
         Func<string> getOptionsSelectedTab,
         Action<string> setOptionsSelectedTab,
         Func<string> getLameEncoderPath,
@@ -392,6 +396,8 @@ public partial class OptionsWindow : Window
         _setAudioOutputDevice = setAudioOutputDevice;
         _getAudioNormalize = getAudioNormalize;
         _setAudioNormalize = setAudioNormalize;
+        _getVlcAudioCallbacksEnabled = getVlcAudioCallbacksEnabled;
+        _setVlcAudioCallbacksEnabled = setVlcAudioCallbacksEnabled;
         _getOptionsSelectedTab = getOptionsSelectedTab;
         _setOptionsSelectedTab = setOptionsSelectedTab;
         _getLameEncoderPath = getLameEncoderPath;
@@ -527,6 +533,7 @@ public partial class OptionsWindow : Window
             _getAudioQuality,
             _getAudioOutputDevice,
             _getAudioNormalize,
+            _getVlcAudioCallbacksEnabled,
             _getAppLogLevel,
             _getAppLogMaxMb,
             _getOptionsSelectedTab,
@@ -719,6 +726,7 @@ public partial class OptionsWindow : Window
 
         try { RefreshAudioDeviceList(); } catch { /* ignore */ }
         try { AudioNormalizeCheckBox.IsChecked = _draft.AudioNormalize; } catch { /* ignore */ }
+        try { VlcAudioCallbacksEnabledCheckBox.IsChecked = _draft.VlcAudioCallbacksEnabled; } catch { /* ignore */ }
 
         try
         {
@@ -2117,6 +2125,20 @@ public partial class OptionsWindow : Window
         _draft.AudioNormalize = false;
     }
 
+    private void VlcAudioCallbacksEnabledCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.VlcAudioCallbacksEnabled = true;
+    }
+
+    private void VlcAudioCallbacksEnabledCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.VlcAudioCallbacksEnabled = false;
+    }
+
     private void BackgroundModeComboBox_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressBackgroundUiEvents)
@@ -2554,6 +2576,7 @@ public partial class OptionsWindow : Window
         try { _setAudioQuality(_draft.AudioQuality ?? "Auto"); } catch { /* ignore */ }
         try { _setAudioOutputDevice(string.IsNullOrWhiteSpace(_draft.AudioOutputDevice) ? null : _draft.AudioOutputDevice); } catch { /* ignore */ }
         try { _setAudioNormalize(_draft.AudioNormalize); } catch { /* ignore */ }
+        try { _setVlcAudioCallbacksEnabled(_draft.VlcAudioCallbacksEnabled); } catch { /* ignore */ }
         try { _setAppLogLevel(_draft.AppLogLevel ?? "ErrorsAndWarnings"); } catch { /* ignore */ }
         try { _setAppLogMaxMb(Math.Clamp(_draft.AppLogMaxMb, 1, 200)); } catch { /* ignore */ }
         try { _setOptionsSelectedTab(SettingsStore.NormalizeOptionsWindowSelectedTab(_draft.OptionsSelectedTab)); } catch { /* ignore */ }

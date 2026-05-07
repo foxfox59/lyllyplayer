@@ -9,9 +9,10 @@ public sealed class AudioOut : IDisposable
     private readonly WaveOutEvent _output;
     private readonly BufferedWaveProvider _buffer;
     private readonly WaveFormat _format;
+    private readonly Action<byte[], int, int>? _onSamplesAdded;
+    private readonly bool _analyzeOnRead;
 
-    /// <summary>Invokes <paramref name="onRead"/> when WaveOut pulls PCM (post-buffer), for visualizers.</summary>
-    private sealed class AnalyzingWaveProvider(IWaveProvider source, Action<byte[], int, int>? onRead) : IWaveProvider
+    private sealed class AnalyzingWaveProvider(IWaveProvider source, Action<byte[], int, int> onSamplesRead) : IWaveProvider
     {
         public WaveFormat WaveFormat => source.WaveFormat;
 
@@ -19,7 +20,9 @@ public sealed class AudioOut : IDisposable
         {
             var read = source.Read(buffer, offset, count);
             if (read > 0)
-                onRead?.Invoke(buffer, offset, read);
+            {
+                try { onSamplesRead(buffer, offset, read); } catch { /* ignore */ }
+            }
             return read;
         }
     }
@@ -83,9 +86,16 @@ public sealed class AudioOut : IDisposable
         }
     }
 
-    public AudioOut(WaveFormat format, int deviceNumber = -1, Action<byte[], int, int>? onSamplesRead = null, bool normalize = false)
+    public AudioOut(
+        WaveFormat format,
+        int deviceNumber = -1,
+        Action<byte[], int, int>? onSamplesRead = null,
+        bool normalize = false,
+        bool analyzeOnRead = false)
     {
         _format = format;
+        _onSamplesAdded = onSamplesRead;
+        _analyzeOnRead = analyzeOnRead;
         // Larger buffer than default 1 s: network decode is bursty; too small + aggressive WaveOut latency causes
         // constant underruns. Keep in sync with PlaybackEngine reader throttle (must stay below this duration).
         _buffer = new BufferedWaveProvider(format)
@@ -104,7 +114,7 @@ public sealed class AudioOut : IDisposable
         IWaveProvider source = _buffer;
         if (normalize)
             source = new NormalizingWaveProvider(source);
-        if (onSamplesRead is not null)
+        if (analyzeOnRead && onSamplesRead is not null)
             source = new AnalyzingWaveProvider(source, onSamplesRead);
         _output.Init(source);
     }
@@ -126,6 +136,16 @@ public sealed class AudioOut : IDisposable
 
     public void AddSamples(byte[] buffer, int offset, int count)
     {
+        try
+        {
+            if (count > 0)
+                if (!_analyzeOnRead)
+                    _onSamplesAdded?.Invoke(buffer, offset, count);
+        }
+        catch
+        {
+            // ignore (analysis is best-effort)
+        }
         _buffer.AddSamples(buffer, offset, count);
     }
 

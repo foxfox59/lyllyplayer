@@ -11,11 +11,9 @@ namespace LyllyPlayer.Player;
 
 public sealed partial class PlaybackEngine
 {
-    // Temporary safety switch: LibVLC audio callbacks are currently causing hard crashes on some systems.
-    // Stabilize playback first by letting LibVLC output audio normally; then reintroduce callbacks with
-    // proper format negotiation once verified.
-    // Keep this as a non-const so we don't litter builds with CS0162 "unreachable code" warnings.
-    private static readonly bool EnableVlcAudioCallbacks = false;
+    // LibVLC audio callbacks enable perfect visualizer sync (pause/seek), but may be unstable on some systems.
+    // This is an opt-in runtime setting (Options → Audio).
+    private bool _enableVlcAudioCallbacks;
     private const int MaxPipeDiscardSeekSeconds = 90;
     private const int PipeDiscardSeekTimeoutMs = 4000;
 
@@ -173,8 +171,6 @@ public sealed partial class PlaybackEngine
             for (var i = 0; i < sampleCount; i++)
                 f32[i] = rentedS16[i] / 32768f;
 
-            _analyzer.ProcessPcmF32LeStereo(rentedF32, 0, floatBytes);
-
             var sink = _audio;
             if (sink is null)
                 return;
@@ -183,6 +179,8 @@ public sealed partial class PlaybackEngine
             // drop frames instead of sleeping, or LibVLC may stall or crash in native code.
             if (sink.BufferedSeconds <= 2.0)
                 sink.AddSamples(rentedF32, 0, floatBytes);
+            else
+                return;
 
             if (Interlocked.CompareExchange(ref _vlcFirstAudioGate, 1, 0) != 0)
                 return;
@@ -310,7 +308,7 @@ public sealed partial class PlaybackEngine
         // Recreate MediaPlayer per session to avoid any stuck native audio callback state.
         try { _vlcMp?.Dispose(); } catch { /* ignore */ }
         _vlcMp = new MediaPlayer(lib);
-        if (EnableVlcAudioCallbacks)
+        if (_enableVlcAudioCallbacks)
         {
             try { AppLog.Warn($"LibVLC: wiring audio callbacks videoId={entry.VideoId}"); } catch { /* ignore */ }
             EnsureVlcAudioCallbacksWired();
@@ -384,12 +382,17 @@ public sealed partial class PlaybackEngine
         UpdateSeekableBuffered(entry, resolvedInput);
         try { AppLog.Warn($"LibVLC: seekableBuffered updated videoId={entry.VideoId} buf={SeekableBufferedSeconds:0.###}"); } catch { /* ignore */ }
 
-        if (EnableVlcAudioCallbacks && _audio is null)
+        if (_enableVlcAudioCallbacks && _audio is null)
         {
             try
             {
                 try { AppLog.Warn($"AudioOut: creating sink videoId={entry.VideoId} dev={_audioDeviceNumber}"); } catch { /* ignore */ }
-                _audio = new AudioOut(_format, _audioDeviceNumber, onSamplesRead: null, normalize: _audioNormalizeEnabled);
+                _audio = new AudioOut(
+                    _format,
+                    _audioDeviceNumber,
+                    onSamplesRead: _analyzer.ProcessPcmF32LeStereo,
+                    normalize: _audioNormalizeEnabled,
+                    analyzeOnRead: true);
                 _audio.Volume = _volume;
                 try { AppLog.Warn($"AudioOut: sink created videoId={entry.VideoId}"); } catch { /* ignore */ }
             }
@@ -403,7 +406,7 @@ public sealed partial class PlaybackEngine
             }
         }
 
-        if (EnableVlcAudioCallbacks)
+        if (_enableVlcAudioCallbacks)
         {
             _audio?.Stop();
             try { AppLog.Warn($"AudioOut: stopped (pre-play) videoId={entry.VideoId}"); } catch { /* ignore */ }
@@ -439,15 +442,42 @@ public sealed partial class PlaybackEngine
 
         // Visualizer: when LibVLC audio callbacks are disabled (for stability), feed AudioAnalyzer from a local/cached file decode tap.
         // Works for local playlist items and for YouTube items only when we are playing from a fully cached file (disk-cache hit).
-        if (!EnableVlcAudioCallbacks)
+        if (!_enableVlcAudioCallbacks)
         {
             try
             {
                 var p = resolvedInput.Url;
                 if (!string.IsNullOrWhiteSpace(p) && File.Exists(p))
-                    _visualizerTap.StartFromLocalFile(p);
+                    _visualizerTap.StartFromLocalFile(p, _startOffsetSeconds);
                 else if (!resolvedInput.DecodeViaYtdlpStdoutPipe)
-                    _vlcVisualizerTap.Start(resolvedInput.Url, resolvedInput.HttpHeaders);
+                {
+                    _vlcVisualizerTap.Start(resolvedInput.Url, resolvedInput.HttpHeaders, _startOffsetSeconds);
+                    // Keep the tap locked to the playback clock; YouTube buffering can otherwise drift early/late.
+                    try
+                    {
+                        if (Interlocked.Exchange(ref _visualizerResyncActive, 1) == 0)
+                        {
+                            const double resyncThresholdSeconds = 0.25; // avoid constant seeking (can make tap lag)
+                            _visualizerResyncTimer = new System.Threading.Timer(_ =>
+                            {
+                                try
+                                {
+                                    if (Interlocked.CompareExchange(ref _visualizerResyncActive, 1, 1) != 1)
+                                        return;
+                                    // Apply a small lead only when we started/seeking from a non-zero offset.
+                                    // For normal playback from the beginning, any lead makes the visualizer feel "ahead".
+                                    var lead = _startOffsetSeconds > 0.01 ? 0.95 : 0.0;
+                                    var desired = Math.Max(0, CurrentPositionSeconds + lead);
+                                    var curTap = _vlcVisualizerTap.GetTimeSecondsBestEffort();
+                                    if (Math.Abs(curTap - desired) >= resyncThresholdSeconds)
+                                        _vlcVisualizerTap.Resync(desired);
+                                }
+                                catch { /* ignore */ }
+                            }, null, dueTime: 250, period: 250);
+                        }
+                    }
+                    catch { /* ignore */ }
+                }
             }
             catch { /* ignore */ }
         }
@@ -485,6 +515,15 @@ public sealed partial class PlaybackEngine
                 try { lock (_vlcGate) { _vlcMp.Mute = false; } } catch { /* ignore */ }
             }
         }
+
+        // If we're using a secondary LibVLC tap for the visualizer, immediately resync it after seeking logic above.
+        // This reduces the "late by ~1s" effect where the tap's internal buffering trails the audible playback.
+        try
+        {
+            if (_startOffsetSeconds > 0.01 && Interlocked.CompareExchange(ref _visualizerResyncActive, 1, 1) == 1)
+                _vlcVisualizerTap.Resync(Math.Max(0, CurrentPositionSeconds + 0.95));
+        }
+        catch { /* ignore */ }
 
         return true;
     }
@@ -582,7 +621,7 @@ public sealed partial class PlaybackEngine
         _vlcIsPlayingFlag = true;
 
         // When audio callbacks are disabled, approximate "first audio" with LibVLC entering Playing state.
-        if (EnableVlcAudioCallbacks)
+        if (_enableVlcAudioCallbacks)
             return;
 
         if (Interlocked.CompareExchange(ref _vlcFirstAudioGate, 1, 0) != 0)

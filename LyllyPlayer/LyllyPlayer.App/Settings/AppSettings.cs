@@ -8,6 +8,11 @@ public sealed record AppSettings(
     string? LastPlaylistSourceType,
     string? LastLocalPlaylistPath,
     string? VisualizerMode,
+    /// <summary>
+    /// When true, uses LibVLC audio callbacks for the main player. This makes VU/spectrum perfectly synced to pause/seek,
+    /// but may be unstable on some systems (native crash risk). Default false.
+    /// </summary>
+    bool? VlcAudioCallbacksEnabled,
     bool? ShuffleEnabled,
     bool? GlobalMediaKeysEnabled,
     string? RepeatMode,

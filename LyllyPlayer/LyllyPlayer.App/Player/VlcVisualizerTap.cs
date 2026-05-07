@@ -16,6 +16,7 @@ public sealed class VlcVisualizerTap : IDisposable
     private readonly object _gate = new();
     private MediaPlayer? _mp;
     private Media? _media;
+    private long _minPtsUs;
 
     // Keep delegates rooted.
     private MediaPlayer.LibVLCAudioPlayCb? _playCb;
@@ -26,7 +27,7 @@ public sealed class VlcVisualizerTap : IDisposable
 
     public VlcVisualizerTap(AudioAnalyzer analyzer) => _analyzer = analyzer;
 
-    public void Start(string url, IReadOnlyDictionary<string, string>? httpHeaders)
+    public void Start(string url, IReadOnlyDictionary<string, string>? httpHeaders, double startSeconds = 0)
     {
         Stop();
 
@@ -38,6 +39,8 @@ public sealed class VlcVisualizerTap : IDisposable
 
         lock (_gate)
         {
+            try { _analyzer.Reset(); } catch { /* ignore */ }
+            _minPtsUs = startSeconds > 0.01 ? (long)(Math.Max(0, startSeconds) * 1_000_000.0) : 0;
             _mp = new MediaPlayer(lib);
 
             // Wire callbacks.
@@ -85,6 +88,12 @@ public sealed class VlcVisualizerTap : IDisposable
             try { _mp.Mute = true; } catch { /* ignore */ }
             try { _mp.Volume = 0; } catch { /* ignore */ }
             try { _mp.Play(); } catch { /* ignore */ }
+            try
+            {
+                if (startSeconds > 0.01)
+                    _mp.Time = (long)(Math.Max(0, startSeconds) * 1000.0);
+            }
+            catch { /* ignore */ }
         }
     }
 
@@ -96,11 +105,55 @@ public sealed class VlcVisualizerTap : IDisposable
         }
     }
 
+    public void Resync(double seconds)
+    {
+        lock (_gate)
+        {
+            try
+            {
+                if (_mp is null)
+                    return;
+                var ms = (long)(Math.Max(0, seconds) * 1000.0);
+                _mp.Time = ms;
+                _minPtsUs = (long)(Math.Max(0, seconds) * 1_000_000.0);
+            }
+            catch { /* ignore */ }
+        }
+    }
+
+    public double GetTimeSecondsBestEffort()
+    {
+        lock (_gate)
+        {
+            try
+            {
+                if (_mp is null)
+                    return 0;
+                return Math.Max(0, _mp.Time / 1000.0);
+            }
+            catch { return 0; }
+        }
+    }
+
     private void OnAudioPlay(IntPtr data, IntPtr samples, uint count, long pts)
     {
         // "count" is frames per channel. Format = S16N stereo @ 48k.
         if (samples == IntPtr.Zero || count == 0)
             return;
+
+        try
+        {
+            var min = _minPtsUs;
+            // LibVLC can emit a few chunks from before the seek target right after Play()/Time set.
+            // Gate by PTS so the visualizer doesn't "flash" old audio after seeking.
+            if (min > 0 && pts > 0)
+            {
+                const long slackUs = 120_000; // allow a small early window
+                if (pts + slackUs < min)
+                    return;
+            }
+        }
+        catch { /* ignore */ }
 
         try
         {

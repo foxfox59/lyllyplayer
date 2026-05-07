@@ -54,6 +54,8 @@ public sealed partial class PlaybackEngine : IDisposable
     private readonly AudioAnalyzer _analyzer = new();
     private readonly VisualizerTap _visualizerTap;
     private readonly VlcVisualizerTap _vlcVisualizerTap;
+    private System.Threading.Timer? _visualizerResyncTimer;
+    private int _visualizerResyncActive;
 
     /// <summary>Same <see cref="PlaylistEntry.VideoId"/> as <see cref="_resolvedInputCache"/> — skips yt-dlp on seek (saves ~4–6s per scrub).</summary>
     private string? _resolvedInputCacheVideoId;
@@ -107,6 +109,11 @@ public sealed partial class PlaybackEngine : IDisposable
         {
             try { YoutubeDiskCacheReady?.Invoke(this, EventArgs.Empty); } catch { /* ignore */ }
         };
+    }
+
+    public void SetVlcAudioCallbacksEnabled(bool enabled)
+    {
+        _enableVlcAudioCallbacks = enabled;
     }
 
     public IReadOnlyList<PlaylistEntry> PlayOrder { get; private set; } = Array.Empty<PlaylistEntry>();
@@ -210,7 +217,7 @@ public sealed partial class PlaybackEngine : IDisposable
 
         try
         {
-            var next = new AudioOut(_format, deviceNumber, onSamplesRead: null, normalize: _audioNormalizeEnabled);
+            var next = new AudioOut(_format, deviceNumber, onSamplesRead: _analyzer.ProcessPcmF32LeStereo, normalize: _audioNormalizeEnabled);
             next.Volume = _volume;
             if (!next.TryPlay())
             {
@@ -480,7 +487,7 @@ public sealed partial class PlaybackEngine : IDisposable
         {
             try
             {
-                var a = new AudioOut(_format, deviceNumber, onSamplesRead: null, normalize: _audioNormalizeEnabled);
+                var a = new AudioOut(_format, deviceNumber, onSamplesRead: _analyzer.ProcessPcmF32LeStereo, normalize: _audioNormalizeEnabled);
                 a.Volume = _volume;
                 if (!a.TryPlay())
                 {
@@ -515,7 +522,7 @@ public sealed partial class PlaybackEngine : IDisposable
         {
             try
             {
-                var a = new AudioOut(_format, -1, onSamplesRead: null, normalize: _audioNormalizeEnabled);
+                var a = new AudioOut(_format, -1, onSamplesRead: _analyzer.ProcessPcmF32LeStereo, normalize: _audioNormalizeEnabled);
                 a.Volume = _volume;
                 _audio = a;
             }
@@ -1736,6 +1743,10 @@ public sealed partial class PlaybackEngine : IDisposable
         try { _playCts?.Cancel(); } catch { /* ignore */ }
         _playCts = null;
         ClearDeferredWarmState();
+
+        try { _visualizerResyncTimer?.Dispose(); } catch { /* ignore */ }
+        _visualizerResyncTimer = null;
+        try { Interlocked.Exchange(ref _visualizerResyncActive, 0); } catch { /* ignore */ }
 
         try { _positionSw.Stop(); } catch { /* ignore */ }
         try { _positionSw.Reset(); } catch { /* ignore */ }

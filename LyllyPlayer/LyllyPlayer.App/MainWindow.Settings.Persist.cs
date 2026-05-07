@@ -159,6 +159,7 @@ public partial class MainWindow
             LastPlaylistSourceType: _lastPlaylistSourceType.ToString(),
             LastLocalPlaylistPath: _lastPlaylistSourceType == PlaylistSourceType.YouTube ? null : (_lastLocalPlaylistPath ?? _playlistSourceText?.Trim()),
             VisualizerMode: _visualizerMode.ToString(),
+            VlcAudioCallbacksEnabled: _vlcAudioCallbacksEnabled,
             ShuffleEnabled: _shuffleEnabled,
             GlobalMediaKeysEnabled: _globalMediaKeysEnabled,
             RepeatMode: _repeatMode.ToString(),

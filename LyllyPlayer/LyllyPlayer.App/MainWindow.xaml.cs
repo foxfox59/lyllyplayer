@@ -511,6 +511,7 @@ public partial class MainWindow : Window
     private bool _playlistDragDropAppend = true;
     private bool _playlistDragDropRemoveDuplicates = true;
     private readonly AppSettings _startupSettings;
+    private bool _vlcAudioCallbacksEnabled;
     private readonly AppShell _shell = new();
     private PlaylistService _playlistCore => _shell.Playlist;
     private PlayOrderService _playOrder => _shell.PlayOrder;
@@ -1033,6 +1034,7 @@ public partial class MainWindow : Window
         _audioQuality = _startupSettings.AudioQuality ?? "Auto";
         _audioOutputDevice = string.IsNullOrWhiteSpace(_startupSettings.AudioOutputDevice) ? null : _startupSettings.AudioOutputDevice;
         _audioNormalizeEnabled = _startupSettings.AudioNormalize ?? false;
+        _vlcAudioCallbacksEnabled = _startupSettings.VlcAudioCallbacksEnabled ?? false;
         _uiScalePercent = _startupSettings.UiScalePercent is >= 50 and <= 200 ? _startupSettings.UiScalePercent.Value : 100;
         _windowBorderMode = NormalizeWindowBorderMode(_startupSettings.WindowBorderMode);
         _windowBorderCustomPx = Math.Clamp(_startupSettings.WindowBorderCustomPx ?? 2, 1, 24);
@@ -1075,6 +1077,7 @@ public partial class MainWindow : Window
         try { _engine.NotifyYoutubeAudioQualityChanged(); } catch { /* ignore */ }
         try { _engine.SetAudioOutputDevice(ResolveAudioDeviceNumber(_audioOutputDevice)); } catch { /* ignore */ }
         try { _engine.SetAudioNormalizeEnabled(_audioNormalizeEnabled); } catch { /* ignore */ }
+        try { _engine.SetVlcAudioCallbacksEnabled(_vlcAudioCallbacksEnabled); } catch { /* ignore */ }
         try
         {
             _engine.SetCacheMaxBytes(Math.Max(0, (long)_cacheMaxMb) * 1024L * 1024L);
@@ -4286,8 +4289,30 @@ public partial class MainWindow : Window
         var imported = res.Entries?.ToList() ?? new List<PlaylistEntry>();
         if (imported.Count == 0)
         {
-            SetStatusMessage("WARN", $"No playlist entries found{(string.IsNullOrWhiteSpace(plName) ? "" : $" for \"{plName}\"")}.");
-            return;
+            // Common case for drag/drop: a single YouTube video URL is not a "playlist", so --flat-playlist yields no entries.
+            // Fall back to resolving a single video object and treat it as a 1-item import.
+            try
+            {
+                if (TryParseHttpUrl(src, out var u) && LooksLikeYoutube(u))
+                {
+                    var isPlaylistLike =
+                        u.AbsolutePath.Contains("/playlist", StringComparison.OrdinalIgnoreCase) ||
+                        u.Query.Contains("list=", StringComparison.OrdinalIgnoreCase);
+                    if (!isPlaylistLike)
+                    {
+                        var single = await _ytDlp.ResolveSingleVideoEntryAsync(src, cancellationToken).ConfigureAwait(true);
+                        if (single is not null)
+                            imported = new List<PlaylistEntry> { single };
+                    }
+                }
+            }
+            catch { /* ignore */ }
+
+            if (imported.Count == 0)
+            {
+                SetStatusMessage("WARN", $"No playlist entries found{(string.IsNullOrWhiteSpace(plName) ? "" : $" for \"{plName}\"")}.");
+                return;
+            }
         }
 
         var curId = _engine.GetCurrent()?.VideoId;

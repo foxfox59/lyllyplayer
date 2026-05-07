@@ -40,7 +40,9 @@ public sealed class AudioAnalyzer
             _ringCount = 0;
             Array.Clear(_bands);
             _samplesSinceFft = 0;
-            _specScale = 1f;
+            // Start at 0 so the first computed frame immediately establishes an appropriate scale.
+            // If this is initialized too high, the spectrum appears to "rise gradually" after seeks/resets.
+            _specScale = 0f;
         }
     }
 

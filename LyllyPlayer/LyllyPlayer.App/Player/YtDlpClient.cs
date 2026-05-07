@@ -217,6 +217,55 @@ public sealed class YtDlpClient
         return new PlaylistResolveResult(playlistTitle, entries);
     }
 
+    public async Task<PlaylistEntry?> ResolveSingleVideoEntryAsync(string videoUrlOrId, CancellationToken cancellationToken)
+    {
+        var src = (videoUrlOrId ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(src))
+            return null;
+
+        // For single videos, do NOT use --flat-playlist (it may omit metadata and "entries").
+        // --dump-single-json returns the video object directly.
+        var url = src.Contains("://", StringComparison.OrdinalIgnoreCase)
+            ? src
+            : $"https://www.youtube.com/watch?v={src}";
+
+        var args = new[]
+        {
+            "--dump-single-json",
+            url,
+        };
+
+        var (exitCode, stdout, stderr) = await RunAsync(args, cancellationToken, longRunningLogHint: "fetching video metadata");
+        if (exitCode != 0)
+            throw new InvalidOperationException($"yt-dlp failed ({exitCode}). {stderr}".Trim());
+
+        using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
+        var root = doc.RootElement;
+
+        // If this URL actually resolved to a playlist wrapper, bail out (caller should use playlist flow).
+        if (root.TryGetProperty("entries", out var entriesEl) && entriesEl.ValueKind == JsonValueKind.Array)
+            return null;
+
+        var id = GetString(root, "id");
+        var title = GetString(root, "title") ?? "(untitled)";
+        var channel = GetString(root, "channel") ?? GetString(root, "uploader");
+        var duration = GetInt(root, "duration");
+        var webpageUrl = GetString(root, "webpage_url") ?? GetString(root, "original_url") ?? url;
+        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(webpageUrl))
+            return null;
+
+        var requiresCookies = IsNeedsAuthEntry(root);
+
+        return new PlaylistEntry(
+            VideoId: id,
+            Title: title,
+            Channel: channel,
+            DurationSeconds: duration,
+            WebpageUrl: webpageUrl,
+            RequiresCookies: requiresCookies
+        );
+    }
+
     public Task<PlaylistResolveResult> ResolveYoutubeMusicSearchAsync(string query, int count, int minLengthSeconds, CancellationToken cancellationToken)
     {
         var fetch = Math.Clamp((int)Math.Round(count * 2.0), 20, 200);

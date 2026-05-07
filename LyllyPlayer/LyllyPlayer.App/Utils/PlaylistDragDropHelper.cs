@@ -82,20 +82,26 @@ public static class PlaylistDragDropHelper
         try
         {
             // Browsers vary: some expose plain text, others expose URL formats.
-            if (data.GetDataPresent(System.Windows.DataFormats.UnicodeText))
-                text = (data.GetData(System.Windows.DataFormats.UnicodeText) as string) ?? "";
-            else if (data.GetDataPresent(System.Windows.DataFormats.Text))
-                text = (data.GetData(System.Windows.DataFormats.Text) as string) ?? "";
-            else if (data.GetDataPresent("UniformResourceLocatorW"))
-                text = TryReadStringLikeData(data.GetData("UniformResourceLocatorW")) ?? "";
-            else if (data.GetDataPresent("UniformResourceLocator"))
-                text = TryReadStringLikeData(data.GetData("UniformResourceLocator")) ?? "";
-            else if (data.GetDataPresent(System.Windows.DataFormats.Html) || data.GetDataPresent("HTML Format"))
+            // Prefer actual URL payloads over "title text" payloads.
+            string? candidate = null;
+
+            if (data.GetDataPresent("UniformResourceLocatorW"))
+                candidate = TryReadStringLikeData(data.GetData("UniformResourceLocatorW"));
+            if (string.IsNullOrWhiteSpace(candidate) && data.GetDataPresent("UniformResourceLocator"))
+                candidate = TryReadStringLikeData(data.GetData("UniformResourceLocator"));
+            if (string.IsNullOrWhiteSpace(candidate) &&
+                (data.GetDataPresent(System.Windows.DataFormats.Html) || data.GetDataPresent("HTML Format")))
             {
                 var htmlRaw = data.GetData(System.Windows.DataFormats.Html) ?? data.GetData("HTML Format");
                 var html = TryReadStringLikeData(htmlRaw) ?? "";
-                text = ExtractUrlFromHtmlBestEffort(html) ?? "";
+                candidate = ExtractUrlFromHtmlBestEffort(html);
             }
+            if (string.IsNullOrWhiteSpace(candidate) && data.GetDataPresent(System.Windows.DataFormats.UnicodeText))
+                candidate = (data.GetData(System.Windows.DataFormats.UnicodeText) as string);
+            if (string.IsNullOrWhiteSpace(candidate) && data.GetDataPresent(System.Windows.DataFormats.Text))
+                candidate = (data.GetData(System.Windows.DataFormats.Text) as string);
+
+            text = candidate ?? "";
 
             text = (text ?? "").Trim();
             return !string.IsNullOrWhiteSpace(text);

@@ -276,6 +276,7 @@ public static class SettingsStore
             LastPlaylistSourceType = loaded.LastPlaylistSourceType ?? GetString(nameof(AppSettings.LastPlaylistSourceType)),
             LastLocalPlaylistPath = loaded.LastLocalPlaylistPath ?? GetString(nameof(AppSettings.LastLocalPlaylistPath)),
             VisualizerMode = loaded.VisualizerMode ?? GetString(nameof(AppSettings.VisualizerMode)),
+            VlcAudioCallbacksEnabled = loaded.VlcAudioCallbacksEnabled ?? GetBool(nameof(AppSettings.VlcAudioCallbacksEnabled)),
             ShuffleEnabled = loaded.ShuffleEnabled ?? GetBool(nameof(AppSettings.ShuffleEnabled)),
             GlobalMediaKeysEnabled = loaded.GlobalMediaKeysEnabled ?? GetBool(nameof(AppSettings.GlobalMediaKeysEnabled)),
             RepeatMode = loaded.RepeatMode ?? GetString(nameof(AppSettings.RepeatMode)),
@@ -448,6 +449,7 @@ public static class SettingsStore
         TakeString(nameof(AppSettings.CurrentVideoId), ref s, (c, v) => c with { CurrentVideoId = v });
         TakeString(nameof(AppSettings.RepeatMode), ref s, (c, v) => c with { RepeatMode = v });
         TakeString(nameof(AppSettings.VisualizerMode), ref s, (c, v) => c with { VisualizerMode = v });
+        TakeBool(nameof(AppSettings.VlcAudioCallbacksEnabled), ref s, (c, v) => c with { VlcAudioCallbacksEnabled = v });
         TakeString(nameof(AppSettings.WindowState), ref s, (c, v) => c with { WindowState = v });
         TakeDouble(nameof(AppSettings.Volume), ref s, (c, v) => c with { Volume = v });
         TakeDouble(nameof(AppSettings.WindowLeft), ref s, (c, v) => c with { WindowLeft = v });
@@ -635,7 +637,8 @@ public static class SettingsStore
         Mp3ExportEncodingMode: null,
         Mp3ExportCbrQualityIndex: null,
         Mp3ExportVbrQualityIndex: null,
-        Mp3ExportReplacePlaylistEntryAfterExport: null);
+        Mp3ExportReplacePlaylistEntryAfterExport: null,
+        VlcAudioCallbacksEnabled: null);
 
     private static AppSettings AllNullSettings() => AllNullSettingsInstance;
 
@@ -655,6 +658,7 @@ public static class SettingsStore
             LastPlaylistSourceType: DefaultLastPlaylistSourceType,
             LastLocalPlaylistPath: null,
             VisualizerMode: null,
+            VlcAudioCallbacksEnabled: null,
             ShuffleEnabled: null,
             GlobalMediaKeysEnabled: DefaultGlobalMediaKeysEnabled,
             RepeatMode: DefaultRepeatMode,

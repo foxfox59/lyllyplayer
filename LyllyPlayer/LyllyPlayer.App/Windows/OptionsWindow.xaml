@@ -611,6 +611,20 @@
                                           Content="Enable AGC"
                                           Checked="AudioNormalizeCheckBox_OnChecked"
                                           Unchecked="AudioNormalizeCheckBox_OnUnchecked"/>
+
+                                <TextBlock Text="Visualizer sync (advanced)"
+                                           FontWeight="SemiBold"
+                                           Margin="0,16,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="When enabled, the app uses LibVLC audio callbacks for the main player so the VU/spectrum is perfectly synced to pause/seek. Warning: this can be unstable on some systems (native crash risk). Default off."/>
+                                <CheckBox x:Name="VlcAudioCallbacksEnabledCheckBox"
+                                          Content="Enable LibVLC audio callbacks (perfect VU/spectrum sync)"
+                                          Checked="VlcAudioCallbacksEnabledCheckBox_OnChecked"
+                                          Unchecked="VlcAudioCallbacksEnabledCheckBox_OnUnchecked"/>
                             </StackPanel>
                         </ScrollViewer>
                     </TabItem>

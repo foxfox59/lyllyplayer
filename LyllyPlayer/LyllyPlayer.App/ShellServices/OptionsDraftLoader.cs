@@ -55,6 +55,7 @@ public static class OptionsDraftLoader
         Func<string> getAudioQuality,
         Func<string?> getAudioOutputDevice,
         Func<bool> getAudioNormalize,
+        Func<bool> getVlcAudioCallbacksEnabled,
         Func<string> getAppLogLevel,
         Func<int> getAppLogMaxMb,
         Func<string> getOptionsSelectedTab,
@@ -143,6 +144,7 @@ public static class OptionsDraftLoader
         catch { d.AudioQuality = "Auto"; }
         try { d.AudioOutputDevice = getAudioOutputDevice(); } catch { d.AudioOutputDevice = null; }
         try { d.AudioNormalize = getAudioNormalize(); } catch { d.AudioNormalize = false; }
+        try { d.VlcAudioCallbacksEnabled = getVlcAudioCallbacksEnabled(); } catch { d.VlcAudioCallbacksEnabled = false; }
         try { d.AppLogLevel = AppLog.NormalizeLevelString(getAppLogLevel()); } catch { d.AppLogLevel = "ErrorsAndWarnings"; }
         try { d.AppLogMaxMb = Math.Clamp(getAppLogMaxMb(), 1, 200); } catch { d.AppLogMaxMb = SettingsStore.DefaultAppLogMaxMb; }
         try { d.OptionsSelectedTab = SettingsStore.NormalizeOptionsWindowSelectedTab(getOptionsSelectedTab()); } catch { d.OptionsSelectedTab = "Tools"; }

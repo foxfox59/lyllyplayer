@@ -38,7 +38,7 @@ public sealed class VisualizerTap : IDisposable
         _task = null;
     }
 
-    public void StartFromLocalFile(string filePath)
+    public void StartFromLocalFile(string filePath, double startSeconds = 0)
     {
         Stop();
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
@@ -46,10 +46,10 @@ public sealed class VisualizerTap : IDisposable
 
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
-        _task = Task.Run(() => RunDecodeLoop(filePath, ct), ct);
+        _task = Task.Run(() => RunDecodeLoop(filePath, startSeconds, ct), ct);
     }
 
-    private void RunDecodeLoop(string filePath, CancellationToken ct)
+    private void RunDecodeLoop(string filePath, double startSeconds, CancellationToken ct)
     {
         try
         {
@@ -57,6 +57,12 @@ public sealed class VisualizerTap : IDisposable
                 return;
 
             using var reader = new MediaFoundationReader(filePath);
+            try
+            {
+                if (startSeconds > 0.01)
+                    reader.CurrentTime = TimeSpan.FromSeconds(Math.Max(0, startSeconds));
+            }
+            catch { /* ignore */ }
 
             // Convert to float samples.
             ISampleProvider sp = reader.ToSampleProvider();

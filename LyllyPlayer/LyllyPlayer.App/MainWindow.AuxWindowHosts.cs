@@ -913,6 +913,13 @@ public partial class MainWindow
                 try { _engine.SetAudioNormalizeEnabled(_audioNormalizeEnabled); } catch { /* ignore */ }
                 RequestPersistSnapshot();
             },
+            getVlcAudioCallbacksEnabled: () => _vlcAudioCallbacksEnabled,
+            setVlcAudioCallbacksEnabled: (v) =>
+            {
+                _vlcAudioCallbacksEnabled = v;
+                try { _engine.SetVlcAudioCallbacksEnabled(v); } catch { /* ignore */ }
+                RequestPersistSnapshot();
+            },
             getOptionsSelectedTab: () => _optionsSelectedTab,
             setOptionsSelectedTab: (tab) =>
             {
