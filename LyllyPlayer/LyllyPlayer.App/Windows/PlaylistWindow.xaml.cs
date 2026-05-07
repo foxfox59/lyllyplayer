@@ -106,6 +106,8 @@ public partial class PlaylistWindow : Window
     // private CollectionViewSource? _queuedViewSource;
     private string _playlistFilterQuery = "";
     private readonly DispatcherTimer _playlistFilterDebounceTimer;
+    private volatile bool _playlistFilterWasNonEmpty;
+    private PlaylistEntry? _lastNowPlayingEntry;
 
     private bool _suppressSortUiEvents;
     private PlaylistSortSpec _lastSortSpec = new(PlaylistSortMode.None, PlaylistSortDirection.Asc);
@@ -614,10 +616,27 @@ public partial class PlaylistWindow : Window
 
     private void ApplyPlaylistFilterFromTextBox()
     {
-        try { _playlistFilterQuery = PlaylistFilterTextBox?.Text ?? ""; }
+        var prevNonEmpty = _playlistFilterWasNonEmpty;
+        var nextText = "";
+        try { nextText = PlaylistFilterTextBox?.Text ?? ""; } catch { nextText = ""; }
+        try { _playlistFilterQuery = nextText; }
         catch { /* ignore */ }
+        _playlistFilterWasNonEmpty = !string.IsNullOrWhiteSpace(nextText);
         try { _playlistViewSource?.View.Refresh(); }
         catch { /* ignore */ }
+
+        // UX: don't jump while filter is non-empty, but once it clears, re-focus/center the now playing item.
+        if (prevNonEmpty && !_playlistFilterWasNonEmpty)
+        {
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try { CenterNowPlaying(_lastNowPlayingEntry); } catch { /* ignore */ }
+                }), DispatcherPriority.Loaded);
+            }
+            catch { /* ignore */ }
+        }
     }
 
     private void PlaylistFilterTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -646,11 +665,21 @@ public partial class PlaylistWindow : Window
                 PlaylistFilterTextBox.Text = "";
             //_queueViewSource?.View.Refresh();
         } catch {}
+        _playlistFilterWasNonEmpty = false;
         try { _playlistViewSource?.View.Refresh(); }
         catch
         {
             // ignore
         }
+
+        try
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try { CenterNowPlaying(_lastNowPlayingEntry); } catch { /* ignore */ }
+            }), DispatcherPriority.Loaded);
+        }
+        catch { /* ignore */ }
     }
     /// <summary>Plain filter box text for settings persistence (may be empty).</summary>
     public string GetPlaylistFilterText() => PlaylistFilterTextBox?.Text ?? "";
@@ -968,6 +997,7 @@ public partial class PlaylistWindow : Window
     public void CenterNowPlaying(PlaylistEntry? entry)
     {
         if (entry is null) return;
+        try { _lastNowPlayingEntry = entry; } catch { /* ignore */ }
 
         try
         {
