@@ -3775,11 +3775,10 @@ public partial class MainWindow : Window
 
         ct.ThrowIfCancellationRequested();
 
-        _playlistSourceText = s;
-
         // Accept direct stream URLs (Icecast/Shoutcast/etc) as a single-item playlist.
         if (TryParseHttpUrl(s, out var uri) && !LooksLikeYoutube(uri))
         {
+            _playlistSourceText = s;
             _lastPlaylistSourceType = PlaylistSourceType.M3U;
             _lastLocalPlaylistPath = s;
 
@@ -3798,6 +3797,24 @@ public partial class MainWindow : Window
             return;
         }
 
+        // YouTube "Open URL": import playlist/video with Append/Replace semantics (based on the YouTube tab default).
+        // This avoids the legacy "Load playlist source" path which is replace-only and can short-circuit in memory.
+        if (TryParseHttpUrl(s, out uri) && LooksLikeYoutube(uri))
+        {
+            if (!_youtubeImportAppend)
+                _playlistSourceText = s; // replace: treat this URL as the new playlist origin
+
+            await ImportYoutubePlaylistAsync(
+                    s,
+                    append: _youtubeImportAppend,
+                    dedupe: true,
+                    cancellationToken: ct)
+                .ConfigureAwait(true);
+            return;
+        }
+
+        // Fallback: legacy behavior (e.g. raw playlist IDs pasted into Open URL).
+        _playlistSourceText = s;
         await LoadPlaylistFromSourceAsync(forceFetch: false, isStartupAutoLoad: false).ConfigureAwait(true);
     }
 
@@ -6250,8 +6267,6 @@ public partial class MainWindow : Window
         {
             _playlistWindow?.SetLoadEnabled(false);
             SetStatusMessage("INFO", "Loading playlist...");
-            SetQueueList(Array.Empty<PlaylistEntry>(), selectedIndex: -1);
-            SetPlaylistTitle(null);
 
             var input = _playlistSourceText?.Trim() ?? string.Empty;
             var playlistId = PlaylistIdParser.TryExtractPlaylistId(input) ?? input;
@@ -6260,6 +6275,8 @@ public partial class MainWindow : Window
                 SetStatusMessage("INFO", "Paste a playlist URL or ID.");
                 return;
             }
+
+            // Don't wipe the current playlist UI on failed loads. We only replace entries once we have a valid result.
 
             // Changing playlist source should stop playback.
             var sourceChanged = _hasLoadedPlaylist &&
