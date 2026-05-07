@@ -1,5 +1,8 @@
 ### What's new, pussycat?
 
+- 2.5.0:
+  - Playlist and theme file associations (per user registry setting)
+  - Filename extensions are now ".lyllytheme" for themes and ".lyllylist" for playlists
 - 2.4.0:
   - Playlist window: YouTube + local files are now tabs (YouTube / Files) instead of separate modals.
   - Playlist: new **Remove** section with **Duplicates** and **Missing** actions.
