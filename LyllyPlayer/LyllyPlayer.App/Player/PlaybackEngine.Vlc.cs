@@ -375,7 +375,7 @@ public sealed partial class PlaybackEngine
         try { AppLog.Warn($"LibVLC: Media assigned videoId={entry.VideoId}"); } catch { /* ignore */ }
         lock (_vlcGate)
         {
-            _vlcMp.Volume = (int)Math.Clamp(_volume * 100.0, 0, 100);
+            _vlcMp.Volume = _enableVlcAudioCallbacks ? 100 : (int)Math.Clamp(_volume * 100.0, 0, 100);
         }
         try { AppLog.Warn($"LibVLC: volume set videoId={entry.VideoId} vol={_vlcMp.Volume}"); } catch { /* ignore */ }
 

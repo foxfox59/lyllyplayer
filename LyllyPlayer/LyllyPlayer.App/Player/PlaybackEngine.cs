@@ -180,7 +180,9 @@ public sealed partial class PlaybackEngine : IDisposable
             {
                 lock (_vlcGate)
                 {
-                    _vlcMp.Volume = (int)Math.Clamp(_volume * 100.0, 0, 100);
+                    // When LibVLC audio callbacks are enabled, LibVLC is not the audible output device.
+                    // Apply volume only on our WaveOut sink to avoid double-scaling / non-linear behavior.
+                    _vlcMp.Volume = _enableVlcAudioCallbacks ? 100 : (int)Math.Clamp(_volume * 100.0, 0, 100);
                 }
             }
         }

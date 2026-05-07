@@ -910,6 +910,7 @@ public partial class MainWindow : Window
 
     private int _statusToastRequestId;
     private bool _bringingAuxToFrontOnActivate;
+    private bool _suppressVolumeSliderEvents;
 
     public MainWindow()
     {
@@ -1087,7 +1088,9 @@ public partial class MainWindow : Window
         {
             var vol = _startupSettings.Volume ?? 0.85;
             _engine.SetVolume(vol);
-            VolumeSlider.Value = Math.Clamp(vol, 0, 1);
+            try { _suppressVolumeSliderEvents = true; } catch { /* ignore */ }
+            try { VolumeSlider.Value = Math.Clamp(vol, 0, 1); } catch { /* ignore */ }
+            try { _suppressVolumeSliderEvents = false; } catch { /* ignore */ }
         }
         catch { /* ignore */ }
 
@@ -7057,28 +7060,28 @@ public partial class MainWindow : Window
     {
         if (_suppressShuffleToggle) return;
         SetShuffleEnabled(true);
-        SaveSettingsSnapshot();
+        RequestPersistSnapshot();
     }
 
     private void ShuffleToggle_OnUnchecked(object sender, RoutedEventArgs e)
     {
         if (_suppressShuffleToggle) return;
         SetShuffleEnabled(false);
-        SaveSettingsSnapshot();
+        RequestPersistSnapshot();
     }
 
     private void CompactShuffleToggleButton_OnChecked(object sender, RoutedEventArgs e)
     {
         if (_suppressCompactShuffleToggle) return;
         SetShuffleEnabled(true);
-        SaveSettingsSnapshot();
+        RequestPersistSnapshot();
     }
 
     private void CompactShuffleToggleButton_OnUnchecked(object sender, RoutedEventArgs e)
     {
         if (_suppressCompactShuffleToggle) return;
         SetShuffleEnabled(false);
-        SaveSettingsSnapshot();
+        RequestPersistSnapshot();
     }
 
     private static RepeatMode ParseRepeatMode(string? value)
@@ -7093,7 +7096,7 @@ public partial class MainWindow : Window
             _ => RepeatMode.None,
         };
         UpdateRepeatButtonContent();
-        SaveSettingsSnapshot();
+        RequestPersistSnapshot();
     }
 
     private void CompactRepeatButton_OnClick(object sender, RoutedEventArgs e)
@@ -7198,8 +7201,9 @@ public partial class MainWindow : Window
 
     private void VolumeSlider_OnValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (_suppressVolumeSliderEvents)
+            return;
         try { _engine.SetVolume(e.NewValue); } catch { /* ignore */ }
-        try { SaveSettingsSnapshot(); } catch { /* ignore */ }
     }
 
     private void AutoRefreshComboBox_OnSelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -7396,7 +7400,7 @@ public partial class MainWindow : Window
                 _savedYtDlpPath = managed;
                 ApplyResolvedToolPaths();
                 ApplyYtdlpPlaybackOptions();
-                SaveSettingsSnapshot();
+                RequestPersistSnapshot();
                 return ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp").IsFound;
             }
         }
@@ -7431,7 +7435,7 @@ public partial class MainWindow : Window
             _savedYtDlpPath = managed;
             ApplyResolvedToolPaths();
             ApplyYtdlpPlaybackOptions();
-            SaveSettingsSnapshot();
+            RequestPersistSnapshot();
             SetStatusMessage("INFO", "yt-dlp downloaded.");
             return ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp").IsFound;
         }
@@ -7585,7 +7589,7 @@ public partial class MainWindow : Window
             _savedYtDlpPath = dlg.FileName;
             ApplyResolvedToolPaths();
             ApplyYtdlpPlaybackOptions();
-            SaveSettingsSnapshot();
+            RequestPersistSnapshot();
             SetStatusMessage("INFO", $"yt-dlp set to: {Path.GetFileName(dlg.FileName)}");
             return true;
         }
