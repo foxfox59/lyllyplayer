@@ -1185,6 +1185,7 @@ public partial class MainWindow : Window
                 UpdateNowPlayingText();
                 UpdatePlaylistTitleDisplayForNowPlaying();
                 UpdateNowPlayingFlag(entry);
+                try { _playlistWindow?.RememberNowPlaying(entry); } catch { /* ignore */ }
                 if (!ShouldSuppressAutoScroll(entry))
                     SelectAndScrollToNowPlaying(entry);
                 UpdateDurationUi(entry?.DurationSeconds ?? _engine.CurrentDurationSeconds);
@@ -3539,22 +3540,41 @@ public partial class MainWindow : Window
 
         try
         {
-            // Dedupe by VideoId (case-insensitive). Keep first occurrence; preserve ordering.
+            // Dedupe by:
+            // - Local files: full normalized path (folder + filename) so different VideoId representations still collapse.
+            // - Non-local: VideoId (case-insensitive).
+            // Keep first occurrence; preserve ordering.
             var entries = _playlistCore.Entries.ToList();
             if (entries.Count <= 1)
                 return Task.FromResult(0);
 
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenVideoIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenLocalPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var kept = new List<PlaylistEntry>(entries.Count);
             foreach (var e in entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (e is null)
                     continue;
+
+                // Local path dedupe (best effort, no existence check).
+                try
+                {
+                    if (TryExtractLocalPathBestEffort(e.WebpageUrl, out var lp) && !string.IsNullOrWhiteSpace(lp))
+                    {
+                        var k = NormalizeLocalPathKey(lp);
+                        if (!seenLocalPaths.Add(k))
+                            continue;
+                        kept.Add(e);
+                        continue;
+                    }
+                }
+                catch { /* ignore */ }
+
                 var id = (e.VideoId ?? "").Trim();
                 if (string.IsNullOrWhiteSpace(id))
                     continue;
-                if (!seen.Add(id))
+                if (!seenVideoIds.Add(id))
                     continue;
                 kept.Add(e);
             }
@@ -3568,6 +3588,15 @@ public partial class MainWindow : Window
             var oldIndex = _engine.CurrentIndex;
 
             _playlistCore.ReplaceEntries(kept);
+            try
+            {
+                // Keep origin info only for kept items.
+                var keepIds = new HashSet<string>(kept.Select(x => x.VideoId), StringComparer.OrdinalIgnoreCase);
+                var toRemove = _playlistCore.OriginByVideoId.Keys.Where(k => !keepIds.Contains(k)).ToList();
+                foreach (var k in toRemove)
+                    _playlistCore.OriginByVideoId.Remove(k);
+            }
+            catch { /* ignore */ }
             var newIndex = -1;
             if (!string.IsNullOrWhiteSpace(curId))
                 newIndex = _playlistCore.Entries.FindIndex(e => string.Equals(e.VideoId, curId, StringComparison.OrdinalIgnoreCase));
@@ -4394,7 +4423,7 @@ public partial class MainWindow : Window
         if (mode == PlaylistSortMode.None || _playlistCore.Entries.Count <= 1)
             return Task.CompletedTask;
 
-        var isYoutube = IsYoutubeLikeSource(_lastPlaylistSourceType);
+        var isYoutubePlaylist = IsYoutubeLikeSource(_lastPlaylistSourceType);
         var curId = _engine.GetCurrent()?.VideoId;
 
         string LocalPathOrUrl(PlaylistEntry e)
@@ -4423,36 +4452,182 @@ public partial class MainWindow : Window
             catch { return ""; }
         }
 
+        bool IsEntryLocal(PlaylistEntry e)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(e.VideoId) &&
+                    e.VideoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            catch { /* ignore */ }
+
+            try
+            {
+                var u = (e.WebpageUrl ?? "").Trim();
+                if (TryExtractLocalPathBestEffort(u, out _))
+                    return true;
+            }
+            catch { /* ignore */ }
+
+            return false;
+        }
+
         string NameKey(PlaylistEntry e)
         {
-            if (isYoutube)
+            // Local files: filename should override metadata when sorting (Title can be tags).
+            if (IsEntryLocal(e))
+                return LocalFileNameFallback(e).Trim();
+
+            if (isYoutubePlaylist)
                 return (e.Title ?? "").Trim();
+
             var t = (e.Title ?? "").Trim();
             if (!string.IsNullOrWhiteSpace(t) && !string.Equals(t, "(untitled)", StringComparison.OrdinalIgnoreCase))
                 return t;
             return LocalFileNameFallback(e);
         }
 
-        string SourceKey(PlaylistEntry e)
+        bool TryGetLocalPathKey(PlaylistEntry e, out string pathKey)
         {
+            pathKey = "";
+            try
+            {
+                // Prefer the strict resolver when the file exists; this matches "Open file location" behavior.
+                if (LocalPlaylistLoader.TryGetLocalPath(e.WebpageUrl, out var existing) &&
+                    !string.IsNullOrWhiteSpace(existing))
+                {
+                    try { pathKey = Path.GetFullPath(existing).Trim(); }
+                    catch { pathKey = existing.Trim(); }
+                    return true;
+                }
+            }
+            catch { /* ignore */ }
+
+            try
+            {
+                // Sorting should respect folder structure even if the file no longer exists on disk
+                // (e.g. stale playlist entries, missing drives, network shares).
+                if (TryExtractLocalPathBestEffort(e.WebpageUrl, out var p) && !string.IsNullOrWhiteSpace(p))
+                {
+                    try { pathKey = Path.GetFullPath(p).Trim(); }
+                    catch { pathKey = p.Trim(); }
+                    return true;
+                }
+            }
+            catch { /* ignore */ }
+
+            // Relative paths can appear in compound playlists (e.g. M3U with relative entries).
+            // Resolve them against the entry's origin "Source" when that looks like a local path.
+            try
+            {
+                var raw = (e.WebpageUrl ?? "").Trim();
+                if (string.IsNullOrWhiteSpace(raw))
+                    return false;
+
+                // Only attempt resolution for clearly relative-like strings.
+                if (Path.IsPathRooted(raw))
+                    return false;
+
+                static bool LooksLikeLocalBase(string s)
+                {
+                    if (string.IsNullOrWhiteSpace(s)) return false;
+                    var t = s.Trim();
+                    if (string.Equals(t, "Local files", StringComparison.OrdinalIgnoreCase)) return false;
+                    return true;
+                }
+
+                string? originSrc = null;
+                if (_playlistCore.OriginByVideoId.TryGetValue(e.VideoId, out var origin) &&
+                    LooksLikeLocalBase(origin.Source))
+                {
+                    originSrc = origin.Source;
+                }
+                else if (_playlistCore.BaseOrigin is not null && LooksLikeLocalBase(_playlistCore.BaseOrigin.Source))
+                {
+                    originSrc = _playlistCore.BaseOrigin.Source;
+                }
+                else if (!string.IsNullOrWhiteSpace(_lastLocalPlaylistPath) && LooksLikeLocalBase(_lastLocalPlaylistPath))
+                {
+                    originSrc = _lastLocalPlaylistPath;
+                }
+
+                if (!string.IsNullOrWhiteSpace(originSrc))
+                {
+                    if (TryExtractLocalPathBestEffort(originSrc, out var originPath) && !string.IsNullOrWhiteSpace(originPath))
+                    {
+                        var baseDir = originPath;
+                        try
+                        {
+                            // If origin is a file, use its directory; if it's already a directory, keep it.
+                            if (!Directory.Exists(baseDir))
+                                baseDir = Path.GetDirectoryName(baseDir) ?? baseDir;
+                        }
+                        catch { /* ignore */ }
+
+                        if (!string.IsNullOrWhiteSpace(baseDir))
+                        {
+                            var combined = "";
+                            try { combined = Path.GetFullPath(Path.Combine(baseDir, raw)).Trim(); }
+                            catch { combined = Path.Combine(baseDir, raw).Trim(); }
+                            if (!string.IsNullOrWhiteSpace(combined))
+                            {
+                                pathKey = combined;
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            catch { /* ignore */ }
+
+            // Last-resort: treat local ids as local even if path parsing is weird; use raw webpageUrl.
+            try
+            {
+                if (IsEntryLocal(e) &&
+                    !string.IsNullOrWhiteSpace(e.VideoId) &&
+                    e.VideoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var raw = (e.WebpageUrl ?? "").Trim();
+                    if (!string.IsNullOrWhiteSpace(raw))
+                    {
+                        pathKey = raw;
+                        return true;
+                    }
+                }
+            }
+            catch { /* ignore */ }
+
+            return false;
+        }
+
+        string SourceGroupKey(PlaylistEntry e)
+        {
+            if (!IsEntryLocal(e) && isYoutubePlaylist)
+                return (e.Channel ?? "").Trim();
+
+            // For "Source" sort, treat all local-file items as one origin group even when the playlist is compounded
+            // from multiple local sublists (folders / file selections / saved playlists). We still keep per-item origin
+            // info for UI (e.g. title/origin display + "Open file location") — this is only the grouping key for sorting.
+            try
+            {
+                if (TryGetLocalPathKey(e, out _))
+                    return "Local files";
+            }
+            catch { /* ignore */ }
+
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(e.VideoId) &&
+                    e.VideoId.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
+                    return "Local files";
+            }
+            catch { /* ignore */ }
+
             try
             {
                 if (_playlistCore.OriginByVideoId.TryGetValue(e.VideoId, out var origin))
                     return (origin.Label ?? "").Trim();
-            }
-            catch { /* ignore */ }
-
-            if (isYoutube)
-                return (e.Channel ?? "").Trim();
-
-            try
-            {
-                if (LocalPlaylistLoader.TryGetLocalPath(e.WebpageUrl, out var p))
-                {
-                    var dir = Path.GetDirectoryName(p) ?? "";
-                    var name = string.IsNullOrWhiteSpace(dir) ? "" : (Path.GetFileName(dir) ?? dir);
-                    return name;
-                }
             }
             catch { /* ignore */ }
 
@@ -4469,6 +4644,35 @@ public partial class MainWindow : Window
             return LocalPathOrUrl(e);
         }
 
+        string WithinSourceKey(PlaylistEntry e)
+        {
+            // When grouped as local files, sort by full path so folder structure is respected,
+            // and never allow metadata (Title) to override filename/path ordering.
+            if (IsEntryLocal(e) && TryGetLocalPathKey(e, out var p))
+                return p;
+            return NameKey(e);
+        }
+
+        string WithinLocalDirKey(PlaylistEntry e)
+        {
+            if (!IsEntryLocal(e))
+                return "";
+            if (!TryGetLocalPathKey(e, out var p))
+                return "";
+            try { return (Path.GetDirectoryName(p) ?? "").Trim(); }
+            catch { return ""; }
+        }
+
+        string WithinLocalFileKey(PlaylistEntry e)
+        {
+            if (!IsEntryLocal(e))
+                return "";
+            if (!TryGetLocalPathKey(e, out var p))
+                return "";
+            try { return (Path.GetFileName(p) ?? "").Trim(); }
+            catch { return ""; }
+        }
+
         IOrderedEnumerable<PlaylistEntry> ordered;
         if (spec.Direction == PlaylistSortDirection.Desc)
         {
@@ -4478,8 +4682,10 @@ public partial class MainWindow : Window
                     .OrderByDescending(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
                 PlaylistSortMode.ChannelOrPath => _playlistCore.Entries
-                    .OrderByDescending(SourceKey, StringComparer.OrdinalIgnoreCase)
-                    .ThenByDescending(NameKey, StringComparer.OrdinalIgnoreCase)
+                    .OrderByDescending(SourceGroupKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenByDescending(WithinLocalDirKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenByDescending(WithinLocalFileKey, ExplorerLogicalStringComparer.Instance)
+                    .ThenByDescending(WithinSourceKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
                 PlaylistSortMode.Duration => _playlistCore.Entries
                     // Keep unknown durations last even in Desc.
@@ -4498,8 +4704,10 @@ public partial class MainWindow : Window
                     .OrderBy(NameKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
                 PlaylistSortMode.ChannelOrPath => _playlistCore.Entries
-                    .OrderBy(SourceKey, StringComparer.OrdinalIgnoreCase)
-                    .ThenBy(NameKey, StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(SourceGroupKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(WithinLocalDirKey, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(WithinLocalFileKey, ExplorerLogicalStringComparer.Instance)
+                    .ThenBy(WithinSourceKey, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(static e => e.VideoId, StringComparer.OrdinalIgnoreCase),
                 PlaylistSortMode.Duration => _playlistCore.Entries
                     // Keep unknown durations last.

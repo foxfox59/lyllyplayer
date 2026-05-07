@@ -1068,6 +1068,12 @@ public partial class PlaylistWindow : Window
         catch { }
     }
 
+    public void RememberNowPlaying(PlaylistEntry? entry)
+    {
+        if (entry is null) return;
+        try { _lastNowPlayingEntry = entry; } catch { /* ignore */ }
+    }
+
     // YouTube is now a tab (no modal).
 
     private async void SavePlaylistButton_OnClick(object sender, RoutedEventArgs e)
