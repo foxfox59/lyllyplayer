@@ -1,5 +1,7 @@
 ### What's new, pussycat?
 
+- 2.5.3:
+  - Fixed local file sorting and duplicate removal
 - 2.5.2:
   - Audio files associated with LyllyPlayer should now open properly and be added to playlist
 - 2.5.1:
