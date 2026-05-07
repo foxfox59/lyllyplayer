@@ -1,5 +1,9 @@
 ### What's new, pussycat?
 
+- 2.5.2:
+  - Audio files associated with LyllyPlayer should now open properly and be added to playlist
+- 2.5.1:
+  - Theming and layout fixes
 - 2.5.0:
   - Playlist and theme file associations (per user registry setting)
   - Filename extensions are now ".lyllytheme" for themes and ".lyllylist" for playlists
