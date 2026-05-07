@@ -335,7 +335,7 @@ public partial class MainWindow
                 catch (Exception ex)
                 {
                     try { AppLog.Exception(ex, "Double-click play failed"); } catch { /* ignore */ }
-                    try { System.Windows.MessageBox.Show(this, $"Play failed:\n\n{ex.GetType().Name}: {ex.Message}", GetAppTitleBase(), MessageBoxButton.OK, MessageBoxImage.Error); } catch { /* ignore */ }
+                    try { TopmostMessageBox.Show($"Play failed:\n\n{ex.GetType().Name}: {ex.Message}", GetAppTitleBase(), MessageBoxButton.OK, MessageBoxImage.Error); } catch { /* ignore */ }
                 }
                 return Task.CompletedTask;
             },
@@ -722,8 +722,7 @@ public partial class MainWindow
                 {
                     try
                     {
-                        System.Windows.MessageBox.Show(
-                            this,
+                        TopmostMessageBox.Show(
                             "Failed to associate files.\n\n" + ex.Message,
                             "LyllyPlayer",
                             MessageBoxButton.OK,
@@ -743,8 +742,7 @@ public partial class MainWindow
                 {
                     try
                     {
-                        System.Windows.MessageBox.Show(
-                            this,
+                        TopmostMessageBox.Show(
                             "Failed to remove associations.\n\n" + ex.Message,
                             "LyllyPlayer",
                             MessageBoxButton.OK,

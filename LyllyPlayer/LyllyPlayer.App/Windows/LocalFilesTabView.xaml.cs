@@ -157,8 +157,8 @@ public partial class LocalFilesTabView : System.Windows.Controls.UserControl
 
             try
             {
-                var owner = Window.GetWindow(this);
-                var hwnd = owner is not null ? new System.Windows.Interop.WindowInteropHelper(owner).Handle : IntPtr.Zero;
+                using var top = new TopmostDialogOwner(Window.GetWindow(this));
+                var hwnd = top.OwnerHwnd;
                 if (hwnd != IntPtr.Zero)
                 {
                     if (dlg.ShowDialog(new Win32OwnerWrapper(hwnd)) != System.Windows.Forms.DialogResult.OK)
@@ -229,7 +229,8 @@ public partial class LocalFilesTabView : System.Windows.Controls.UserControl
                 Multiselect = true
             };
 
-            if (dlg.ShowDialog(Window.GetWindow(this)) != true)
+            using var top = new TopmostDialogOwner(Window.GetWindow(this));
+            if (dlg.ShowDialog(top.OwnerWindow) != true)
                 return;
 
             var files = dlg.FileNames?.Where(f => !string.IsNullOrWhiteSpace(f)).ToList() ?? new List<string>();

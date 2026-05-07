@@ -811,7 +811,8 @@ public partial class OptionsWindow : Window
         }
         catch { /* ignore */ }
 
-        if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
+        using var top = new TopmostDialogOwner(GetDialogOwnerWindow());
+        if (dlg.ShowDialog(top.OwnerWindow) != true)
             return;
 
         _draft.LameEncoderPath = dlg.FileName;
@@ -1169,7 +1170,8 @@ public partial class OptionsWindow : Window
         }
         catch { }
 
-        if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
+        using var top = new TopmostDialogOwner(GetDialogOwnerWindow());
+        if (dlg.ShowDialog(top.OwnerWindow) != true)
             return;
 
         _draft.YtDlpPath = dlg.FileName;
@@ -1183,8 +1185,7 @@ public partial class OptionsWindow : Window
             var managed = ToolPaths.GetManagedYtDlpPath();
             if (!File.Exists(managed))
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "Internal yt-dlp was not found yet.\n\nUse Browse… to select your own yt-dlp binary, or download yt-dlp from the main app prompt first.",
                     "Options",
                     MessageBoxButton.OK,
@@ -1241,7 +1242,8 @@ public partial class OptionsWindow : Window
         }
         catch { }
 
-        if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
+        using var top = new TopmostDialogOwner(GetDialogOwnerWindow());
+        if (dlg.ShowDialog(top.OwnerWindow) != true)
             return;
 
         _draft.FfmpegPath = dlg.FileName;
@@ -1264,7 +1266,7 @@ public partial class OptionsWindow : Window
         draftPathField = previous;
         if (!string.IsNullOrWhiteSpace(previous))
         {
-            System.Windows.MessageBox.Show(this,
+            TopmostMessageBox.Show(
                 $"{displayNameForMessage} was not found on PATH. The path shown in Options is unchanged.",
                 "Options",
                 MessageBoxButton.OK,
@@ -1298,7 +1300,8 @@ public partial class OptionsWindow : Window
         }
         catch { }
 
-        if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
+        using var top = new TopmostDialogOwner(GetDialogOwnerWindow());
+        if (dlg.ShowDialog(top.OwnerWindow) != true)
             return;
 
         _draft.NodeJsPath = dlg.FileName;
@@ -1452,7 +1455,8 @@ public partial class OptionsWindow : Window
                 FileName = "theme.lyllytheme",
                 OverwritePrompt = true
             };
-            if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
+            using var top = new TopmostDialogOwner(GetDialogOwnerWindow());
+            if (dlg.ShowDialog(top.OwnerWindow) != true)
                 return;
 
             var theme = new LyllyPlayer.Models.ThemeSettings(
@@ -1493,7 +1497,8 @@ public partial class OptionsWindow : Window
                 CheckFileExists = true,
                 Multiselect = false
             };
-            if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
+            using var top = new TopmostDialogOwner(GetDialogOwnerWindow());
+            if (dlg.ShowDialog(top.OwnerWindow) != true)
                 return;
 
             string json;
@@ -1504,8 +1509,7 @@ public partial class OptionsWindow : Window
             catch (Exception ex) when (ex is FileNotFoundException or InvalidDataException or IOException
                 or UnauthorizedAccessException)
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     ex.Message,
                     "Load theme",
                     MessageBoxButton.OK,
@@ -1526,8 +1530,7 @@ public partial class OptionsWindow : Window
                     });
                 if (doc.RootElement.ValueKind != JsonValueKind.Object)
                 {
-                    System.Windows.MessageBox.Show(
-                        this,
+                    TopmostMessageBox.Show(
                         "This file is valid JSON, but it is not a theme file (expected a JSON object at the root).",
                         "Load theme",
                         MessageBoxButton.OK,
@@ -1566,8 +1569,7 @@ public partial class OptionsWindow : Window
 
                 if (!HasAnyThemeKey(doc.RootElement))
                 {
-                    System.Windows.MessageBox.Show(
-                        this,
+                    TopmostMessageBox.Show(
                         "This file is valid JSON, but it doesn't look like a LyllyPlayer theme file.\n\n" +
                         "Tip: theme files typically contain keys like ThemeMode, BackgroundColorMode, BackgroundAlpha, UiScalePercent, etc.",
                         "Load theme",
@@ -1578,8 +1580,7 @@ public partial class OptionsWindow : Window
             }
             catch (JsonException)
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "This file is not valid JSON.",
                     "Load theme",
                     MessageBoxButton.OK,
@@ -1596,8 +1597,7 @@ public partial class OptionsWindow : Window
             }
             catch (JsonException)
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "This file is not valid JSON or does not match the LyllyPlayer theme format.",
                     "Load theme",
                     MessageBoxButton.OK,
@@ -1607,8 +1607,7 @@ public partial class OptionsWindow : Window
 
             if (theme is null)
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "The theme file could not be read.",
                     "Load theme",
                     MessageBoxButton.OK,
@@ -1636,8 +1635,7 @@ public partial class OptionsWindow : Window
                 && theme.WindowBorderMode is null
                 && theme.WindowBorderCustomPx is null)
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "This file deserialized, but it doesn't contain any theme settings to apply.",
                     "Load theme",
                     MessageBoxButton.OK,
@@ -1680,8 +1678,7 @@ public partial class OptionsWindow : Window
         {
             try
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     $"Theme load failed.\n\n{ex.Message}",
                     "Load theme",
                     MessageBoxButton.OK,
@@ -1734,8 +1731,7 @@ public partial class OptionsWindow : Window
         {
             try
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "Theme loaded, but some settings could not be applied:\n\n- " + string.Join("\n- ", failures),
                     "Load theme",
                     MessageBoxButton.OK,
@@ -2177,8 +2173,7 @@ public partial class OptionsWindow : Window
         {
             try
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "Background designer failed to open.\n\n" + ex.Message,
                     "Options",
                     MessageBoxButton.OK,
@@ -2249,7 +2244,8 @@ public partial class OptionsWindow : Window
             }
             catch { /* ignore */ }
 
-            if (dlg.ShowDialog(GetDialogOwnerWindow()) != true)
+            using var top = new TopmostDialogOwner(GetDialogOwnerWindow());
+            if (dlg.ShowDialog(top.OwnerWindow) != true)
                 return;
 
             _draft.CustomBackgroundImagePath = dlg.FileName;
@@ -2472,8 +2468,11 @@ public partial class OptionsWindow : Window
             var nodeOkApply = ToolPathResolver.Resolve(string.IsNullOrWhiteSpace(_draft.NodeJsPath) ? null : _draft.NodeJsPath, "node").IsFound;
             if (nodeOkApply && _draft.YoutubeCookiesEnabled && string.IsNullOrWhiteSpace((_draft.YoutubeCookiesText ?? "").Trim()))
             {
-                System.Windows.MessageBox.Show(this, "Enter a value for cookies from browser (see yt-dlp --help), or turn off the option.", "Options",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                TopmostMessageBox.Show(
+                    "Enter a value for cookies from browser (see yt-dlp --help), or turn off the option.",
+                    "Options",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
                 return false;
             }
         }
@@ -2487,7 +2486,7 @@ public partial class OptionsWindow : Window
             RevertDraftPathIfPathIntentWouldMiss(ref _draft.NodeJsPath, _getNodeJsPath, "node", pathWarnings, "Node.js");
             if (pathWarnings.Count > 0)
             {
-                System.Windows.MessageBox.Show(this,
+                TopmostMessageBox.Show(
                     "Not on PATH: " + string.Join(", ", pathWarnings) + ". Those tools keep the previously saved paths (if any). Other changes below are still applied.",
                     "Options",
                     MessageBoxButton.OK,

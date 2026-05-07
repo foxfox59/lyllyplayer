@@ -23,7 +23,9 @@ public static class FileOpenIpc
 
         var ext = "";
         try { ext = (Path.GetExtension(s) ?? "").Trim().ToLowerInvariant(); } catch { ext = ""; }
-        return ext is ".lyllylist" or ".lyllytheme";
+        if (ext is ".lyllylist" or ".lyllytheme")
+            return true;
+        return LocalPlaylistLoader.IsSupportedAudioExtension(ext);
     }
 
     public static string? TryGetFirstSupportedPathFromArgs(string[]? args)

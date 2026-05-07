@@ -104,7 +104,7 @@ public partial class App : System.Windows.Application
 
                 try
                 {
-                    System.Windows.MessageBox.Show(
+                    TopmostMessageBox.Show(
                         "LyllyPlayer is already running.",
                         "LyllyPlayer",
                         MessageBoxButton.OK,
@@ -158,7 +158,7 @@ public partial class App : System.Windows.Application
             var title = System.Windows.Application.Current?.MainWindow?.Title;
             if (string.IsNullOrWhiteSpace(title))
                 title = "LyllyPlayer";
-            System.Windows.MessageBox.Show(
+            TopmostMessageBox.Show(
                 $"Unhandled error:\n\n{e.Exception.GetType().Name}: {e.Exception.Message}",
                 title,
                 MessageBoxButton.OK,

@@ -939,6 +939,36 @@ public partial class PlaylistWindow : Window
         catch { /* ignore */ }
     }
 
+    public void FocusVideoIdBestEffort(string? videoId)
+    {
+        if (string.IsNullOrWhiteSpace(videoId))
+            return;
+
+        var vid = videoId.Trim();
+        try
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    if (_playlistItemsSource is null || _playlistItemsSource.Count == 0)
+                        return;
+                    var item = _playlistItemsSource.FirstOrDefault(q =>
+                        !q.IsQueued &&
+                        q.Entry is not null &&
+                        string.Equals(q.Entry.VideoId, vid, StringComparison.OrdinalIgnoreCase));
+                    if (item is null)
+                        return;
+
+                    PlaylistListBox.SelectedItem = item;
+                    PlaylistListBox.ScrollIntoView(item);
+                }
+                catch { /* ignore */ }
+            }), DispatcherPriority.Loaded);
+        }
+        catch { /* ignore */ }
+    }
+
     /// <summary>Call before <see cref="Window.Show"/> so the first paint does not flash the top of the list before scroll-to-now-playing.</summary>
     public void BeginSuppressQueueListUntilInitialScroll()
     {
@@ -1120,8 +1150,7 @@ public partial class PlaylistWindow : Window
             if (_busyCount > 0)
                 return;
 
-            var res = System.Windows.MessageBox.Show(
-                GetDialogOwnerWindow(),
+            var res = TopmostMessageBox.Show(
                 "This will clear the current playlist.\n\nContinue?",
                 "New playlist",
                 MessageBoxButton.OKCancel,
@@ -1321,8 +1350,7 @@ public partial class PlaylistWindow : Window
             {
                 try
                 {
-                    System.Windows.MessageBox.Show(
-                        this,
+                    TopmostMessageBox.Show(
                         $"Removed missing {removedCount} item{(removedCount == 1 ? "" : "s")} from the playlist.",
                         "LyllyPlayer",
                         MessageBoxButton.OK,
@@ -1365,8 +1393,7 @@ public partial class PlaylistWindow : Window
             {
                 try
                 {
-                    System.Windows.MessageBox.Show(
-                        this,
+                    TopmostMessageBox.Show(
                         $"Removed {removed} duplicate item{(removed == 1 ? "" : "s")} from the playlist.",
                         "LyllyPlayer",
                         MessageBoxButton.OK,

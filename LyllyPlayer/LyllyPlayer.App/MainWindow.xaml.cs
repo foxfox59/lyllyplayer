@@ -79,6 +79,21 @@ public partial class MainWindow : Window
             await PromptAndOpenPlaylistFromFileAsync(p).ConfigureAwait(true);
             return;
         }
+
+        if (LocalPlaylistLoader.IsSupportedAudioExtension(ext))
+        {
+            // Explorer double-click on an audio file: append to current playlist by default (portable associations / Open with).
+            var localId = "";
+            try { localId = LocalPlaylistLoader.CreateLocalIdFromPath(p); } catch { localId = ""; }
+            await AddFilesAsync(
+                new[] { p },
+                append: true,
+                removeDuplicates: _localImportRemoveDuplicates,
+                cancellationToken: CancellationToken.None,
+                progress: null).ConfigureAwait(true);
+            try { _playlistWindow?.FocusVideoIdBestEffort(localId); } catch { /* ignore */ }
+            return;
+        }
     }
 
     private Task ApplyThemeFromFileBestEffortAsync(string path)
@@ -114,8 +129,7 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    System.Windows.MessageBox.Show(
-                        owner,
+                    TopmostMessageBox.Show(
                         result.ErrorMessage ?? "Could not load the playlist file.",
                         "LyllyPlayer",
                         MessageBoxButton.OK,
@@ -949,8 +963,7 @@ public partial class MainWindow : Window
             var settingsPath = _settingsService.GetSettingsPath();
             if (startupInfo.RecoveryKind == SettingsStartupRecoveryKind.CorruptUsedDefaults)
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "settings.json could not be read. Default settings are in use.\n\n"
                     + "You can delete or repair the file:\n"
                     + settingsPath,
@@ -963,8 +976,7 @@ public partial class MainWindow : Window
                 var tag = string.IsNullOrWhiteSpace(startupInfo.LastSavedByAppVersionReadFromFile)
                     ? ""
                     : $"\n\n(Version tag read from file: {startupInfo.LastSavedByAppVersionReadFromFile.Trim()})";
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "settings.json was damaged, but some values could still be read from it."
                     + tag
                     + "\n\nConsider fixing or backing up the file:\n"
@@ -3408,8 +3420,7 @@ public partial class MainWindow : Window
             try { _playlistAuxCtl.Clear(); } catch { /* ignore */ }
             try
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     $"Failed to open Playlist window.\n\n{ex.Message}",
                     GetAppTitleBase(),
                     MessageBoxButton.OK,
@@ -4225,11 +4236,10 @@ public partial class MainWindow : Window
     {
         try
         {
-            var owner = System.Windows.Application.Current?.MainWindow;
             var msg = removedDuplicates > 0
                 ? $"Added {added} items.\nSkipped {removedDuplicates} duplicates."
                 : $"Added {added} items.";
-            System.Windows.MessageBox.Show(owner, msg, title, MessageBoxButton.OK, MessageBoxImage.Information);
+            TopmostMessageBox.Show(msg, title, MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch { /* ignore */ }
     }
@@ -6378,8 +6388,7 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    System.Windows.MessageBox.Show(
-                        this,
+                    TopmostMessageBox.Show(
                         "The saved last-playlist file (last-playlist.json) could not be read. It will be ignored.\n\n"
                         + "If the file is damaged, you can delete it from your LyllyPlayer app data folder.",
                         "LyllyPlayer",
@@ -7167,8 +7176,7 @@ public partial class MainWindow : Window
                 "You can download yt-dlp now (recommended), or use your own yt-dlp binary by selecting it (even if it's not on PATH).\n\n" +
                 "Download yt-dlp now?";
 
-            var choice = System.Windows.MessageBox.Show(
-                this,
+            var choice = TopmostMessageBox.Show(
                 msg,
                 GetAppTitleBase(),
                 MessageBoxButton.YesNoCancel,
@@ -7249,8 +7257,11 @@ public partial class MainWindow : Window
             var managed = ToolPaths.GetManagedYtDlpPath();
             if (!File.Exists(managed))
             {
-                System.Windows.MessageBox.Show(this, "Internal yt-dlp is not downloaded yet.", GetAppTitleBase(),
-                    MessageBoxButton.OK, MessageBoxImage.Information);
+                TopmostMessageBox.Show(
+                    "Internal yt-dlp is not downloaded yet.",
+                    GetAppTitleBase(),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
                 return;
             }
 
@@ -7278,13 +7289,15 @@ public partial class MainWindow : Window
             if (!isNewer)
             {
                 ShowInfoToast($"yt-dlp is up to date ({installedStr}).", ms: 1600);
-                System.Windows.MessageBox.Show(this, $"Internal yt-dlp is up to date.\n\nInstalled: {installedStr}\nLatest: {tag}",
-                    GetAppTitleBase(), MessageBoxButton.OK, MessageBoxImage.Information);
+                TopmostMessageBox.Show(
+                    $"Internal yt-dlp is up to date.\n\nInstalled: {installedStr}\nLatest: {tag}",
+                    GetAppTitleBase(),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
                 return;
             }
 
-            var choice = System.Windows.MessageBox.Show(
-                this,
+            var choice = TopmostMessageBox.Show(
                 $"An internal yt-dlp update is available.\n\nInstalled: {installedStr}\nLatest: {tag}\n\nUpdate now?",
                 GetAppTitleBase(),
                 MessageBoxButton.YesNo,
@@ -7332,7 +7345,8 @@ public partial class MainWindow : Window
             }
             catch { /* ignore */ }
 
-            if (dlg.ShowDialog(this) != true)
+            using var top = new TopmostDialogOwner(this);
+            if (dlg.ShowDialog(top.OwnerWindow) != true)
                 return false;
 
             _savedYtDlpPath = dlg.FileName;
@@ -8558,8 +8572,7 @@ public partial class MainWindow : Window
 
             if (!_engine.TryGetYoutubeDiskCachePath(cur, out var cachePath) || string.IsNullOrWhiteSpace(cachePath))
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "There is no finished on-disk cache for this track yet. Let playback finish caching, then try again.",
                     GetAppTitleBase(),
                     MessageBoxButton.OK,
@@ -8569,8 +8582,7 @@ public partial class MainWindow : Window
 
             if (!LameEncoderLocator.TryResolve(_lameEncoderPath, out _))
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "LAME (libmp3lame) was not found.\n\nPlace libmp3lame.64.dll next to the app or set a custom DLL under Options → Export.",
                     GetAppTitleBase(),
                     MessageBoxButton.OK,
@@ -8589,7 +8601,8 @@ public partial class MainWindow : Window
                 OverwritePrompt = true,
             };
 
-            if (dlg.ShowDialog(this) != true)
+            using var top = new TopmostDialogOwner(this);
+            if (dlg.ShowDialog(top.OwnerWindow) != true)
                 return;
 
             var destPath = dlg.FileName;
@@ -8617,8 +8630,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     ex.Message,
                     "Export to MP3",
                     MessageBoxButton.OK,
@@ -9596,8 +9608,7 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    System.Windows.MessageBox.Show(
-                        this,
+                    TopmostMessageBox.Show(
                         "Background designer couldn't load the default background image source.",
                         "LyllyPlayer",
                         MessageBoxButton.OK,
@@ -9777,8 +9788,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                System.Windows.MessageBox.Show(
-                    this,
+                TopmostMessageBox.Show(
                     "Background designer failed to open.\n\n" + ex.Message,
                     "LyllyPlayer",
                     MessageBoxButton.OK,

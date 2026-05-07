@@ -42,7 +42,7 @@ public partial class LogWindow : Window
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show(this, ex.Message, "Failed to open log", MessageBoxButton.OK, MessageBoxImage.Error);
+            TopmostMessageBox.Show(ex.Message, "Failed to open log", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 

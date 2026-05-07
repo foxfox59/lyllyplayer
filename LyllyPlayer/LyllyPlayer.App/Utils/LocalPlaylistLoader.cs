@@ -37,6 +37,20 @@ public static class LocalPlaylistLoader
         ".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif", ".aifc"
     };
 
+    public static bool IsSupportedAudioExtension(string? ext)
+    {
+        try
+        {
+            var e = (ext ?? "").Trim();
+            if (e.Length == 0)
+                return false;
+            if (!e.StartsWith('.'))
+                e = "." + e;
+            return SupportedAudioExtensions.Contains(e);
+        }
+        catch { return false; }
+    }
+
     private const int MetadataLoadParallelism = 6;
 
     /// <summary>

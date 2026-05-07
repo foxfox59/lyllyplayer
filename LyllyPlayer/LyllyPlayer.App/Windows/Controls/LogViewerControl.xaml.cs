@@ -67,8 +67,7 @@ public partial class LogViewerControl : System.Windows.Controls.UserControl
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show(
-                Window.GetWindow(this),
+            TopmostMessageBox.Show(
                 ex.Message,
                 "Failed to open log",
                 MessageBoxButton.OK,
