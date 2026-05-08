@@ -1,5 +1,10 @@
 ### What's new, pussycat?
-
+- 2.5.6:
+  - Fixed a bug where dragging a browser tab into the Playlist window would cause incorrect status and break playlist
+- 2.5.5:
+  - Fixed an issue where volume was not being applied properly
+- 2.5.4:
+  - Fixed visualizer not working properly (audio callbacks are an optional setting still, because they can be delicate)
 - 2.5.3:
   - Fixed local file sorting and duplicate removal
 - 2.5.2:
