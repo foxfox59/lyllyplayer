@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Version>2.5.6</Version>
+    <Version>2.5.7</Version>
     <AssemblyTitle>LyllyPlayer</AssemblyTitle>
     <Product>LyllyPlayer</Product>
     <Company>MuiluFox</Company>

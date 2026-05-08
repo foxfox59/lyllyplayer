@@ -1148,10 +1148,12 @@ public partial class MainWindow
         if (warmReopen)
         {
             try { ApplyLyricsWindowSettings(latestSettings, w); } catch { /* ignore */ }
+            try { NormalizeLyricsWindowOuterForUiScale(latestSettings, w); } catch { /* ignore */ }
             return;
         }
 
         try { ApplyLyricsWindowSettings(latestSettings, w); } catch { /* ignore */ }
+        try { NormalizeLyricsWindowOuterForUiScale(latestSettings, w); } catch { /* ignore */ }
         w.MinWidth = 400.0 * UiScale;
         w.MinHeight = 300.0 * UiScale;
     }

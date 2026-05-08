@@ -656,6 +656,7 @@ public partial class MainWindow : Window
     private double _playlistDockXOffset;
     /// <summary>UI scale % that <see cref="_playlistWindow"/> outer Width/Height currently match (for proportional resize when scale changes).</summary>
     private int? _playlistWindowOuterAtUiScalePercent;
+    private int? _lyricsWindowOuterAtUiScalePercent;
     private enum OptionsSnapEdge { None, Left, Right, Bottom, Top }
     private bool _optionsSnapped;
     private OptionsSnapEdge _optionsSnapEdge = OptionsSnapEdge.None;
@@ -11763,6 +11764,19 @@ public partial class MainWindow : Window
                     {
                         _playlistWindow.Width = Math.Max(minPlW, _playlistWindow.Width * ratio);
                         _playlistWindow.Height = Math.Max(minPlH, _playlistWindow.Height * ratio);
+
+                        // Keep snap offsets consistent when the window resizes due to UI scale.
+                        try
+                        {
+                            if (_playlistSnapped)
+                            {
+                                if (_playlistSnapEdge is PlaylistSnapEdge.Left or PlaylistSnapEdge.Right)
+                                    _playlistDockYOffset *= ratio;
+                                else if (_playlistSnapEdge is PlaylistSnapEdge.Top or PlaylistSnapEdge.Bottom)
+                                    _playlistDockXOffset *= ratio;
+                            }
+                        }
+                        catch { /* ignore */ }
                     }
                 }
 
@@ -11770,6 +11784,45 @@ public partial class MainWindow : Window
             }
         }
         catch { /* ignore */ }
+
+        try
+        {
+            if (_lyricsWindow is not null)
+            {
+                var minLw = 400.0 * s;
+                var minLh = 300.0 * s;
+                _lyricsWindow.MinWidth = minLw;
+                _lyricsWindow.MinHeight = minLh;
+                if (_lyricsWindowOuterAtUiScalePercent is int prevPct)
+                {
+                    var oldS = Math.Clamp(prevPct / 100.0, 0.5, 2.0);
+                    var ratio = s / oldS;
+                    if (Math.Abs(ratio - 1.0) > 1e-6)
+                    {
+                        _lyricsWindow.Width = Math.Max(minLw, _lyricsWindow.Width * ratio);
+                        _lyricsWindow.Height = Math.Max(minLh, _lyricsWindow.Height * ratio);
+
+                        try
+                        {
+                            if (_lyricsSnapped)
+                            {
+                                if (_lyricsSnapEdge is LyricsSnapEdge.Left or LyricsSnapEdge.Right)
+                                    _lyricsDockYOffset *= ratio;
+                                else if (_lyricsSnapEdge is LyricsSnapEdge.Top or LyricsSnapEdge.Bottom)
+                                    _lyricsDockXOffset *= ratio;
+                            }
+                        }
+                        catch { /* ignore */ }
+                    }
+                }
+
+                _lyricsWindowOuterAtUiScalePercent = _uiScalePercent;
+            }
+        }
+        catch { /* ignore */ }
+
+        try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
+        try { WindowSnapService.SettleLatchedRelationsBestEffort(); } catch { /* ignore */ }
     }
 
     private Models.ThemeSettings GetCurrentThemeSettings()
@@ -13218,6 +13271,34 @@ public partial class MainWindow : Window
             {
                 var basis = settings.PlaylistWindowBoundsUiScalePercent is >= 50 and <= 200
                     ? settings.PlaylistWindowBoundsUiScalePercent.Value / 100.0
+                    : 1.0;
+                var r = cur / basis;
+                if (Math.Abs(r - 1.0) > 1e-6)
+                {
+                    w.Width *= r;
+                    w.Height *= r;
+                }
+            }
+            else
+            {
+                w.Width *= cur;
+                w.Height *= cur;
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    private void NormalizeLyricsWindowOuterForUiScale(AppSettings settings, System.Windows.Window w)
+    {
+        try
+        {
+            var cur = UiScale;
+            var hadPersisted = settings.LyricsWindowWidth is > 200 and < 10000
+                && settings.LyricsWindowHeight is > 200 and < 10000;
+            if (hadPersisted)
+            {
+                var basis = settings.LyricsWindowBoundsUiScalePercent is >= 50 and <= 200
+                    ? settings.LyricsWindowBoundsUiScalePercent.Value / 100.0
                     : 1.0;
                 var r = cur / basis;
                 if (Math.Abs(r - 1.0) > 1e-6)

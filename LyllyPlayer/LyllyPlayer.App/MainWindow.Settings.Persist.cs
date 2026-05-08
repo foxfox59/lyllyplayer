@@ -220,6 +220,7 @@ public partial class MainWindow
             LyricsWindowTop: lyricsSnappedNow ? null : (FiniteOrNull(saveLBounds.Top) ?? cur.LyricsWindowTop),
             LyricsWindowWidth: FiniteOrNull(saveLBounds.Width) ?? cur.LyricsWindowWidth,
             LyricsWindowHeight: FiniteOrNull(saveLBounds.Height) ?? cur.LyricsWindowHeight,
+            LyricsWindowBoundsUiScalePercent: _uiScalePercent,
             LyricsWindowState: saveLState.ToString(),
             LyricsWindowOpen: (_lyricsWindow is not null && _lyricsWindow.IsVisible) || (_mainWindowCompact && _compactModeHidesAuxWindows && _lyricsWindowWasOpenBeforeCompact),
             ThemeMode: _themeMode,

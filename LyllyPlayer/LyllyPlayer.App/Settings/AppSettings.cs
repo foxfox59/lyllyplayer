@@ -61,6 +61,8 @@ public sealed record AppSettings(
     double? PlaylistWindowDockXOffset,
     /// <summary>UI scale % when <see cref="PlaylistWindowWidth"/> / <see cref="PlaylistWindowHeight"/> were saved; used to restore size at a different scale.</summary>
     int? PlaylistWindowBoundsUiScalePercent,
+    /// <summary>UI scale % when <see cref="LyricsWindowWidth"/> / <see cref="LyricsWindowHeight"/> were saved; used to restore size at a different scale.</summary>
+    int? LyricsWindowBoundsUiScalePercent,
     bool? OptionsWindowSnapped,
     string? OptionsWindowSnapEdge,
     double? OptionsWindowDockYOffset,

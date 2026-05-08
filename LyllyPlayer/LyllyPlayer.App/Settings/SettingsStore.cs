@@ -388,6 +388,7 @@ public static class SettingsStore
             PlaylistWindowDockYOffset = GetDouble(nameof(AppSettings.PlaylistWindowDockYOffset)) ?? loaded.PlaylistWindowDockYOffset,
             PlaylistWindowDockXOffset = GetDouble(nameof(AppSettings.PlaylistWindowDockXOffset)) ?? loaded.PlaylistWindowDockXOffset,
             PlaylistWindowBoundsUiScalePercent = GetInt(nameof(AppSettings.PlaylistWindowBoundsUiScalePercent)) ?? loaded.PlaylistWindowBoundsUiScalePercent,
+            LyricsWindowBoundsUiScalePercent = GetInt(nameof(AppSettings.LyricsWindowBoundsUiScalePercent)) ?? loaded.LyricsWindowBoundsUiScalePercent,
 
             CacheMaxMb = loaded.CacheMaxMb ?? GetInt(nameof(AppSettings.CacheMaxMb)),
             Volume = loaded.Volume ?? GetDouble(nameof(AppSettings.Volume)),
@@ -469,6 +470,7 @@ public static class SettingsStore
         TakeBool(nameof(AppSettings.LyricsWindowOpen), ref s, (c, v) => c with { LyricsWindowOpen = v });
         TakeBool(nameof(AppSettings.CompactModeHidesAuxWindows), ref s, (c, v) => c with { CompactModeHidesAuxWindows = v });
         TakeString(nameof(AppSettings.CompactModeLayout), ref s, (c, v) => c with { CompactModeLayout = v });
+        TakeInt(nameof(AppSettings.LyricsWindowBoundsUiScalePercent), ref s, (c, v) => c with { LyricsWindowBoundsUiScalePercent = v });
 
         return any ? s : AllNullSettings();
     }
@@ -570,6 +572,7 @@ public static class SettingsStore
         PlaylistWindowDockYOffset: null,
         PlaylistWindowDockXOffset: null,
         PlaylistWindowBoundsUiScalePercent: null,
+        LyricsWindowBoundsUiScalePercent: null,
         OptionsWindowSnapped: null,
         OptionsWindowSnapEdge: null,
         OptionsWindowDockYOffset: null,
@@ -701,6 +704,7 @@ public static class SettingsStore
             PlaylistWindowDockYOffset: 0,
             PlaylistWindowDockXOffset: 0,
             PlaylistWindowBoundsUiScalePercent: null,
+            LyricsWindowBoundsUiScalePercent: null,
             OptionsWindowSnapped: true,
             OptionsWindowSnapEdge: "Bottom",
             OptionsWindowDockYOffset: 0,

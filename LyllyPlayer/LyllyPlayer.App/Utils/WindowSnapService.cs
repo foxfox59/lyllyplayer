@@ -145,6 +145,54 @@ public static class WindowSnapService
         }
     }
 
+    /// <summary>
+    /// When window sizes change programmatically (e.g. UI scale), latched windows can remain at their old top-left.
+    /// This re-applies the stored latch relations (best-effort) to keep clusters gapless.
+    /// </summary>
+    public static void SettleLatchedRelationsBestEffort()
+    {
+        try
+        {
+            if (AnyWindowDragging)
+                return;
+            if (_clusterMoveGuard != 0)
+                return;
+
+            // Prefer settling from Main if available (ensures cluster leader ordering).
+            var main = _windows.Keys.FirstOrDefault(IsMainWindow);
+            if (main != IntPtr.Zero && TryGetWindowRect(main, out var mr))
+            {
+                TryMoveLatchedCluster(rootTargetHwnd: main, rootRectOverride: mr);
+                return;
+            }
+
+            // Fallback: apply each relation independently.
+            foreach (var kv in _latchedTo.ToArray())
+            {
+                var child = kv.Key;
+                var rel = kv.Value;
+                if (child == IntPtr.Zero || rel.TargetHwnd == IntPtr.Zero)
+                    continue;
+                if (IsIconic(child) || !IsWindowVisible(child))
+                    continue;
+                if (!TryGetWindowRect(child, out var cr) || !TryGetWindowRect(rel.TargetHwnd, out var tr))
+                    continue;
+                if (!TryComputeLatchedRect(cr, tr, rel.Side, rel.EdgeOffsetPx, out var desired))
+                    continue;
+
+                if (desired.Left == cr.Left && desired.Top == cr.Top)
+                    continue;
+
+                SetWindowPos(child, IntPtr.Zero, desired.Left, desired.Top, 0, 0,
+                    SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_ASYNCWINDOWPOS);
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
     public static void Register(Window w)
     {
         if (w is null)
