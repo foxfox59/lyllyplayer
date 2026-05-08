@@ -666,6 +666,22 @@ public static class LyricsResolver
         }
     }
 
+    private static string BuildComparableTokenBagKey(string s)
+    {
+        try
+        {
+            var tokens = TokenizeMeaningfulForMatch(s);
+            if (tokens.Count == 0)
+                return "";
+            tokens.Sort(StringComparer.OrdinalIgnoreCase);
+            return string.Join("|", tokens.Select(t => t.ToLowerInvariant()));
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
     private static List<string> SplitOnSeparatorsUpTo3(string s, string[] seps)
     {
         var parts = new List<string>(3);
@@ -1165,6 +1181,50 @@ public static class LyricsResolver
                 var combinedCandidate = BuildCombinedCandidateString(lrclibArtist, lrclibName);
                 var combinedScore = ComputeCombinedMatchScore(query, combinedCandidate);
                 score += combinedScore;
+
+                // 1c) Exact combined match (order-insensitive): treat "Artist Title" == "Title Artist" as a 100% match.
+                // Example: query="Hiljainen Viikate", candidate="Viikate Hiljainen".
+                try
+                {
+                    var bagQ = BuildComparableTokenBagKey(query);
+                    var bagC = BuildComparableTokenBagKey(combinedCandidate);
+                    if (!string.IsNullOrWhiteSpace(bagQ) &&
+                        !string.IsNullOrWhiteSpace(bagC) &&
+                        string.Equals(bagQ, bagC, StringComparison.OrdinalIgnoreCase))
+                    {
+                        score += 120;
+                    }
+                }
+                catch { /* ignore */ }
+
+                // 1b) Exact-match bonuses (tie-breaker): prefer exact title/artist matches over other
+                // candidates that share the same tokens (e.g. "Hiljainen" vs "Aamun hiljainen hetki").
+                // Use the same comparable key as other match logic (case/spacing/punct-insensitive).
+                try
+                {
+                    var kYtTitle = BuildComparableNameKey(ytTrackName);
+                    var kYtArtist = BuildComparableNameKey(ytArtist ?? "");
+                    var kCandTitle = BuildComparableNameKey(lrclibName ?? "");
+                    var kCandArtist = BuildComparableNameKey(lrclibArtist ?? "");
+
+                    if (!string.IsNullOrWhiteSpace(kYtTitle) &&
+                        !string.IsNullOrWhiteSpace(kCandTitle) &&
+                        string.Equals(kYtTitle, kCandTitle, StringComparison.OrdinalIgnoreCase))
+                        score += 35;
+
+                    if (!string.IsNullOrWhiteSpace(kYtArtist) &&
+                        !string.IsNullOrWhiteSpace(kCandArtist) &&
+                        string.Equals(kYtArtist, kCandArtist, StringComparison.OrdinalIgnoreCase))
+                        score += 20;
+
+                    // Strongest case: both match.
+                    if (!string.IsNullOrWhiteSpace(kYtTitle) &&
+                        !string.IsNullOrWhiteSpace(kYtArtist) &&
+                        string.Equals(kYtTitle, kCandTitle, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(kYtArtist, kCandArtist, StringComparison.OrdinalIgnoreCase))
+                        score += 15;
+                }
+                catch { /* ignore */ }
 
                 // 2) Duration proximity (secondary nudge)
                 if (targetDurationSeconds.HasValue && lrclibDuration.HasValue)
