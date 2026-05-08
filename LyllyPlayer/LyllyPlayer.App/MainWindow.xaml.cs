@@ -1191,6 +1191,34 @@ public partial class MainWindow : Window
                 try { AppLog.Warn("NowPlayingChanged(UI): updating_text"); } catch { /* ignore */ }
                 UpdateNowPlayingText();
                 UpdatePlaylistTitleDisplayForNowPlaying();
+                try
+                {
+                    // Track which specific queued instance is now playing (duplicates allowed).
+                    // This MUST be set only when the track actually starts, not on TrackEnded.
+                    if (entry is not null)
+                    {
+                        Guid? qid = null;
+                        if (_manualQueuedPlayInstanceId is Guid mqid && _queuedNext.Any(q => q.Id == mqid))
+                            qid = mqid;
+                        else
+                        {
+                            for (var i = 0; i < _queuedNext.Count; i++)
+                            {
+                                if (string.Equals(_queuedNext[i].Entry.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    qid = _queuedNext[i].Id;
+                                    break;
+                                }
+                            }
+                        }
+                        _playingQueuedInstanceId = qid;
+                    }
+                    else
+                    {
+                        _playingQueuedInstanceId = null;
+                    }
+                }
+                catch { /* ignore */ }
                 UpdateNowPlayingFlag(entry);
                 try { _playlistWindow?.RememberNowPlaying(entry); } catch { /* ignore */ }
                 if (!ShouldSuppressAutoScroll(entry))
@@ -1264,28 +1292,57 @@ public partial class MainWindow : Window
         _engine.TrackEnded += (_, payload) => Dispatcher.Invoke(async () =>
         {
             // 1. Consume the ended track from queue (if it was a queued track)
-            //    AND track its ID so ResolveNextTrack() skips it
-            if (_nowPlayingEntry is not null && _queuedNext.Count > 0 &&
-                string.Equals(_queuedNext[0].Entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
+            if (_nowPlayingEntry is not null && _queuedNext.Count > 0)
             {
-                // CONSUME — remove from queue now that playback ended
-                _queuedNext.RemoveAt(0);
-                if (_queueItems.Count > 0 && _queueItems[0].IsQueued)
-                    _queueItems.RemoveAt(0);
-                UpdateQueueOrdinals();
-                _playlistWindow?.RefreshQueueView();
-                RequestPersistSnapshot();
-                if (_queuedNext.Count == 0)
-                    try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
+                // CONSUME the exact queued instance that ended (duplicates allowed).
+                var removeId = _playingQueuedInstanceId;
+                var idx = -1;
+                if (removeId is Guid rid)
+                {
+                    for (var i = 0; i < _queuedNext.Count; i++)
+                    {
+                        if (_queuedNext[i].Id == rid)
+                        {
+                            idx = i;
+                            break;
+                        }
+                    }
+                }
 
-                // Track so ResolveNextTrack() skips it
-                _playingQueuedInstanceId = _queuedNext.Count > 0 ? _queuedNext[0].Id : (Guid?)null;
+                // Fallback: if we don't know the instance id, only consume if the head matches.
+                if (idx < 0 &&
+                    string.Equals(_queuedNext[0].Entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
+                    idx = 0;
+
+                if (idx >= 0 && idx < _queuedNext.Count)
+                {
+                    var removed = _queuedNext[idx];
+                    _queuedNext.RemoveAt(idx);
+
+                    try
+                    {
+                        for (var i = 0; i < _queueItems.Count; i++)
+                        {
+                            if (_queueItems[i].IsQueued && _queueItems[i].QueueInstanceId == removed.Id)
+                            {
+                                _queueItems.RemoveAt(i);
+                                break;
+                            }
+                        }
+                    }
+                    catch { /* ignore */ }
+
+                    UpdateQueueOrdinals();
+                    _playlistWindow?.RefreshQueueView();
+                    RequestPersistSnapshot();
+                    if (_queuedNext.Count == 0)
+                        try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
+                }
             }
-            else
-            {
-                // Track isn't queued — reset
-                _playingQueuedInstanceId = null;
-            }
+
+            // After a natural end, the ended queued instance is no longer "playing".
+            // The next queued instance (if any) will be marked as playing when NowPlayingChanged fires.
+            _playingQueuedInstanceId = null;
 
                 // 2. Repeat:Single
             if (_repeatMode == RepeatMode.Single)
@@ -6354,6 +6411,7 @@ public partial class MainWindow : Window
                     _loadedPlaylistId = playlistId;
                     SetPlaylistTitle(cached.PlaylistTitle);
                     _playlistCore.ReplaceEntries(cached.Entries);
+                    RestoreStartupQueueForCurrentPlaylistBestEffort(isStartupAutoLoad);
                     // Only apply saved play-order from startup settings on initial app startup.
                     var applyIds = !_hasLoadedPlaylist ? _startupSettings.PlayOrderVideoIds : null;
                     // _currentEntries = ApplySavedOrderIfAny(_playlistCore.Entries, applyIds, shuffle: _shuffleEnabled).ToList();
@@ -6516,17 +6574,7 @@ public partial class MainWindow : Window
                 _EnsureShuffleBufferHasItems();
             }
 
-            // Restore queue only for startup auto-load (internal state), not when user explicitly loads a playlist file.
-            if (isStartupAutoLoad && !_hasLoadedPlaylist && _startupSettings.QueuedVideoIds is { Count: > 0 } qids)
-            {
-                foreach (var id in qids)
-                {
-                    if (string.IsNullOrWhiteSpace(id)) continue;
-                    var match = _playlistCore.Entries.FirstOrDefault(e => string.Equals(e.VideoId, id, StringComparison.OrdinalIgnoreCase));
-                    if (match is not null)
-                        AddToQueue(match);
-                }
-            }
+            RestoreStartupQueueForCurrentPlaylistBestEffort(isStartupAutoLoad);
 
             // Only apply saved play-order from startup settings on initial app startup.
             var applyIds3 = !_hasLoadedPlaylist ? _startupSettings.PlayOrderVideoIds : null;
@@ -7984,7 +8032,7 @@ public partial class MainWindow : Window
         }
 
         _playlistItems.Clear(); // fox
-        _queueItems.Clear();
+        // Queue is a separate collection and must NOT be cleared when rebuilding playlist rows.
 
         // Snapshot by index: List<T> enumerators are invalidated even by item assignment (metadata enrichment),
         // so never foreach over the live list here.
@@ -8066,6 +8114,40 @@ public partial class MainWindow : Window
 
     private static PlaylistEntry CloneEntry(PlaylistEntry e) => e with { };
 
+    private void RestoreStartupQueueForCurrentPlaylistBestEffort(bool isStartupAutoLoad)
+    {
+        try
+        {
+            if (!isStartupAutoLoad)
+                return;
+            if (_hasLoadedPlaylist)
+                return;
+            if (_startupSettings.QueuedVideoIds is not { Count: > 0 } qids)
+                return;
+
+            var anyAdded = false;
+            foreach (var id in qids)
+            {
+                if (string.IsNullOrWhiteSpace(id)) continue;
+                var match = _playlistCore.Entries.FirstOrDefault(e => string.Equals(e.VideoId, id, StringComparison.OrdinalIgnoreCase));
+                if (match is not null)
+                {
+                    AddToQueue(match);
+                    anyAdded = true;
+                }
+            }
+
+            // If the Playlist window is already open (or opens immediately), force a refresh so the Queue panel
+            // visibility/header reflects restored items deterministically.
+            if (anyAdded)
+            {
+                try { _playlistWindow?.RefreshQueueView(); } catch { /* ignore */ }
+                try { _playlistWindow?.SetItemsSource(_queueItems, _playlistItems); } catch { /* ignore */ }
+            }
+        }
+        catch { /* ignore */ }
+    }
+
     private PlaylistEntry? ResolveNextTrack()
     {
         // DEBUG: log entry to ResolveNextTrack
@@ -8077,22 +8159,26 @@ public partial class MainWindow : Window
         // 1. Queue Priority: If queue has items, return first one that isn't currently playing
         if (_queuedNext.Count > 0)
         {
-            // Collect bad IDs before removing, so we can sync the UI
-            var badIds = _queuedNext
+            // Purge known-bad queued instances (do it by instance-id so duplicates are safe)
+            var badInstanceIds = _queuedNext
                 .Where(q => q.Id != _playingQueuedInstanceId &&
                             (_unavailableVideoIds.Contains(q.Entry.VideoId) ||
                              _ageRestrictedVideoIds.Contains(q.Entry.VideoId) ||
                              _premiumVideoIds.Contains(q.Entry.VideoId)))
-                .Select(q => q.Entry.VideoId)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                .Select(q => q.Id)
+                .ToHashSet();
 
-            // Purge known-bad items from the internal queue
-            _queuedNext.RemoveAll(q => badIds.Contains(q.Entry.VideoId));
-
-            // Sync the visual queue list box — remove the same items from _queueItems
-            foreach (var qi in _queueItems.Where(qi => badIds.Contains(qi.VideoId)).ToList())
+            if (badInstanceIds.Count > 0)
             {
-                _queueItems.Remove(qi);
+                _queuedNext.RemoveAll(q => badInstanceIds.Contains(q.Id));
+
+                foreach (var qi in _queueItems.Where(qi => qi.IsQueued && qi.QueueInstanceId is { } id && badInstanceIds.Contains(id)).ToList())
+                {
+                    _queueItems.Remove(qi);
+                }
+
+                UpdateQueueOrdinals();
+                try { _playlistWindow?.RefreshQueueView(); } catch { /* ignore */ }
             }
 
             // Return first remaining playable item (skip the one currently playing)
@@ -8335,10 +8421,10 @@ public partial class MainWindow : Window
         if (_queuedNext.Any(q => q.Entry.VideoId == entry.VideoId)) return;
 
         var id = Guid.NewGuid();
-        var queuedInstance = new QueuedInstance(id, entry);
+        var queuedInstance = new QueuedInstance(id, CloneEntry(entry));
 
         _queuedNext.Insert(0, queuedInstance);
-        _queueItems.Insert(0, new QueueItem(queuedInstance.Entry));
+        _queueItems.Insert(0, CreateQueueItemForQueuedInstance(queuedInstance, ordinal: 1));
 
         UpdateQueueOrdinals();
         _playlistWindow?.RefreshQueueView();
@@ -8353,10 +8439,10 @@ public partial class MainWindow : Window
         if (_queuedNext.Any(q => q.Entry.VideoId == entry.VideoId)) return;
 
         var id = Guid.NewGuid();
-        var queuedInstance = new QueuedInstance(id, entry);
+        var queuedInstance = new QueuedInstance(id, CloneEntry(entry));
 
         _queuedNext.Add(queuedInstance);
-        _queueItems.Add(new QueueItem(queuedInstance.Entry));
+        _queueItems.Add(CreateQueueItemForQueuedInstance(queuedInstance, ordinal: _queuedNext.Count));
 
         UpdateQueueOrdinals();
         _playlistWindow?.RefreshQueueView();

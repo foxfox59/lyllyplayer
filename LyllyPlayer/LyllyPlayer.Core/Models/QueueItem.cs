@@ -25,7 +25,19 @@ public sealed class QueueItem : INotifyPropertyChanged
     /// <summary>0-based row index for base playlist items; null for queued items.</summary>
     public int? BaseIndex { get; init; }
     public Guid? QueueInstanceId { get; init; }
-    public int? QueueOrdinal { get; set; }
+    private int? _queueOrdinal;
+    public int? QueueOrdinal
+    {
+        get => _queueOrdinal;
+        set
+        {
+            if (_queueOrdinal == value) return;
+            _queueOrdinal = value;
+            InvalidateCaches();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DisplayTitle));
+        }
+    }
     private string? _displayTitleCache;
     public string DisplayTitle
     {

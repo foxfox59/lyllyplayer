@@ -6,6 +6,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using System.Collections;
+using System.Collections.Specialized;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
@@ -102,6 +103,7 @@ public partial class PlaylistWindow : Window
     // Chrome dragging uses Window.DragMove() now so WM_MOVING-based snapping can engage.
 
     private ObservableCollection<QueueItem>? _queueSource;
+    private NotifyCollectionChangedEventHandler? _queueChangedHandler;
     private CollectionViewSource? _queueViewSource;
     // private CollectionViewSource? _queuedViewSource;
     private string _playlistFilterQuery = "";
@@ -559,9 +561,28 @@ public partial class PlaylistWindow : Window
         // Queue ListBox — direct binding, no filter
         if (_queueViewSource is null || !ReferenceEquals(_queueSource, queueItems))
         {
+            try
+            {
+                if (_queueSource is not null && _queueChangedHandler is not null)
+                    _queueSource.CollectionChanged -= _queueChangedHandler;
+            }
+            catch { /* ignore */ }
+
             _queueSource = queueItems;
             _queueViewSource = new CollectionViewSource { Source = _queueSource };
             //QueuedListBox.ItemsSource = _queueViewSource.View;
+
+            _queueChangedHandler ??= (_, _) =>
+            {
+                try
+                {
+                    var count = _queueSource?.Count ?? 0;
+                    try { QueuedHeaderTextBlock.Text = count > 0 ? $"Queue ({count})" : "Queue"; } catch { /* ignore */ }
+                    try { QueuedPanel.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
+                }
+                catch { /* ignore */ }
+            };
+            try { _queueSource.CollectionChanged += _queueChangedHandler; } catch { /* ignore */ }
         }
         QueuedListBox.ItemsSource = queueItems;
 
@@ -588,14 +609,8 @@ public partial class PlaylistWindow : Window
             }), DispatcherPriority.Background);
         }
 
-        // Update queue count display
-        try
-        {
-            var count = _queueSource?.Count ?? 0;
-            try { QueuedHeaderTextBlock.Text = count > 0 ? $"Queue ({count})" : "Queue"; } catch { /* ignore */ }
-            try { QueuedPanel.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed; } catch { /* ignore */ }
-        }
-        catch { /* ignore */ }
+        // Update queue count display now (and after any future queue modifications).
+        try { _queueChangedHandler?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset)); } catch { /* ignore */ }
     }
 
     private bool PlaylistFilterPredicate(object obj)

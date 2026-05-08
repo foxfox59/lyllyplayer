@@ -261,6 +261,7 @@ public partial class MainWindow
                     try { AppLog.Warn($"DoubleClickPlay: enter videoId={videoId} playOrderCount={_engine.PlayOrder.Count}"); } catch { /* ignore */ }
                     if (_engine.PlayOrder.Count == 0) return Task.CompletedTask;
 
+                    var effectiveVideoId = videoId;
                     if (!string.IsNullOrWhiteSpace(videoId) &&
                         videoId.StartsWith("queue:", StringComparison.OrdinalIgnoreCase) &&
                         Guid.TryParse(videoId["queue:".Length..], out var qid))
@@ -271,7 +272,8 @@ public partial class MainWindow
                             if (inst is not null)
                             {
                                 _manualQueuedPlayInstanceId = qid;
-                                var idxBase = _playlistCore.Entries.FindIndex(e => e.VideoId.Equals(inst.Entry.VideoId));
+                                effectiveVideoId = inst.Entry.VideoId;
+                                var idxBase = FindIndexByVideoId(_playlistCore.Entries, inst.Entry.VideoId);
                                 if (idxBase >= 0)
                                     _engine.SetQueue(_playlistCore.Entries, startIndex: idxBase, raiseNowPlayingChanged: true);
                             }
@@ -295,10 +297,10 @@ public partial class MainWindow
                     }
 
                     // After any SetQueue call above, indices may have shifted; always resolve against the *current* engine order.
-                    var playIdx = FindPlayOrderIndexByVideoId(videoId);
+                    var playIdx = FindPlayOrderIndexByVideoId(effectiveVideoId);
                     if (playIdx < 0)
                     {
-                        try { AppLog.Warn($"Double-click play: VideoId not in current play order ({videoId})."); } catch { /* ignore */ }
+                        try { AppLog.Warn($"Double-click play: VideoId not in current play order ({effectiveVideoId})."); } catch { /* ignore */ }
                         return Task.CompletedTask;
                     }
 
