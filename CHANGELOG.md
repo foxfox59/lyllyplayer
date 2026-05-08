@@ -1,5 +1,7 @@
 ### What's new, pussycat?
 
+- 2.5.8:
+  - Fixed an issue where exact single word song title matches would not weigh lyrics selection properly 
 - 2.5.7:
   - Improved snapped window alignment when UI scale is changed
 - 2.5.6:
