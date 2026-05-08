@@ -1,4 +1,7 @@
 ### What's new, pussycat?
+
+- 2.5.7:
+  - Improved snapped window alignment when UI scale is changed
 - 2.5.6:
   - Fixed a bug where dragging a browser tab into the Playlist window would cause incorrect status and break playlist
 - 2.5.5:
