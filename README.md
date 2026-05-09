@@ -17,6 +17,7 @@ A desktop audio player for YouTube, streams and local files
 ## Known issues
 
 - If the first internal yt-dlp upload fails, it will not be retried or asked about again (will fix)
+- yt-dlp "out of date" warnings are interpreted as PREMIUM errors, will fix
 - Lyrics matching from LRCLIB is still very much a work in progress. It mostly works, but occasionally gets incorrect results.
 - DisplayFusion has a slight conflict/race situation with how LyllyPlayer handles "always on top" - for now, use the Compatibility settings in DF. I'm going to fix this at some point, just not right now.
 
