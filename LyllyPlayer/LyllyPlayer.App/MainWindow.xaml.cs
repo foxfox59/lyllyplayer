@@ -4289,6 +4289,7 @@ public partial class MainWindow : Window
                     AppLog.Info($"AppendEntriesPreserveCurrent: nothing to append (existing={existingCountBefore}, incoming={appended0.Count}, removedDupes={removedDupes})", AppLogInfoTier.Diagnostic);
             }
             catch { /* ignore */ }
+            FocusPlaylistIndexBestEffort(FindExistingPlaylistIndexForIncomingEntries(appended0));
             return (added: 0, removedDuplicates: removedDupes);
         }
 
@@ -4513,7 +4514,11 @@ public partial class MainWindow : Window
             var appendStartIndex = FindIndexByVideoId(_playlistCore.Entries, curId);
             _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : (appendStartIndex >= 0 ? appendStartIndex : 0), raiseNowPlayingChanged: false);
 
-            var focusIndex = merged.Count > beforeCount ? merged.Count - 1 : (GetOriginalIndexByVideoId(curId) ?? 0);
+            var focusIndex = merged.Count > beforeCount
+                ? merged.Count - 1
+                : FindExistingPlaylistIndexForIncomingEntries(imported);
+            if (focusIndex < 0)
+                focusIndex = GetOriginalIndexByVideoId(curId) ?? 0;
             SetQueueList(_playlistCore.Entries, selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : focusIndex);
             UpdateRefreshEnabled();
             MarkLastPlaylistSnapshotDirty();
@@ -8054,6 +8059,76 @@ public partial class MainWindow : Window
                 return i;
         }
         return -1;
+    }
+
+    private int FindExistingPlaylistIndexForIncomingEntry(PlaylistEntry incoming)
+    {
+        var entries = _playlistCore.Entries;
+        if (entries is null || entries.Count == 0)
+            return -1;
+
+        var idx = FindIndexByVideoId(entries, incoming.VideoId);
+        if (idx >= 0)
+            return idx;
+
+        if (TryExtractLocalPathBestEffort(incoming.WebpageUrl, out var path))
+        {
+            var key = NormalizeLocalPathKey(path);
+            for (var i = 0; i < entries.Count; i++)
+            {
+                if (TryExtractLocalPathBestEffort(entries[i].WebpageUrl, out var existingPath) &&
+                    string.Equals(NormalizeLocalPathKey(existingPath), key, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+
+            try
+            {
+                idx = FindIndexByVideoId(entries, LocalPlaylistLoader.CreateLocalIdFromPath(path));
+                if (idx >= 0)
+                    return idx;
+            }
+            catch { /* ignore */ }
+        }
+
+        var fileName = NormalizeLocalFileNameKey(incoming.WebpageUrl ?? "");
+        if (string.IsNullOrWhiteSpace(fileName))
+            return -1;
+
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var existingName = NormalizeLocalFileNameKey(entries[i].WebpageUrl ?? "");
+            if (!string.IsNullOrWhiteSpace(existingName) &&
+                string.Equals(existingName, fileName, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private int FindExistingPlaylistIndexForIncomingEntries(IReadOnlyList<PlaylistEntry> incoming)
+    {
+        if (incoming is null || incoming.Count == 0)
+            return -1;
+
+        for (var i = incoming.Count - 1; i >= 0; i--)
+        {
+            var idx = FindExistingPlaylistIndexForIncomingEntry(incoming[i]);
+            if (idx >= 0)
+                return idx;
+        }
+
+        return -1;
+    }
+
+    private void FocusPlaylistIndexBestEffort(int index)
+    {
+        if (index < 0)
+            return;
+
+        RunUnlessPlaylistContextMenuOpen(() =>
+        {
+            try { _playlistWindow?.SelectAndScrollToPlaylistIndex(index); } catch { /* ignore */ }
+        });
     }
 
     private void SetQueueList(IReadOnlyList<PlaylistEntry> entries, int selectedIndex, bool forceFullRebuild = true)

@@ -1,5 +1,7 @@
 ### What's new, pussycat?
 
+- 2.6.4:
+  - Focus on last added playlist item even if it was a duplicate
 - 2.6.3:
   - Fixed added playlist items not focusing properly
 - 2.6.2:
