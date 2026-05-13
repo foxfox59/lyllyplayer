@@ -55,6 +55,7 @@ public sealed record PlaylistWindowOps(
     Func<string, Task> DoubleClickPlayAsync,
     Func<PlaylistEntry, Task> AddToQueueAsync,
     Func<Guid, Task> RemoveQueuedInstanceAsync,
+    Func<string, Task> RemoveFromPlaylistAsync,
     /// <summary>Drag/drop: add local files/folders to playlist (append/replace is decided by the shell).</summary>
     Func<IReadOnlyList<string>, CancellationToken, Task> HandleDroppedLocalPathsAsync,
     /// <summary>Drag/drop: add URLs (e.g. browser tabs) to playlist (append/replace is decided by the shell).</summary>

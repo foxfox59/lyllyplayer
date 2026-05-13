@@ -825,6 +825,7 @@ public partial class MainWindow : Window
     private bool _queuedApplyAppIconVisibility;
     private bool _trayIconAdded;
     private bool _hasRenderedOnce;
+    private bool _startupAuxWindowsRestored;
     private bool _pendingShowTrayAfterRender;
     private bool _queueingStartupTrayShow;
     private HwndSource? _trayMessageSource;
@@ -1110,124 +1111,18 @@ public partial class MainWindow : Window
                 // Async UI update: avoid synchronous Dispatcher.Invoke from the playback thread (hard-crash prone on some systems).
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    try { AppLog.Warn($"NowPlayingChanged(UI): begin videoId={(entry?.VideoId ?? "(null)")}"); } catch { /* ignore */ }
-                _isSeeking = false;
-                _seekMouseDownVideoId = null;
-                try { SeekSlider.ReleaseMouseCapture(); } catch { /* ignore */ }
-
-                if (entry is not null)
-                {
-                    try { AppLog.Warn("NowPlayingChanged(UI): entry_not_null"); } catch { /* ignore */ }
-                    var isSameTrack = _nowPlayingEntry is not null &&
-                        string.Equals(entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase);
-
-                    // Record previous track in history before updating _nowPlayingEntry.
-                    // This enables "Previous" to navigate back to the actual previously playing track.
-                    if (_nowPlayingEntry is not null && !isSameTrack && !_suppressPreviousTrackHistoryPushOnce && !_shuffleEnabled)
+                    try
                     {
-                        try { AppLog.Warn("NowPlayingChanged(UI): history_push_check"); } catch { /* ignore */ }
-                        var prevId = _nowPlayingEntry.VideoId;
-                        if (!string.IsNullOrWhiteSpace(prevId))
+                        if (_playlistWindow is { ShouldDeferPlaylistMutations: true })
                         {
-                            var topOfHistory = _previousTrackHistory.Count > 0 ? _previousTrackHistory.Peek() : null;
-                            if (_previousTrackHistory.Count == 0 || topOfHistory != prevId)
-                            {
-                                _previousTrackHistory.Push(prevId);
-                                while (_previousTrackHistory.Count > MaxPreviousTrackHistory)
-                                {
-                                    _previousTrackHistory.Pop();
-                                }
-                            }
+                            var captured = entry;
+                            _playlistWindow.RunOrDeferForContextMenu(() => ApplyNowPlayingChangedUi(captured));
+                            return;
                         }
                     }
-                    _suppressPreviousTrackHistoryPushOnce = false;
+                    catch { /* ignore */ }
 
-                    _nowPlayingEntry = entry;
-                    try { AppLog.Warn("NowPlayingChanged(UI): set_nowPlayingEntry"); } catch { /* ignore */ }
-
-                    // Shuffle tape + "recently played" window for shuffle candidate selection.
-                    if (_shuffleEnabled)
-                        _playOrder.RecordNowPlayingForShuffleTape(entry.VideoId, _playlistCore.Entries.Count);
-                    _playOrder.RecordRecentlyPlayedVideoId(entry.VideoId, _playlistCore.Entries.Count);
-
-                    // Only clear lyrics when the track actually changes.
-                    // Resuming stopped playback on the same track should preserve lyrics.
-                    if (!isSameTrack)
-                    {
-                        try { AppLog.Warn("NowPlayingChanged(UI): clear_lyrics"); } catch { /* ignore */ }
-                        // Clear lyrics BEFORE Refresh() so the window doesn't show stale lyrics
-                        // from the previous track. TryResolveLyricsAsync (called async below) will
-                        // call Refresh() again once new lyrics are resolved.
-                        _lyricsService.ClearParsedLyricsState();
-                        _lyricsWindow?.Refresh();
-
-                        // Immediately hydrate from cache (no network) so the lyrics window is populated
-                        // on startup/track change without waiting for async resolution.
-                        try { TryLoadLyricsFromCacheForEntryBestEffort(entry); } catch { /* ignore */ }
-                        try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
-                    }
-
-                    _nowPlayingStatus = "FETCHING";
-                    try { AppLog.Warn("NowPlayingChanged(UI): set_status_fetching"); } catch { /* ignore */ }
-                }
-                else
-                {
-                    // When stopping (entry is null), keep _nowPlayingEntry and lyrics intact.
-                    // This preserves the lyrics display and avoids unnecessary re-resolution
-                    // when the user resumes playback on the same track.
-                    _nowPlayingStatus = "STOPPED";
-                }
-
-                try
-                {
-                    if (_manualQueuedPlayInstanceId is Guid qid &&
-                         (entry is null || !_queuedNext.Any(q => q.Id == qid && q.Entry.VideoId.Equals(entry.VideoId))))
-                    {
-                        _manualQueuedPlayInstanceId = null;
-                    }
-                }
-                catch { /* ignore */ }
-
-                try { AppLog.Warn("NowPlayingChanged(UI): updating_text"); } catch { /* ignore */ }
-                UpdateNowPlayingText();
-                UpdatePlaylistTitleDisplayForNowPlaying();
-                try
-                {
-                    // Track which specific queued instance is now playing (duplicates allowed).
-                    // This MUST be set only when the track actually starts, not on TrackEnded.
-                    if (entry is not null)
-                    {
-                        Guid? qid = null;
-                        if (_manualQueuedPlayInstanceId is Guid mqid && _queuedNext.Any(q => q.Id == mqid))
-                            qid = mqid;
-                        else
-                        {
-                            for (var i = 0; i < _queuedNext.Count; i++)
-                            {
-                                if (string.Equals(_queuedNext[i].Entry.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    qid = _queuedNext[i].Id;
-                                    break;
-                                }
-                            }
-                        }
-                        _playingQueuedInstanceId = qid;
-                    }
-                    else
-                    {
-                        _playingQueuedInstanceId = null;
-                    }
-                }
-                catch { /* ignore */ }
-                UpdateNowPlayingFlag(entry);
-                try { _playlistWindow?.RememberNowPlaying(entry); } catch { /* ignore */ }
-                if (!ShouldSuppressAutoScroll(entry))
-                    SelectAndScrollToNowPlaying(entry);
-                UpdateDurationUi(entry?.DurationSeconds ?? _engine.CurrentDurationSeconds);
-
-                // ← MOVE THIS INSIDE Dispatcher.Invoke:
-                try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
-                try { AppLog.Warn("NowPlayingChanged(UI): end"); } catch { /* ignore */ }
+                    ApplyNowPlayingChangedUi(entry);
                 }), DispatcherPriority.Render);
             }
             catch { /* ignore */ }
@@ -1448,12 +1343,11 @@ public partial class MainWindow : Window
 
             // Borderless chrome can leave WS_EX_TOOLWINDOW set, which drops the process from Task Manager "Apps".
             ApplyMainWindowShellIntegration();
-            // Restore last resolved playlist snapshot (no refresh / no yt-dlp).
-            Dispatcher.BeginInvoke(new Action(() => _ = LoadLastPlaylistFromSettingsAsync()), DispatcherPriority.Background);
-
-            // Restore secondary window visibility after the main window is shown.
-            Dispatcher.BeginInvoke(new Action(() =>
+            // Load playlist first; aux windows open after the main window has rendered (see QueueStartupAuxWindowRestore).
+            Dispatcher.BeginInvoke(new Func<Task>(async () =>
             {
+                try { await LoadLastPlaylistFromSettingsAsync().ConfigureAwait(true); } catch { /* ignore */ }
+
                 try
                 {
                     if (_isFreshSettingsInstall)
@@ -1465,78 +1359,17 @@ public partial class MainWindow : Window
                 catch { /* ignore */ }
                 try
                 {
-                    if (_startupSettings.PlaylistWindowOpen ?? false)
-                    {
-                        EnsurePlaylistWindowOpen();
-                    }
-                }
-                catch { /* ignore */ }
-                try
-                {
-                    if (_startupSettings.OptionsWindowOpen ?? false)
-                    {
-                        EnsureOptionsWindowOpen();
-                    }
-                }
-                catch { /* ignore */ }
-                try
-                {
-                    if (_startupSettings.LyricsWindowOpen ?? false)
-                    {
-                        EnsureLyricsWindowOpen();
-                    }
-                }
-                catch { /* ignore */ }
-                try
-                {
                     if (_isFreshSettingsInstall)
                     {
-                        // After layout, re-sync so playlist/options use final main bounds and scale.
-                        Dispatcher.BeginInvoke(new Action(() =>
+                        await Dispatcher.InvokeAsync(() =>
                         {
-                            try
-                            {
-                                // SyncOptionsWindowToMain removed; WindowSnapService handles interactive latching + cluster move.
-                                RequestPersistSnapshot();
-                            }
-                            catch { /* ignore */ }
-                        }), DispatcherPriority.ContextIdle);
+                            try { RequestPersistSnapshot(); } catch { /* ignore */ }
+                        }, DispatcherPriority.ContextIdle).Task.ConfigureAwait(true);
                     }
                 }
                 catch { /* ignore */ }
-
-                // After all windows have opened and applied their persisted bounds, restore latch relations
-                // for the snap service so clusters behave correctly immediately on startup.
-                try
-                {
-                    // Startup can trigger a flurry of Location/Size changes while windows are still settling.
-                    // Delay the snap-state restore so we only scan once after things are stable (reduces jitter/CPU spikes).
-                    _snapRestoreDebounceTimer?.Stop();
-                    _snapRestoreDebounceTimer = new DispatcherTimer(DispatcherPriority.Background)
-                    {
-                        Interval = TimeSpan.FromMilliseconds(650)
-                    };
-                    _snapRestoreDebounceTimer.Tick += (_, _) =>
-                    {
-                        try
-                        {
-                            if (WindowSnapService.AnyWindowDragging)
-                                return; // keep waiting until the user isn't dragging
-                        }
-                        catch { /* ignore */ }
-
-                        try { _snapRestoreDebounceTimer?.Stop(); } catch { /* ignore */ }
-                        try { WindowSnapService.RestoreLatchedRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
-                    };
-                    _snapRestoreDebounceTimer.Start();
-                }
-                catch { /* ignore */ }
-
-                // Ensure the "snap to window edge" sync runs after startup layout settles.
-                // Without this, the persisted edge-based offsets can be computed against pre-render bounds
-                // and only correct themselves after the user nudges the main window.
-                try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
-            }), DispatcherPriority.ContextIdle);
+                try { QueueStartupAuxWindowRestore(); } catch { /* ignore */ }
+            }), DispatcherPriority.Background);
         };
 
         SourceInitialized += (_, _) =>
@@ -1848,6 +1681,11 @@ public partial class MainWindow : Window
     }
 
     private void ApplyMetadataToEntries(string videoId, string? title, string? artist, int? durationSeconds)
+    {
+        RunUnlessPlaylistContextMenuOpen(() => ApplyMetadataToEntriesCore(videoId, title, artist, durationSeconds));
+    }
+
+    private void ApplyMetadataToEntriesCore(string videoId, string? title, string? artist, int? durationSeconds)
     {
         try
         {
@@ -3598,6 +3436,109 @@ public partial class MainWindow : Window
         }
     }
 
+    private Task RemovePlaylistEntryAsync(string videoId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(videoId))
+                return Task.CompletedTask;
+
+            if (_playlistCore.Entries.All(e => !string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase)))
+                return Task.CompletedTask;
+
+            try
+            {
+                var queueIds = _queuedNext
+                    .Where(q => string.Equals(q.Entry.VideoId, videoId, StringComparison.OrdinalIgnoreCase))
+                    .Select(q => q.Id)
+                    .ToList();
+                foreach (var id in queueIds)
+                    RemoveQueuedInstance(id);
+            }
+            catch { /* ignore */ }
+
+            var curId = _engine.GetCurrent()?.VideoId;
+            var oldIndex = _engine.CurrentIndex;
+            var removedCurrent = !string.IsNullOrWhiteSpace(curId) &&
+                               string.Equals(curId, videoId, StringComparison.OrdinalIgnoreCase);
+
+            if (removedCurrent)
+            {
+                try { _engine.Stop(); } catch { /* ignore */ }
+                _playingQueuedInstanceId = null;
+            }
+
+            var removedIds = _playlistCore.RemoveWhere(e => string.Equals(e.VideoId, videoId, StringComparison.OrdinalIgnoreCase));
+            if (removedIds.Count == 0)
+                return Task.CompletedTask;
+
+            if (_playlistCore.Entries.Count == 0)
+            {
+                _engine.SetQueue(Array.Empty<PlaylistEntry>(), startIndex: -1, raiseNowPlayingChanged: false);
+                SetQueueList(_playlistCore.Entries, selectedIndex: -1);
+                _nowPlayingStatus = "STOPPED";
+                _nowPlayingEntry = null;
+                try
+                {
+                    _lyricsService.Manager.Clear();
+                    _lyricsService.ResolvedVideoId = null;
+                    _lyricsWindow?.Refresh();
+                }
+                catch { /* ignore */ }
+                UpdateNowPlayingText();
+                UpdatePlaylistTitleDisplayForNowPlaying();
+                UpdateTimelineUi();
+                UpdateRefreshEnabled();
+                RequestPersistSnapshot();
+                return Task.CompletedTask;
+            }
+
+            var newIndex = -1;
+            if (!removedCurrent && !string.IsNullOrWhiteSpace(curId))
+                newIndex = _playlistCore.Entries.FindIndex(e => string.Equals(e.VideoId, curId, StringComparison.OrdinalIgnoreCase));
+            if (newIndex < 0)
+                newIndex = Math.Clamp(oldIndex, 0, _playlistCore.Entries.Count - 1);
+
+            _engine.SetQueue(_playlistCore.Entries, startIndex: newIndex, raiseNowPlayingChanged: false);
+            SetQueueList(_playlistCore.Entries, selectedIndex: -1);
+
+            if (removedCurrent)
+            {
+                var next = _engine.GetCurrent();
+                _nowPlayingEntry = next;
+                _nowPlayingStatus = "STOPPED";
+                try
+                {
+                    _lyricsService.ClearParsedLyricsState();
+                    if (next is not null)
+                        TryLoadLyricsFromCacheForEntryBestEffort(next);
+                    _lyricsWindow?.Refresh();
+                }
+                catch { /* ignore */ }
+                UpdateNowPlayingText();
+                UpdatePlaylistTitleDisplayForNowPlaying();
+                UpdateNowPlayingFlag(next);
+                UpdateTimelineUi();
+            }
+            else
+            {
+                SyncNowPlayingFromEngine();
+                UpdateNowPlayingFlag(_engine.GetCurrent());
+            }
+
+            UpdateRefreshEnabled();
+            RequestPersistSnapshot();
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return Task.CompletedTask;
+    }
+
     private Task<int> RemoveDuplicatePlaylistItemsAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -3748,7 +3689,132 @@ public partial class MainWindow : Window
         return -1;
     }
 
+    private void RunUnlessPlaylistContextMenuOpen(Action action)
+    {
+        if (action is null)
+            return;
+        try
+        {
+            if (_playlistWindow is { ShouldDeferPlaylistMutations: true })
+            {
+                _playlistWindow.RunOrDeferForContextMenu(action);
+                return;
+            }
+        }
+        catch { /* ignore */ }
+        try { action(); } catch { /* ignore */ }
+    }
+
+    private void ApplyNowPlayingChangedUi(PlaylistEntry? entry)
+    {
+        try { AppLog.Warn($"NowPlayingChanged(UI): begin videoId={(entry?.VideoId ?? "(null)")}"); } catch { /* ignore */ }
+        _isSeeking = false;
+        _seekMouseDownVideoId = null;
+        try { SeekSlider.ReleaseMouseCapture(); } catch { /* ignore */ }
+
+        if (entry is not null)
+        {
+            try { AppLog.Warn("NowPlayingChanged(UI): entry_not_null"); } catch { /* ignore */ }
+            var isSameTrack = _nowPlayingEntry is not null &&
+                string.Equals(entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase);
+
+            if (_nowPlayingEntry is not null && !isSameTrack && !_suppressPreviousTrackHistoryPushOnce && !_shuffleEnabled)
+            {
+                try { AppLog.Warn("NowPlayingChanged(UI): history_push_check"); } catch { /* ignore */ }
+                var prevId = _nowPlayingEntry.VideoId;
+                if (!string.IsNullOrWhiteSpace(prevId))
+                {
+                    var topOfHistory = _previousTrackHistory.Count > 0 ? _previousTrackHistory.Peek() : null;
+                    if (_previousTrackHistory.Count == 0 || topOfHistory != prevId)
+                    {
+                        _previousTrackHistory.Push(prevId);
+                        while (_previousTrackHistory.Count > MaxPreviousTrackHistory)
+                        {
+                            _previousTrackHistory.Pop();
+                        }
+                    }
+                }
+            }
+            _suppressPreviousTrackHistoryPushOnce = false;
+
+            _nowPlayingEntry = entry;
+            try { AppLog.Warn("NowPlayingChanged(UI): set_nowPlayingEntry"); } catch { /* ignore */ }
+
+            if (_shuffleEnabled)
+                _playOrder.RecordNowPlayingForShuffleTape(entry.VideoId, _playlistCore.Entries.Count);
+            _playOrder.RecordRecentlyPlayedVideoId(entry.VideoId, _playlistCore.Entries.Count);
+
+            if (!isSameTrack)
+            {
+                try { AppLog.Warn("NowPlayingChanged(UI): clear_lyrics"); } catch { /* ignore */ }
+                _lyricsService.ClearParsedLyricsState();
+                _lyricsWindow?.Refresh();
+                try { TryLoadLyricsFromCacheForEntryBestEffort(entry); } catch { /* ignore */ }
+                try { _lyricsWindow?.Refresh(); } catch { /* ignore */ }
+            }
+
+            _nowPlayingStatus = "FETCHING";
+            try { AppLog.Warn("NowPlayingChanged(UI): set_status_fetching"); } catch { /* ignore */ }
+        }
+        else
+        {
+            _nowPlayingStatus = "STOPPED";
+        }
+
+        try
+        {
+            if (_manualQueuedPlayInstanceId is Guid qid &&
+                 (entry is null || !_queuedNext.Any(q => q.Id == qid && q.Entry.VideoId.Equals(entry.VideoId))))
+            {
+                _manualQueuedPlayInstanceId = null;
+            }
+        }
+        catch { /* ignore */ }
+
+        try { AppLog.Warn("NowPlayingChanged(UI): updating_text"); } catch { /* ignore */ }
+        UpdateNowPlayingText();
+        UpdatePlaylistTitleDisplayForNowPlaying();
+        try
+        {
+            if (entry is not null)
+            {
+                Guid? qid = null;
+                if (_manualQueuedPlayInstanceId is Guid mqid && _queuedNext.Any(q => q.Id == mqid))
+                    qid = mqid;
+                else
+                {
+                    for (var i = 0; i < _queuedNext.Count; i++)
+                    {
+                        if (string.Equals(_queuedNext[i].Entry.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                        {
+                            qid = _queuedNext[i].Id;
+                            break;
+                        }
+                    }
+                }
+                _playingQueuedInstanceId = qid;
+            }
+            else
+            {
+                _playingQueuedInstanceId = null;
+            }
+        }
+        catch { /* ignore */ }
+        UpdateNowPlayingFlag(entry);
+        try { _playlistWindow?.RememberNowPlaying(entry); } catch { /* ignore */ }
+        if (!ShouldSuppressAutoScroll(entry))
+            SelectAndScrollToNowPlaying(entry);
+        try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
+        UpdateDurationUi(entry?.DurationSeconds ?? _engine.CurrentDurationSeconds);
+        try { AppLog.Warn("NowPlayingChanged(UI): end"); } catch { /* ignore */ }
+    }
+
     private void FocusPlaylistOnNowPlaying()
+    {
+        RunUnlessPlaylistContextMenuOpen(FocusPlaylistOnNowPlayingCore);
+    }
+
+    private void FocusPlaylistOnNowPlayingCore()
     {
         try
         {
@@ -7966,6 +8032,11 @@ public partial class MainWindow : Window
 
     private void SetQueueList(IReadOnlyList<PlaylistEntry> entries, int selectedIndex, bool forceFullRebuild = true)
     {
+        RunUnlessPlaylistContextMenuOpen(() => SetQueueListCore(entries, selectedIndex, forceFullRebuild));
+    }
+
+    private void SetQueueListCore(IReadOnlyList<PlaylistEntry> entries, int selectedIndex, bool forceFullRebuild = true)
+    {
         if (!forceFullRebuild && PlaylistDisplaysSameEntryOrder(entries))
         {
             UpdateNowPlayingFlag(_engine.GetCurrent());
@@ -8016,6 +8087,15 @@ public partial class MainWindow : Window
         bool forceFullRebuild = true,
         CancellationToken cancellationToken = default)
     {
+        if (_playlistWindow is { ShouldDeferPlaylistMutations: true })
+        {
+            _playlistWindow.RunOrDeferForContextMenu(() =>
+            {
+                try { _ = SetQueueListAsync(entries, selectedIndex, forceFullRebuild, cancellationToken); } catch { /* ignore */ }
+            });
+            return;
+        }
+
         // Some refresh paths can call into this from non-UI threads; marshal to the window dispatcher.
         if (!Dispatcher.CheckAccess())
         {
@@ -8483,6 +8563,11 @@ public partial class MainWindow : Window
 
     private void UpdateNowPlayingFlag(PlaylistEntry? now)
     {
+        RunUnlessPlaylistContextMenuOpen(() => UpdateNowPlayingFlagCore(now));
+    }
+
+    private void UpdateNowPlayingFlagCore(PlaylistEntry? now)
+    {
         // Highlight in the queue (if the track is queued)
         foreach (var qi in _queueItems)
         {
@@ -8624,6 +8709,11 @@ public partial class MainWindow : Window
     }
 
     private void SelectAndScrollToNowPlaying(PlaylistEntry? entry)
+    {
+        RunUnlessPlaylistContextMenuOpen(() => SelectAndScrollToNowPlayingCore(entry));
+    }
+
+    private void SelectAndScrollToNowPlayingCore(PlaylistEntry? entry)
     {
         if (entry is null || _playlistWindow is null) return;
 

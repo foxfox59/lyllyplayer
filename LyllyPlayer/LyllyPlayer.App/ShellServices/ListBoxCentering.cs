@@ -14,11 +14,22 @@ public static class ListBoxCentering
         int requestId,
         Func<int> getLatestRequestId,
         Action? onFinished = null,
+        Func<bool>? shouldAbort = null,
         int attempt = 0)
         where T : class
     {
         void Work()
         {
+            try
+            {
+                if (shouldAbort?.Invoke() == true)
+                {
+                    try { onFinished?.Invoke(); } catch { /* ignore */ }
+                    return;
+                }
+            }
+            catch { /* ignore */ }
+
             if (requestId != getLatestRequestId())
             {
                 try { onFinished?.Invoke(); } catch { /* ignore */ }
@@ -33,7 +44,7 @@ public static class ListBoxCentering
                 {
                     try { onFinished?.Invoke(); } catch { /* ignore */ }
                     listBox.Dispatcher.BeginInvoke(
-                        new Action(() => CenterOnItem(listBox, item, requestId, getLatestRequestId, onFinished, attempt + 1)),
+                        new Action(() => CenterOnItem(listBox, item, requestId, getLatestRequestId, onFinished, shouldAbort, attempt + 1)),
                         DispatcherPriority.Render);
                 }
                 return;
@@ -45,7 +56,7 @@ public static class ListBoxCentering
 
             var sv = scrollViewer;
             listBox.Dispatcher.BeginInvoke(
-                new Action(() => PerformCentering(listBox, item, requestId, getLatestRequestId, sv, onFinished)),
+                new Action(() => PerformCentering(listBox, item, requestId, getLatestRequestId, sv, onFinished, shouldAbort)),
                 DispatcherPriority.Render);
         }
 
@@ -127,11 +138,19 @@ public static class ListBoxCentering
         int requestId,
         Func<int> getLatestRequestId,
         ScrollViewer scrollViewer,
-        Action? onFinished)
+        Action? onFinished,
+        Func<bool>? shouldAbort = null)
         where T : class
     {
         try
         {
+            try
+            {
+                if (shouldAbort?.Invoke() == true)
+                    return;
+            }
+            catch { /* ignore */ }
+
             if (requestId != getLatestRequestId())
             {
                 try { onFinished?.Invoke(); } catch { /* ignore */ }

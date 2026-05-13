@@ -307,23 +307,8 @@
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              Focusable="False"
                              PreviewMouseLeftButtonDown="QueueListBox_OnPreviewMouseLeftButtonDown"
+                             PreviewMouseRightButtonUp="QueueListBox_OnPreviewMouseRightButtonUp"
                              MouseDoubleClick="QueueListBox_OnMouseDoubleClick">
-                        <ListBox.Resources>
-                            <ContextMenu x:Key="QueueItemContextMenuQueued"
-                                         Opened="QueueItemContextMenu_OnOpened">
-                                <MenuItem x:Name="OpenMenuItem"
-                                          Header="Open"
-                                          Click="OpenMenuItem_OnClick"/>
-                                <Separator/>
-                                <MenuItem x:Name="AddToQueueMenuItem"
-                                          Header="Add to queue"
-                                          Click="AddToQueueMenuItem_OnClick"/>
-                                <MenuItem x:Name="RemoveFromQueueMenuItem"
-                                          Header="Remove from queue"
-                                          Click="RemoveFromQueueMenuItem_OnClick"/>
-                            </ContextMenu>
-                        </ListBox.Resources>
-
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="Padding" Value="6,3"/>
@@ -331,7 +316,6 @@
                                 <Setter Property="Background" Value="Transparent"/>
                                 <Setter Property="BorderThickness" Value="0"/>
                                 <Setter Property="BorderBrush" Value="Transparent"/>
-                                <Setter Property="ContextMenu" Value="{StaticResource QueueItemContextMenuQueued}"/>
                                 <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
                                 <Setter Property="Focusable" Value="False"/>
                                 <Setter Property="Template">
@@ -407,6 +391,7 @@
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                      Focusable="False"
                      PreviewMouseLeftButtonDown="QueueListBox_OnPreviewMouseLeftButtonDown"
+                     PreviewMouseRightButtonUp="QueueListBox_OnPreviewMouseRightButtonUp"
                      MouseDoubleClick="QueueListBox_OnMouseDoubleClick"
                      PreviewDragOver="PlaylistListBox_OnPreviewDragOver"
                      Drop="PlaylistListBox_OnDrop">
@@ -429,22 +414,6 @@
                         </DockPanel>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
-                <ListBox.Resources>
-                    <ContextMenu x:Key="QueueItemContextMenu"
-                                 Opened="QueueItemContextMenu_OnOpened">
-                        <MenuItem x:Name="OpenMenuItem"
-                                  Header="Open"
-                                  Click="OpenMenuItem_OnClick"/>
-                        <Separator/>
-                        <MenuItem x:Name="AddToQueueMenuItem"
-                                  Header="Add to queue"
-                                  Click="AddToQueueMenuItem_OnClick"/>
-                        <MenuItem x:Name="RemoveFromQueueMenuItem"
-                                  Header="Remove from queue"
-                                  Click="RemoveFromQueueMenuItem_OnClick"/>
-                    </ContextMenu>
-                </ListBox.Resources>
-
                 <ListBox.ItemContainerStyle>
                     <Style TargetType="ListBoxItem">
                         <Setter Property="Padding" Value="6,3"/>
@@ -452,7 +421,6 @@
                         <Setter Property="Background" Value="Transparent"/>
                         <Setter Property="BorderThickness" Value="1"/>
                         <Setter Property="BorderBrush" Value="Transparent"/>
-                        <Setter Property="ContextMenu" Value="{StaticResource QueueItemContextMenu}"/>
                         <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
                         <Setter Property="Focusable" Value="False"/>
                         <!-- Critical: remove default selection visuals -->

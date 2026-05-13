@@ -365,6 +365,7 @@ public partial class MainWindow
                 catch { /* ignore */ }
                 return Task.CompletedTask;
             },
+            RemoveFromPlaylistAsync: (videoId) => RemovePlaylistEntryAsync(videoId),
             HandleDroppedLocalPathsAsync: async (paths, ct) => await HandleDroppedLocalPathsAsync(paths, ct).ConfigureAwait(true),
             HandleDroppedUrlsAsync: async (urls, ct) => await HandleDroppedUrlsAsync(urls, ct).ConfigureAwait(true)
         ))
@@ -476,7 +477,6 @@ public partial class MainWindow
         w.MinHeight = 320.0 * plS;
         _playlistWindowOuterAtUiScalePercent = _uiScalePercent;
         AppLog.Info($"Playlist bounds (open) pre-show: L={w.Left} T={w.Top} W={w.Width} H={w.Height} State={w.WindowState}");
-        try { w.BeginSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
     }
 
     private void AfterPlaylistWindowShown(PlaylistWindow w, bool warmReopen)
@@ -495,14 +495,86 @@ public partial class MainWindow
         {
             try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
         }), DispatcherPriority.Background);
-        try
-        {
-            var current = _engine.GetCurrent();
-            if (current is not null)
-                w.CenterNowPlaying(current);
-        }
-        catch { /* ignore */ }
         ApplyAlwaysOnTopFromSettings();
+    }
+
+    private bool ShouldRestoreStartupAuxWindows()
+        => (_startupSettings.PlaylistWindowOpen ?? false)
+           || (_startupSettings.OptionsWindowOpen ?? false)
+           || (_startupSettings.LyricsWindowOpen ?? false);
+
+    private void QueueStartupAuxWindowRestore()
+    {
+        if (_startupAuxWindowsRestored)
+            return;
+
+        void RestoreAfterMainSettled()
+        {
+            if (_startupAuxWindowsRestored)
+                return;
+            _startupAuxWindowsRestored = true;
+
+            if (ShouldRestoreStartupAuxWindows())
+            {
+                try
+                {
+                    if (_startupSettings.PlaylistWindowOpen ?? false)
+                        EnsurePlaylistWindowOpen();
+                }
+                catch { /* ignore */ }
+                try
+                {
+                    if (_startupSettings.OptionsWindowOpen ?? false)
+                        EnsureOptionsWindowOpen();
+                }
+                catch { /* ignore */ }
+                try
+                {
+                    if (_startupSettings.LyricsWindowOpen ?? false)
+                        EnsureLyricsWindowOpen();
+                }
+                catch { /* ignore */ }
+            }
+
+            try { StartSnapRestoreDebounceTimerOnStartup(); } catch { /* ignore */ }
+            try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
+        }
+
+        if (_hasRenderedOnce)
+        {
+            Dispatcher.BeginInvoke(RestoreAfterMainSettled, DispatcherPriority.ApplicationIdle);
+            return;
+        }
+
+        EventHandler? onRendered = null;
+        onRendered = (_, _) =>
+        {
+            ContentRendered -= onRendered!;
+            Dispatcher.BeginInvoke(RestoreAfterMainSettled, DispatcherPriority.ApplicationIdle);
+        };
+        ContentRendered += onRendered;
+    }
+
+    private void StartSnapRestoreDebounceTimerOnStartup()
+    {
+        _snapRestoreDebounceTimer?.Stop();
+        _snapRestoreDebounceTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(650)
+        };
+        _snapRestoreDebounceTimer.Tick += (_, _) =>
+        {
+            try
+            {
+                if (WindowSnapService.AnyWindowDragging)
+                    return;
+            }
+            catch { /* ignore */ }
+
+            try { _snapRestoreDebounceTimer?.Stop(); } catch { /* ignore */ }
+            try { WindowSnapService.RestoreLatchedRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+        };
+        _snapRestoreDebounceTimer.Start();
     }
 
     private OptionsWindow CreateOptionsWindow(AppSettings latestSettings)

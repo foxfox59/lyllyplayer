@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -81,13 +82,12 @@ public partial class PlaylistWindow : Window
     private readonly Func<string, Task> _doubleClickPlayAsync;
     private readonly Func<PlaylistEntry, Task> _addToQueueAsync;
     private readonly Func<Guid, Task> _removeQueuedInstanceAsync;
+    private readonly Func<string, Task> _removeFromPlaylistAsync;
     private readonly Func<IReadOnlyList<string>, CancellationToken, Task> _handleDroppedLocalPathsAsync;
     private readonly Func<IReadOnlyList<string>, CancellationToken, Task> _handleDroppedUrlsAsync;
     private int _lastClickedIndex = -1;
     private int _centerRequestId;
-    /// <summary>Avoid one frame at the top of the list before <see cref="CenterListBoxOnQueueItem"/> runs (initial open).</summary>
     private bool _suppressQueueListUntilInitialScroll;
-    private DispatcherTimer? _initialScrollMaskFailsafeTimer;
     private int _busyCount;
     private string _busyMessage = "Loading...";
     private CancellationTokenSource? _busyCts;
@@ -105,6 +105,58 @@ public partial class PlaylistWindow : Window
     private ObservableCollection<QueueItem>? _queueSource;
     private NotifyCollectionChangedEventHandler? _queueChangedHandler;
     private CollectionViewSource? _queueViewSource;
+    private int _deferPlaylistViewRefreshVersion;
+    private bool _playlistContextMenuOpen;
+    private bool _playlistContextMenuGestureActive;
+    private Action? _deferredWhileContextMenuOpen;
+    private Popup? _rowMenuPopup;
+    private RowMenuView? _rowMenuView;
+    private QueueItem? _activeContextMenuItem;
+
+    private sealed class RowMenuView
+    {
+        public required FrameworkElement Root { get; init; }
+        public required RowMenuEntry Open { get; init; }
+        public required RowMenuEntry AddToQueue { get; init; }
+        public required RowMenuEntry RemoveFromQueue { get; init; }
+        public RowMenuEntry? RemoveFromPlaylist { get; init; }
+    }
+
+    private sealed class RowMenuEntry
+    {
+        public required Border Row { get; init; }
+        public required TextBlock Label { get; init; }
+    }
+
+    public bool IsContextMenuOpen => _playlistContextMenuOpen;
+
+    public bool ShouldDeferPlaylistMutations => _playlistContextMenuOpen || _playlistContextMenuGestureActive;
+
+    public void RunOrDeferForContextMenu(Action action)
+    {
+        if (action is null)
+            return;
+        if (!ShouldDeferPlaylistMutations)
+        {
+            action();
+            return;
+        }
+
+        var captured = action;
+        var prev = _deferredWhileContextMenuOpen;
+        _deferredWhileContextMenuOpen = () =>
+        {
+            try { prev?.Invoke(); } catch { /* ignore */ }
+            try { captured(); } catch { /* ignore */ }
+        };
+    }
+
+    private void FlushDeferredContextMenuWork()
+    {
+        var work = _deferredWhileContextMenuOpen;
+        _deferredWhileContextMenuOpen = null;
+        try { work?.Invoke(); } catch { /* ignore */ }
+    }
     // private CollectionViewSource? _queuedViewSource;
     private string _playlistFilterQuery = "";
     private readonly DispatcherTimer _playlistFilterDebounceTimer;
@@ -164,6 +216,7 @@ public partial class PlaylistWindow : Window
             ops.DoubleClickPlayAsync,
             ops.AddToQueueAsync,
             ops.RemoveQueuedInstanceAsync,
+            ops.RemoveFromPlaylistAsync,
             ops.HandleDroppedLocalPathsAsync,
             ops.HandleDroppedUrlsAsync)
     {
@@ -213,6 +266,7 @@ public partial class PlaylistWindow : Window
         Func<string, Task> doubleClickPlayAsync,
         Func<PlaylistEntry, Task> addToQueueAsync,
         Func<Guid, Task> removeQueuedInstanceAsync,
+        Func<string, Task> removeFromPlaylistAsync,
         Func<IReadOnlyList<string>, CancellationToken, Task> handleDroppedLocalPathsAsync,
         Func<IReadOnlyList<string>, CancellationToken, Task> handleDroppedUrlsAsync
     )
@@ -262,10 +316,13 @@ public partial class PlaylistWindow : Window
         _doubleClickPlayAsync = doubleClickPlayAsync;
         _addToQueueAsync = addToQueueAsync;
         _removeQueuedInstanceAsync = removeQueuedInstanceAsync;
+        _removeFromPlaylistAsync = removeFromPlaylistAsync;
         _handleDroppedLocalPathsAsync = handleDroppedLocalPathsAsync;
         _handleDroppedUrlsAsync = handleDroppedUrlsAsync;
 
         InitializeComponent();
+
+        try { PlaylistListBox.ClearValue(UIElement.OpacityProperty); } catch { /* ignore */ }
 
         UpdateTitleFromSource(_getSource());
         InitializeSortUi();
@@ -593,24 +650,40 @@ public partial class PlaylistWindow : Window
             _playlistViewSource = new CollectionViewSource { Source = _playlistItemsSource };
             _playlistViewSource.View.Filter = PlaylistFilterPredicate;
             PlaylistListBox.ItemsSource = _playlistViewSource.View;
-
-            // Let the window render before we do any expensive view work (filtering can be O(n)).
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                try { _playlistViewSource?.View.Refresh(); } catch { /* ignore */ }
-            }), DispatcherPriority.Background);
+            RequestDeferredPlaylistViewRefresh();
         }
         else
         {
-            // Avoid blocking the UI thread during window open; refresh lazily.
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                try { _playlistViewSource?.View.Refresh(); } catch { /* ignore */ }
-            }), DispatcherPriority.Background);
+            RequestDeferredPlaylistViewRefresh();
         }
 
         // Update queue count display now (and after any future queue modifications).
-        try { _queueChangedHandler?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset)); } catch { /* ignore */ }
+        RunOrDeferForContextMenu(() =>
+        {
+            try { _queueChangedHandler?.Invoke(this, new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset)); } catch { /* ignore */ }
+        });
+    }
+
+    private void RequestDeferredPlaylistViewRefresh()
+    {
+        if (string.IsNullOrWhiteSpace(_playlistFilterQuery))
+            return;
+        if (ShouldDeferPlaylistMutations)
+            return;
+
+        var ver = Interlocked.Increment(ref _deferPlaylistViewRefreshVersion);
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                if (ver != _deferPlaylistViewRefreshVersion)
+                    return;
+                if (_playlistContextMenuOpen)
+                    return;
+                _playlistViewSource?.View.Refresh();
+            }
+            catch { /* ignore */ }
+        }), DispatcherPriority.Background);
     }
 
     private bool PlaylistFilterPredicate(object obj)
@@ -987,51 +1060,24 @@ public partial class PlaylistWindow : Window
     /// <summary>Call before <see cref="Window.Show"/> so the first paint does not flash the top of the list before scroll-to-now-playing.</summary>
     public void BeginSuppressQueueListUntilInitialScroll()
     {
-        try
-        {
-            _suppressQueueListUntilInitialScroll = true;
-            PlaylistListBox.Opacity = 0;
-            if (_initialScrollMaskFailsafeTimer is null)
-            {
-                _initialScrollMaskFailsafeTimer = new DispatcherTimer(DispatcherPriority.Background)
-                {
-                    Interval = TimeSpan.FromMilliseconds(350),
-                };
-                _initialScrollMaskFailsafeTimer.Tick += (_, _) =>
-                {
-                    try { _initialScrollMaskFailsafeTimer!.Stop(); } catch { /* ignore */ }
-                    try { EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
-                };
-            }
-            try { _initialScrollMaskFailsafeTimer.Stop(); } catch { /* ignore */ }
-            try { _initialScrollMaskFailsafeTimer.Start(); } catch { /* ignore */ }
-        }
-        catch
-        {
-            // ignore
-        }
+        // Cold-open used to set PlaylistListBox.Opacity = 0 here; that left the first context menu
+        // broken until the window was hidden and shown again. Initial scroll masking is unused now
+        // (CenterNowPlaying from FocusPlaylistOnNowPlaying is disabled).
     }
 
     public void EndSuppressQueueListUntilInitialScroll()
+    {
+        EndSuppressQueueListUntilInitialScrollCore();
+    }
+
+    private void EndSuppressQueueListUntilInitialScrollCore()
     {
         try
         {
             if (!_suppressQueueListUntilInitialScroll)
                 return;
             _suppressQueueListUntilInitialScroll = false;
-            PlaylistListBox.Opacity = 1;
-            try { _initialScrollMaskFailsafeTimer?.Stop(); } catch { /* ignore */ }
-            // Ensure the list measures to full width before the user interacts; otherwise some layouts only settle after first scroll.
-            try
-            {
-                PlaylistListBox.InvalidateMeasure();
-                PlaylistListBox.InvalidateArrange();
-                PlaylistListBox.Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    try { PlaylistListBox.UpdateLayout(); } catch { /* ignore */ }
-                }), DispatcherPriority.Loaded);
-            }
-            catch { /* ignore */ }
+            try { PlaylistListBox.ClearValue(UIElement.OpacityProperty); } catch { /* ignore */ }
         }
         catch
         {
@@ -1040,6 +1086,11 @@ public partial class PlaylistWindow : Window
     }
 
     public void CenterNowPlaying(PlaylistEntry? entry)
+    {
+        RunOrDeferForContextMenu(() => CenterNowPlayingCore(entry));
+    }
+
+    private void CenterNowPlayingCore(PlaylistEntry? entry)
     {
         if (entry is null) return;
         try { _lastNowPlayingEntry = entry; } catch { /* ignore */ }
@@ -1431,47 +1482,255 @@ public partial class PlaylistWindow : Window
 
     // (local-path detection is centralized in LocalPlaylistLoader and PlaylistOpenTargetHelper)
 
-    private void QueueItemContextMenu_OnOpened(object sender, RoutedEventArgs e)
+    private void QueueListBox_OnPreviewMouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.ListBox lb)
+            return;
+
+        var lbi = FindListBoxItemFromHit(lb, e.OriginalSource as DependencyObject)
+                  ?? FindListBoxItemFromHit(lb, e.GetPosition(lb));
+        if (lbi?.DataContext is not QueueItem qi)
+            return;
+
+        e.Handled = true;
+
+        if (_rowMenuPopup is { IsOpen: true })
+            return;
+
+        _playlistContextMenuGestureActive = true;
+        Interlocked.Increment(ref _centerRequestId);
+        _activeContextMenuItem = qi;
+        _lastClickedIndex = lb.ItemContainerGenerator.IndexFromContainer(lbi);
+
+        var includeRemoveFromPlaylist = ReferenceEquals(lb, PlaylistListBox);
+        OpenRowMenuPopup(qi, lbi, e.GetPosition(lbi), includeRemoveFromPlaylist);
+    }
+
+    private void OpenRowMenuPopup(QueueItem qi, ListBoxItem lbi, System.Windows.Point rel, bool includeRemoveFromPlaylist)
     {
         try
         {
-            if (sender is not ContextMenu cm)
-                return;
+            if (_rowMenuPopup is not null)
+                _rowMenuPopup.IsOpen = false;
+        }
+        catch { /* ignore */ }
 
-            var items = cm.Items.OfType<object>().ToList();
-            var openMi = items.OfType<MenuItem>().FirstOrDefault();
-            var addMi = items.OfType<MenuItem>().FirstOrDefault(x => string.Equals(x.Name, "AddToQueueMenuItem", StringComparison.Ordinal));
-            var removeMi = items.OfType<MenuItem>().FirstOrDefault(x => string.Equals(x.Name, "RemoveFromQueueMenuItem", StringComparison.Ordinal));
+        _rowMenuView = BuildRowMenu(includeRemoveFromPlaylist);
+        ConfigureRowMenu(_rowMenuView, qi);
 
-            if (openMi is null)
-                return;
+        _rowMenuPopup = new Popup
+        {
+            AllowsTransparency = true,
+            PopupAnimation = PopupAnimation.Fade,
+            StaysOpen = false,
+            Child = _rowMenuView.Root,
+            PlacementTarget = lbi,
+            Placement = PlacementMode.RelativePoint,
+            HorizontalOffset = rel.X,
+            VerticalOffset = rel.Y,
+        };
+        _rowMenuPopup.Closed += RowMenuPopup_OnClosed;
+        _playlistContextMenuGestureActive = false;
+        _playlistContextMenuOpen = true;
+        _rowMenuPopup.IsOpen = true;
+    }
 
-            var qi = cm.PlacementTarget is FrameworkElement fe ? fe.DataContext as QueueItem : null;
-            if (qi is null)
-                return;
+    private void CloseRowMenuPopup()
+    {
+        try
+        {
+            if (_rowMenuPopup is not null)
+                _rowMenuPopup.IsOpen = false;
+        }
+        catch { /* ignore */ }
+    }
 
-            openMi.Header = PlaylistOpenTargetHelper.GetOpenMenuHeader(qi);
+    private void RowMenuPopup_OnClosed(object? sender, EventArgs e)
+    {
+        try { if (sender is Popup p) p.Closed -= RowMenuPopup_OnClosed; } catch { /* ignore */ }
 
-            // Menu visibility rules:
-            // - Base playlist rows: only "Add to queue"
-            // - Queued rows: "Queue next/last" + "Remove from queue" (no add; queue interactions never create duplicates)
-            var isQueuedRow = qi.IsQueued;
+        var deferred = _deferredWhileContextMenuOpen;
+        _deferredWhileContextMenuOpen = null;
+        _rowMenuPopup = null;
+        _rowMenuView = null;
+        ResetContextMenuState();
+        RequestDeferredPlaylistViewRefresh();
+        if (deferred is null)
+            return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            try { deferred(); } catch { /* ignore */ }
+        }, DispatcherPriority.ApplicationIdle);
+    }
 
-            if (addMi is not null)
-            {
-                addMi.Visibility = isQueuedRow ? Visibility.Collapsed : Visibility.Visible;
-                addMi.IsEnabled = !isQueuedRow && qi.Entry is not null;
-            }
+    private void ResetContextMenuState()
+    {
+        _playlistContextMenuOpen = false;
+        _playlistContextMenuGestureActive = false;
+        _activeContextMenuItem = null;
+    }
 
-            if (removeMi is not null)
-            {
-                removeMi.Visibility = isQueuedRow ? Visibility.Visible : Visibility.Collapsed;
-                removeMi.IsEnabled = isQueuedRow && qi.QueueInstanceId is not null;
-            }
+    private static ListBoxItem? FindListBoxItemFromHit(System.Windows.Controls.ListBox listBox, DependencyObject? start)
+    {
+        if (start is null)
+            return null;
+
+        var cur = start;
+        while (cur is not null && cur is not ListBoxItem)
+        {
+            if (ReferenceEquals(cur, listBox))
+                return null;
+            cur = VisualTreeHelper.GetParent(cur);
+        }
+
+        return cur as ListBoxItem;
+    }
+
+    private static ListBoxItem? FindListBoxItemFromHit(System.Windows.Controls.ListBox listBox, System.Windows.Point positionInListBox)
+    {
+        try
+        {
+            return FindListBoxItemFromHit(listBox, listBox.InputHitTest(positionInListBox) as DependencyObject);
         }
         catch
         {
-            // ignore
+            return null;
+        }
+    }
+
+    private QueueItem? TryGetActiveMenuQueueItem() => _activeContextMenuItem;
+
+    private static System.Windows.Media.Brush? TryThemeBrush(string key) =>
+        System.Windows.Application.Current?.TryFindResource(key) as System.Windows.Media.Brush;
+
+    private static System.Windows.Media.FontFamily? TryThemeFont(string key) =>
+        System.Windows.Application.Current?.TryFindResource(key) as System.Windows.Media.FontFamily;
+
+    private static RowMenuEntry CreateRowMenuEntry(string text, RoutedEventHandler click)
+    {
+        var fg = TryThemeBrush("App.Theme.Foreground") ?? System.Windows.Media.Brushes.White;
+        var bg = TryThemeBrush("App.Theme.PopupSurfaceRaised");
+        var hover = TryThemeBrush("App.Theme.Hover");
+        var mono = TryThemeFont("App.MonoFont");
+
+        var label = new TextBlock
+        {
+            Text = text,
+            Foreground = fg,
+            FontFamily = mono,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var row = new Border
+        {
+            Background = bg,
+            Padding = new Thickness(8, 4, 12, 4),
+            MinWidth = 180,
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Child = label,
+        };
+
+        if (hover is not null && bg is not null)
+        {
+            row.MouseEnter += (_, _) => row.Background = hover;
+            row.MouseLeave += (_, _) => row.Background = bg;
+        }
+
+        row.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            click(row, new RoutedEventArgs());
+        };
+
+        return new RowMenuEntry { Row = row, Label = label };
+    }
+
+    private static void ApplyRowMenuPopupTheme(Border border, System.Windows.Controls.Panel panel)
+    {
+        try
+        {
+            if (TryThemeBrush("App.Theme.PopupSurfaceRaised") is System.Windows.Media.Brush bg)
+            {
+                border.Background = bg;
+                panel.Background = bg;
+            }
+            if (TryThemeBrush("App.Theme.Border") is System.Windows.Media.Brush borderBrush)
+                border.BorderBrush = borderBrush;
+        }
+        catch { /* ignore */ }
+    }
+
+    private static Border CreateRowMenuSeparator()
+    {
+        return new Border
+        {
+            Height = 1,
+            Margin = new Thickness(4, 2, 4, 2),
+            Background = TryThemeBrush("App.Theme.Border"),
+        };
+    }
+
+    private static void SetRowMenuEntryEnabled(RowMenuEntry entry, bool enabled)
+    {
+        entry.Row.IsHitTestVisible = enabled;
+        entry.Row.Opacity = enabled ? 1.0 : 0.45;
+    }
+
+    private RowMenuView BuildRowMenu(bool includeRemoveFromPlaylist)
+    {
+        var panel = new StackPanel();
+        var openEntry = CreateRowMenuEntry("Open", OpenMenuItem_OnClick);
+        panel.Children.Add(openEntry.Row);
+        panel.Children.Add(CreateRowMenuSeparator());
+
+        var addEntry = CreateRowMenuEntry("Add to queue", AddToQueueMenuItem_OnClick);
+        panel.Children.Add(addEntry.Row);
+
+        var removeEntry = CreateRowMenuEntry("Remove from queue", RemoveFromQueueMenuItem_OnClick);
+        panel.Children.Add(removeEntry.Row);
+
+        RowMenuEntry? removePlaylistEntry = null;
+        if (includeRemoveFromPlaylist)
+        {
+            panel.Children.Add(CreateRowMenuSeparator());
+            removePlaylistEntry = CreateRowMenuEntry("Remove from playlist", RemoveFromPlaylistMenuItem_OnClick);
+            panel.Children.Add(removePlaylistEntry.Row);
+        }
+
+        var border = new Border
+        {
+            Padding = new Thickness(2),
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(1),
+            Child = panel,
+        };
+        ApplyRowMenuPopupTheme(border, panel);
+
+        return new RowMenuView
+        {
+            Root = border,
+            Open = openEntry,
+            AddToQueue = addEntry,
+            RemoveFromQueue = removeEntry,
+            RemoveFromPlaylist = removePlaylistEntry,
+        };
+    }
+
+    private void ConfigureRowMenu(RowMenuView menu, QueueItem qi)
+    {
+        menu.Open.Label.Text = PlaylistOpenTargetHelper.GetOpenMenuHeader(qi);
+
+        var isQueuedRow = qi.IsQueued;
+        menu.AddToQueue.Row.Visibility = isQueuedRow ? Visibility.Collapsed : Visibility.Visible;
+        SetRowMenuEntryEnabled(menu.AddToQueue, !isQueuedRow && qi.Entry is not null);
+
+        menu.RemoveFromQueue.Row.Visibility = isQueuedRow ? Visibility.Visible : Visibility.Collapsed;
+        SetRowMenuEntryEnabled(menu.RemoveFromQueue, isQueuedRow && qi.QueueInstanceId is not null);
+
+        if (menu.RemoveFromPlaylist is not null)
+        {
+            menu.RemoveFromPlaylist.Row.Visibility = isQueuedRow ? Visibility.Collapsed : Visibility.Visible;
+            SetRowMenuEntryEnabled(menu.RemoveFromPlaylist, !isQueuedRow && !string.IsNullOrWhiteSpace(qi.VideoId));
         }
     }
 
@@ -1479,19 +1738,12 @@ public partial class PlaylistWindow : Window
     {
         try
         {
-            if (sender is not MenuItem mi)
+            if (TryGetActiveMenuQueueItem() is not QueueItem qi)
                 return;
-            if (mi.Parent is not ContextMenu cm)
-                return;
-            if (cm.PlacementTarget is not FrameworkElement fe)
-                return;
-            if (fe.DataContext is not QueueItem qi)
-                return;
-            if (qi.Entry is null)
-                return;
-            if (qi.IsQueued)
+            if (qi.Entry is null || qi.IsQueued)
                 return;
 
+            CloseRowMenuPopup();
             await _addToQueueAsync(qi.Entry);
         }
         catch
@@ -1504,18 +1756,31 @@ public partial class PlaylistWindow : Window
     {
         try
         {
-            if (sender is not MenuItem mi)
-                return;
-            if (mi.Parent is not ContextMenu cm)
-                return;
-            if (cm.PlacementTarget is not FrameworkElement fe)
-                return;
-            if (fe.DataContext is not QueueItem qi)
+            if (TryGetActiveMenuQueueItem() is not QueueItem qi)
                 return;
             if (!qi.IsQueued || qi.QueueInstanceId is not Guid id)
                 return;
 
+            CloseRowMenuPopup();
             await _removeQueuedInstanceAsync(id);
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private async void RemoveFromPlaylistMenuItem_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (TryGetActiveMenuQueueItem() is not QueueItem qi)
+                return;
+            if (qi.IsQueued || string.IsNullOrWhiteSpace(qi.VideoId))
+                return;
+
+            CloseRowMenuPopup();
+            await _removeFromPlaylistAsync(qi.VideoId);
         }
         catch
         {
@@ -1527,14 +1792,10 @@ public partial class PlaylistWindow : Window
     {
         try
         {
-            if (sender is not MenuItem mi)
+            if (TryGetActiveMenuQueueItem() is not QueueItem qi)
                 return;
-            if (mi.Parent is not ContextMenu cm)
-                return;
-            if (cm.PlacementTarget is not FrameworkElement fe)
-                return;
-            if (fe.DataContext is not QueueItem qi)
-                return;
+
+            CloseRowMenuPopup();
 
             if (!PlaylistOpenTargetHelper.TryGetOpenTarget(qi, out var target))
                 return;
@@ -1614,9 +1875,15 @@ public partial class PlaylistWindow : Window
             item,
             requestId,
             getLatestRequestId: () => _centerRequestId,
-            onFinished: EndSuppressQueueListUntilInitialScroll);
+            onFinished: EndSuppressQueueListUntilInitialScroll,
+            shouldAbort: () => ShouldDeferPlaylistMutations);
 
     public void RefreshQueueView()
+    {
+        RunOrDeferForContextMenu(RefreshQueueViewCore);
+    }
+
+    private void RefreshQueueViewCore()
     {
         try
         {
