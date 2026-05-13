@@ -1,5 +1,7 @@
 ### What's new, pussycat?
 
+- 2.6.2:
+  - Theme designer background made opaque
 - 2.6.1:
   - Option to (re)download internal yt-dlp
 - 2.6.0:

@@ -29,14 +29,14 @@
     <Grid SnapsToDevicePixels="{DynamicResource App.Theme.WindowChromeSnapsToDevicePixels}"
           UseLayoutRounding="True"
           local:RoundedChromeClip.IsEnabled="True">
-        <!-- Use semantic theme surfaces (updated for Default/Windows themes). App.Brush.WindowBg is a legacy near-black constant and does not track light theme. -->
-        <Border Background="{DynamicResource App.Theme.Surface}"
+        <!-- Opaque popup surfaces so the designer reads as a solid panel over other aux windows (Surface* uses user alpha). -->
+        <Border Background="{DynamicResource App.Theme.PopupSurface}"
                 BorderThickness="0"
                 CornerRadius="{DynamicResource App.Theme.WindowCornerRadiusOuter}"/>
         <Grid Margin="{DynamicResource App.Theme.WindowChromeContentMargin}">
             <Border SnapsToDevicePixels="{DynamicResource App.Theme.WindowChromeSnapsToDevicePixels}"
                     UseLayoutRounding="True"
-                    Background="{DynamicResource App.Theme.SurfaceRaised}"
+                    Background="{DynamicResource App.Theme.PopupSurfaceRaised}"
                     CornerRadius="{DynamicResource App.Theme.WindowCornerRadiusOuter}"/>
 
             <local:WindowChromeFrameRing Panel.ZIndex="5"
@@ -78,10 +78,10 @@
                         MouseLeftButtonDown="ChromeBar_OnMouseLeftButtonDown">
                     <Border.Style>
                         <Style TargetType="{x:Type Border}">
-                            <Setter Property="Background" Value="{DynamicResource App.Theme.TitleBarActive}"/>
+                            <Setter Property="Background" Value="{DynamicResource App.Theme.PopupSurfaceRaised}"/>
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsActive, RelativeSource={RelativeSource AncestorType=Window}}" Value="False">
-                                    <Setter Property="Background" Value="{DynamicResource App.Theme.TitleBarInactive}"/>
+                                    <Setter Property="Background" Value="{DynamicResource App.Theme.PopupSurface}"/>
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -139,7 +139,7 @@
                     <Border Grid.Column="0"
                             CornerRadius="6"
                             Padding="10"
-                            Background="{DynamicResource App.Theme.SurfaceRaised}"
+                            Background="{DynamicResource App.Theme.PopupSurface}"
                             BorderBrush="{DynamicResource App.Theme.Border}"
                             BorderThickness="1">
                         <Grid>
