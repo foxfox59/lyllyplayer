@@ -1,5 +1,7 @@
 ### What's new, pussycat?
 
+- 2.6.3:
+  - Fixed added playlist items not focusing properly
 - 2.6.2:
   - Theme designer background made opaque
 - 2.6.1:

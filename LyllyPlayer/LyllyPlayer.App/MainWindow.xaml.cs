@@ -4315,7 +4315,8 @@ public partial class MainWindow : Window
         // RebuildEffectivePlayOrderPreserveCurrent(raiseNowPlayingChanged: false);
         var final = entries.ToArray();
         _engine.SetQueue(final, startIndex: _engine.CurrentIndex); // , raiseNowPlayingChanged: false);
-        SetQueueList(final, selectedIndex: -1);
+        var focusIndex = appended.Count > 0 ? final.Length - 1 : -1;
+        SetQueueList(final, selectedIndex: focusIndex);
         UpdatePlaylistTitleDisplayForNowPlaying();
         RequestPersistSnapshot();
 
@@ -4506,9 +4507,22 @@ public partial class MainWindow : Window
                 TryShowAppendSummaryDialog("Playlist", added, removedDupes);
             }
             catch { /* ignore */ }
+
+            // Apply list without stopping playback; preserve current track if possible.
+            _playlistCore.ReplaceEntries(merged);
+            var appendStartIndex = FindIndexByVideoId(_playlistCore.Entries, curId);
+            _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : (appendStartIndex >= 0 ? appendStartIndex : 0), raiseNowPlayingChanged: false);
+
+            var focusIndex = merged.Count > beforeCount ? merged.Count - 1 : (GetOriginalIndexByVideoId(curId) ?? 0);
+            SetQueueList(_playlistCore.Entries, selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : focusIndex);
+            UpdateRefreshEnabled();
+            MarkLastPlaylistSnapshotDirty();
+            RequestPersistSnapshot();
+            UpdatePlaylistTitleDisplayForNowPlaying();
+            return;
         }
 
-        // Apply list without stopping playback; preserve current track if possible.
+        // Replace import: apply list and focus current or first item.
         _playlistCore.ReplaceEntries(merged);
         //_currentEntries = BuildEffectivePlayOrder(_engine.GetCurrent(), _shuffleEnabled).ToList();
         var startIndex = FindIndexByVideoId(_playlistCore.Entries, curId);

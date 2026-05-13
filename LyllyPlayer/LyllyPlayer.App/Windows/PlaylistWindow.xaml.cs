@@ -1014,15 +1014,22 @@ public partial class PlaylistWindow : Window
         catch { /* ignore */ }
     }
 
-    public void ScrollToIndex(int index)
+    public void ScrollToIndex(int index) => SelectAndScrollToPlaylistIndex(index);
+
+    public void SelectAndScrollToPlaylistIndex(int index)
     {
-        if (index < 0) return;
-        if (_queueSource is null) return;
+        if (index < 0)
+            return;
+        if (_playlistItemsSource is null)
+            return;
         try
         {
-            var item = _queueSource.FirstOrDefault(q => !q.IsQueued && q.BaseIndex == index);
-            if (item is null) return;
-            PlaylistListBox.ScrollIntoView(item);
+            var item = _playlistItemsSource.FirstOrDefault(q => !q.IsQueued && q.BaseIndex == index);
+            if (item is null)
+                return;
+
+            PlaylistListBox.SelectedItem = item;
+            CenterListBoxOnQueueItem(PlaylistListBox, item, Interlocked.Increment(ref _centerRequestId));
         }
         catch { /* ignore */ }
     }
@@ -1049,7 +1056,7 @@ public partial class PlaylistWindow : Window
                         return;
 
                     PlaylistListBox.SelectedItem = item;
-                    PlaylistListBox.ScrollIntoView(item);
+                    CenterListBoxOnQueueItem(PlaylistListBox, item, Interlocked.Increment(ref _centerRequestId));
                 }
                 catch { /* ignore */ }
             }), DispatcherPriority.Loaded);
