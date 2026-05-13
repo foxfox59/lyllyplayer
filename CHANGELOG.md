@@ -1,5 +1,8 @@
 ### What's new, pussycat?
 
+- 2.6.0:
+  - Fixed a bug with playlist context menu
+  - Added "Remove from playlist" context menu item
 - 2.5.9:
   - Fixed a bug with stale queue ordinals and queue items not being double click playable
 - 2.5.8:
