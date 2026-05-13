@@ -617,6 +617,7 @@ public partial class MainWindow
                 RequestPersistSnapshot();
             },
             checkInternalYtDlpNowAsync: async () => await CheckInternalYtDlpNowAsync().ConfigureAwait(true),
+            downloadInternalYtDlpAsync: async (ct) => await DownloadInternalYtDlpAsync(ct).ConfigureAwait(true),
             getLyricsEnabled: () => _lyricsEnabled,
             setLyricsEnabled: (v) =>
             {

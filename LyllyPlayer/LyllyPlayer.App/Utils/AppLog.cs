@@ -155,6 +155,10 @@ public static class AppLog
             return true;
         if (t.Contains("missing a URL", StringComparison.OrdinalIgnoreCase) && t.Contains("android client", StringComparison.OrdinalIgnoreCase))
             return true;
+        if (t.Contains("older than 90 days", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (t.Contains("strongly recommended to always use the latest version", StringComparison.OrdinalIgnoreCase))
+            return true;
         return false;
     }
 

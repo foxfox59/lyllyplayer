@@ -173,6 +173,7 @@
                                                    Foreground="{DynamicResource App.Theme.Foreground}"/>
                                     </StackPanel>
                                     <StackPanel Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,10" VerticalAlignment="Top">
+                                        <Button x:Name="YtDlpDownloadInternalButton" Content="Download" MinWidth="88" Height="30" Margin="0,0,8,0" Click="YtDlpDownloadInternalButton_OnClick"/>
                                         <Button x:Name="YtDlpUseInternalButton" Content="Use internal" MinWidth="96" Height="30" Margin="0,0,8,0" Click="YtDlpUseInternalButton_OnClick"/>
                                         <Button x:Name="YtDlpBrowseButton" Content="Browse…" MinWidth="88" Height="30" Margin="0,0,8,0" Click="YtDlpBrowseButton_OnClick"/>
                                         <Button x:Name="YtDlpUsePathButton" Content="Use PATH" MinWidth="88" Height="30" Click="YtDlpUsePathButton_OnClick"/>

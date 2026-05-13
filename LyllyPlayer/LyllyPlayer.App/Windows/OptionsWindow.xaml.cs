@@ -37,6 +37,7 @@ public partial class OptionsWindow : Window
     private readonly Func<bool> _getInternalYtDlpUpdateCheckEnabled;
     private readonly Action<bool> _setInternalYtDlpUpdateCheckEnabled;
     private readonly Func<Task>? _checkInternalYtDlpNowAsync;
+    private readonly Func<CancellationToken, Task<bool>>? _downloadInternalYtDlpAsync;
     private readonly Func<string> _getFfmpegPath;
     private readonly Action<string> _setFfmpegPath;
     private readonly Func<string> _getNodeJsPath;
@@ -167,6 +168,7 @@ public partial class OptionsWindow : Window
         Func<bool> getInternalYtDlpUpdateCheckEnabled,
         Action<bool> setInternalYtDlpUpdateCheckEnabled,
         Func<Task>? checkInternalYtDlpNowAsync,
+        Func<CancellationToken, Task<bool>>? downloadInternalYtDlpAsync,
         Func<string> getFfmpegPath,
         Action<string> setFfmpegPath,
         Func<string> getNodeJsPath,
@@ -293,6 +295,7 @@ public partial class OptionsWindow : Window
         _getInternalYtDlpUpdateCheckEnabled = getInternalYtDlpUpdateCheckEnabled;
         _setInternalYtDlpUpdateCheckEnabled = setInternalYtDlpUpdateCheckEnabled;
         _checkInternalYtDlpNowAsync = checkInternalYtDlpNowAsync;
+        _downloadInternalYtDlpAsync = downloadInternalYtDlpAsync;
         _getFfmpegPath = getFfmpegPath;
         _setFfmpegPath = setFfmpegPath;
         _getNodeJsPath = getNodeJsPath;
@@ -1194,7 +1197,7 @@ public partial class OptionsWindow : Window
             if (!File.Exists(managed))
             {
                 TopmostMessageBox.Show(
-                    "Internal yt-dlp was not found yet.\n\nUse Browse… to select your own yt-dlp binary, or download yt-dlp from the main app prompt first.",
+                    "Internal yt-dlp was not found yet.\n\nUse Download to fetch the managed copy, Browse… for your own binary, or Use PATH if yt-dlp is on PATH.",
                     "Options",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
@@ -1205,6 +1208,35 @@ public partial class OptionsWindow : Window
             RefreshUi();
         }
         catch { /* ignore */ }
+    }
+
+    private async void YtDlpDownloadInternalButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (_downloadInternalYtDlpAsync is null)
+            return;
+
+        try
+        {
+            YtDlpDownloadInternalButton.IsEnabled = false;
+            var ok = await _downloadInternalYtDlpAsync(CancellationToken.None).ConfigureAwait(true);
+            if (!ok)
+            {
+                TopmostMessageBox.Show(
+                    "yt-dlp download failed.\n\nCheck your network connection or use Browse… to select an existing yt-dlp.exe.",
+                    "Options",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+
+            _draft.YtDlpPath = ToolPaths.GetManagedYtDlpPath();
+            RefreshUi();
+        }
+        catch { /* ignore */ }
+        finally
+        {
+            try { YtDlpDownloadInternalButton.IsEnabled = true; } catch { /* ignore */ }
+        }
     }
 
     private void InternalYtDlpUpdateCheckCheckBox_OnChecked(object sender, RoutedEventArgs e)

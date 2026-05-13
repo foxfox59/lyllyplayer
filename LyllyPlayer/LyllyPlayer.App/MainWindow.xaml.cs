@@ -1073,6 +1073,7 @@ public partial class MainWindow : Window
         // playlist list is hosted in PlaylistWindow
 
         _engine = new PlaybackEngine(_ytDlp);
+        _engine.SetEnsureYtDlpReadyAsync(EnsureYtDlpReadyAsync);
         _engine.SetNextTrackResolver(ResolveNextTrack);
         _engine.SetNextTrackPeekResolver(PeekNextTrackForPreheatOrPrefetch);
         ApplyYtdlpPlaybackOptions();
@@ -7516,6 +7517,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task<bool> DownloadInternalYtDlpAsync(CancellationToken cancellationToken = default)
+    {
+        var managed = ToolPaths.GetManagedYtDlpPath();
+        SetStatusMessage("INFO", "Downloading yt-dlp…");
+        var ok = await TryDownloadYtDlpAsync(managed, cancellationToken).ConfigureAwait(true);
+        if (!ok)
+        {
+            SetStatusMessage("ERROR", "yt-dlp download failed. Set it under Options → Tools.");
+            return false;
+        }
+
+        _savedYtDlpPath = managed;
+        ApplyResolvedToolPaths();
+        ApplyYtdlpPlaybackOptions();
+        RequestPersistSnapshot();
+        SetStatusMessage("INFO", "yt-dlp downloaded.");
+        return true;
+    }
+
     private async Task<bool> EnsureYtDlpReadyAsync(CancellationToken cancellationToken = default)
     {
         ApplyResolvedToolPaths();
@@ -7557,18 +7577,10 @@ public partial class MainWindow : Window
                 return false;
 
             SetStatusMessage("INFO", "Downloading yt-dlp…");
-            var ok = await TryDownloadYtDlpAsync(managed, cancellationToken).ConfigureAwait(true);
+            var ok = await DownloadInternalYtDlpAsync(cancellationToken).ConfigureAwait(true);
             if (!ok)
-            {
-                SetStatusMessage("ERROR", "yt-dlp download failed. Set it under Options → Tools.");
                 return false;
-            }
 
-            _savedYtDlpPath = managed;
-            ApplyResolvedToolPaths();
-            ApplyYtdlpPlaybackOptions();
-            RequestPersistSnapshot();
-            SetStatusMessage("INFO", "yt-dlp downloaded.");
             return ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp").IsFound;
         }
         catch

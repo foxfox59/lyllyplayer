@@ -28,6 +28,7 @@ public sealed partial class PlaybackEngine : IDisposable
     public delegate PlaylistEntry? NextTrackPeekResolver();
     private NextTrackPeekResolver? _nextTrackPeekResolver;
     private readonly YtDlpClient _ytDlp;
+    private Func<CancellationToken, Task<bool>>? _ensureYtDlpReadyAsync;
     private AudioOut? _audio;
     private readonly WaveFormat _format;
     private int _audioDeviceNumber = -1; // -1 = WAVE_MAPPER (default)
@@ -114,6 +115,17 @@ public sealed partial class PlaybackEngine : IDisposable
     public void SetVlcAudioCallbacksEnabled(bool enabled)
     {
         _enableVlcAudioCallbacks = enabled;
+    }
+
+    /// <summary>Called before any yt-dlp resolve/download so the shell can prompt or download internal yt-dlp.</summary>
+    public void SetEnsureYtDlpReadyAsync(Func<CancellationToken, Task<bool>>? callback)
+        => _ensureYtDlpReadyAsync = callback;
+
+    private async Task<bool> EnsureYtDlpReadyForResolveAsync(CancellationToken ct)
+    {
+        if (_ensureYtDlpReadyAsync is null)
+            return true;
+        return await _ensureYtDlpReadyAsync(ct).ConfigureAwait(false);
     }
 
     public IReadOnlyList<PlaylistEntry> PlayOrder { get; private set; } = Array.Empty<PlaylistEntry>();
@@ -1070,6 +1082,9 @@ public sealed partial class PlaybackEngine : IDisposable
             mark?.Step("resolve_return_stream_url_m3u");
             return RememberResolvedInput(entry, entry.WebpageUrl);
         }
+
+        if (!await EnsureYtDlpReadyForResolveAsync(ct).ConfigureAwait(false))
+            throw new InvalidOperationException("yt-dlp is not configured. Open Options → Tools to download or browse for yt-dlp.");
 
         // Disk cache is only for YouTube web URLs (avoids transient stream URLs ending mid-track).
         if (IsYoutubeDiskCacheEligible(entry))

@@ -125,6 +125,9 @@ public sealed class YtDlpClient
     /// </summary>
     public void ApplyLaunchPrefixTo(ProcessStartInfo psi)
     {
+        // Avoid self-update checks / stale-version warnings on every invocation (yt-dlp recommends --no-update for apps).
+        psi.ArgumentList.Add("--no-update");
+
         if (_cookiesFromBrowserEnabled && !string.IsNullOrWhiteSpace(_cookiesFromBrowserValue))
         {
             psi.ArgumentList.Add("--cookies-from-browser");
@@ -172,7 +175,7 @@ public sealed class YtDlpClient
 
         var (exitCode, stdout, stderr) = await RunAsync(args, cancellationToken, longRunningLogHint: "fetching playlist metadata");
         if (exitCode != 0)
-            throw new InvalidOperationException($"yt-dlp failed ({exitCode}). {stderr}".Trim());
+            ThrowYtDlpFailed(exitCode, stderr);
 
         using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
         var playlistTitle =
@@ -237,7 +240,7 @@ public sealed class YtDlpClient
 
         var (exitCode, stdout, stderr) = await RunAsync(args, cancellationToken, longRunningLogHint: "fetching video metadata");
         if (exitCode != 0)
-            throw new InvalidOperationException($"yt-dlp failed ({exitCode}). {stderr}".Trim());
+            ThrowYtDlpFailed(exitCode, stderr);
 
         using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
         var root = doc.RootElement;
@@ -308,7 +311,7 @@ public sealed class YtDlpClient
 
         var (exitCode, stdout, stderr) = await RunAsync(args.ToArray(), cancellationToken, longRunningLogHint: "YouTube Music search");
         if (exitCode != 0)
-            throw new InvalidOperationException($"yt-dlp failed ({exitCode}). {stderr}".Trim());
+            ThrowYtDlpFailed(exitCode, stderr);
 
         using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
         var title = $"Search: {q}";
@@ -379,7 +382,7 @@ public sealed class YtDlpClient
 
         var (exitCode, stdout, stderr) = await RunAsync(args, cancellationToken, longRunningLogHint: "YouTube playlist search");
         if (exitCode != 0)
-            throw new InvalidOperationException($"yt-dlp failed ({exitCode}). {stderr}".Trim());
+            ThrowYtDlpFailed(exitCode, stderr);
 
         using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
         if (!doc.RootElement.TryGetProperty("entries", out var entriesEl) || entriesEl.ValueKind != JsonValueKind.Array)
@@ -483,7 +486,7 @@ public sealed class YtDlpClient
             };
             var (ec, stdout, stderr) = await RunAsync(args, ct, longRunningLogHint: $"YouTube {label}");
             if (ec != 0)
-                throw new InvalidOperationException($"yt-dlp failed ({ec}). {stderr}".Trim());
+                ThrowYtDlpFailed(ec, stderr);
 
             using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
             if (!doc.RootElement.TryGetProperty("entries", out var entriesEl) || entriesEl.ValueKind != JsonValueKind.Array)
@@ -531,7 +534,7 @@ public sealed class YtDlpClient
 
             var (ec0, stdout0, stderr0) = await RunAsync(libraryArgs, cancellationToken, longRunningLogHint: "YouTube library");
             if (ec0 != 0)
-                throw new InvalidOperationException($"yt-dlp failed ({ec0}). {stderr0}".Trim());
+                ThrowYtDlpFailed(ec0, stderr0);
 
             using var doc0 = JsonDocument.Parse(stdout0, SafeJson.CreateDocumentOptions());
             if (doc0.RootElement.TryGetProperty("entries", out var tabs) && tabs.ValueKind == JsonValueKind.Array)
@@ -663,7 +666,7 @@ public sealed class YtDlpClient
                 var hint = $"resolving stream URL ({s.detail ?? "default"})";
                 var (exitCode, stdout, stderr) = await RunAsync(s.args, cancellationToken, longRunningLogHint: hint);
                 if (exitCode != 0)
-                    throw new InvalidOperationException($"yt-dlp failed ({exitCode}). {stderr}".Trim());
+                    ThrowYtDlpFailed(exitCode, stderr);
 
                 var url = stdout
                     .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -708,11 +711,11 @@ public sealed class YtDlpClient
                 var hint = $"resolving playback URL ({s.detail ?? "default"})";
                 var (exitCode, stdout, stderr) = await RunAsync(s.args, cancellationToken, longRunningLogHint: hint);
                 if (exitCode != 0)
-                    throw new InvalidOperationException($"yt-dlp failed ({exitCode}). {stderr}".Trim());
+                    ThrowYtDlpFailed(exitCode, stderr);
 
                 // Exit 0 but stderr contains a non-recoverable error (Premium, unavailable, age-restricted).   
                 if (LooksLikeNonRecoverableYtDlpError(stderr))
-                    throw new InvalidOperationException($"yt-dlp resolve failed (status 0 with error). {stderr}".Trim());                    
+                    throw new InvalidOperationException(FormatYtDlpProcessFailure(0, stderr, "yt-dlp resolve failed (status 0 with error)"));
 
                 if (string.IsNullOrWhiteSpace(stdout))
                     throw new InvalidOperationException("yt-dlp returned empty JSON.");
@@ -989,10 +992,10 @@ public sealed class YtDlpClient
                 var hint = $"downloading audio to cache ({s.detail ?? "default"})";
                 var (exitCode, _, stderr) = await RunAsync(s.args, cancellationToken, longRunningLogHint: hint);
                 if (exitCode != 0)
-                    throw new InvalidOperationException($"yt-dlp download failed ({exitCode}). {stderr}".Trim());
+                    throw new InvalidOperationException(FormatYtDlpProcessFailure(exitCode, stderr, "yt-dlp download failed"));
                 // yt-dlp can exit 0 but still report a non-recoverable error in stderr (e.g. Premium).
                 if (LooksLikeNonRecoverableYtDlpError(stderr))
-                    throw new InvalidOperationException($"yt-dlp download failed (status 0 with error). {stderr}".Trim());
+                    throw new InvalidOperationException(FormatYtDlpProcessFailure(0, stderr, "yt-dlp download failed (status 0 with error)"));
                 last = null;
                 break;
             }
@@ -1121,6 +1124,51 @@ public sealed class YtDlpClient
         if (!suppressNonZeroExitLog || p.ExitCode == 0)
             AppLog.ToolStderrCompleted("yt-dlp", errText, p.ExitCode);
         return (p.ExitCode, stdout.ToString(), errText);
+    }
+
+    private static void ThrowYtDlpFailed(int exitCode, string? stderr)
+        => throw new InvalidOperationException(FormatYtDlpProcessFailure(exitCode, stderr, "yt-dlp failed"));
+
+    internal static string FormatYtDlpProcessFailure(int exitCode, string? stderr, string prefix = "yt-dlp failed")
+    {
+        var body = SanitizeYtDlpStderrForUser(stderr);
+        if (string.IsNullOrWhiteSpace(body))
+            return $"{prefix} ({exitCode}).";
+        return $"{prefix} ({exitCode}). {body}".Trim();
+    }
+
+    private static string SanitizeYtDlpStderrForUser(string? stderr)
+    {
+        if (string.IsNullOrWhiteSpace(stderr))
+            return "";
+
+        var sb = new StringBuilder();
+        foreach (var line in stderr.Split(new[] { '\r', '\n' }, StringSplitOptions.None))
+        {
+            var t = line.Trim();
+            if (string.IsNullOrEmpty(t))
+                continue;
+            if (IsIgnorableYtDlpAdvisoryLine(t))
+                continue;
+            if (sb.Length > 0)
+                sb.AppendLine();
+            sb.Append(t);
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    private static bool IsIgnorableYtDlpAdvisoryLine(string t)
+    {
+        if (t.Contains("older than 90 days", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (t.Contains("strongly recommended to always use the latest version", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (t.Contains("yt-dlp --update", StringComparison.OrdinalIgnoreCase) || t.Contains("yt-dlp -U", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (t.Contains("--no-update", StringComparison.OrdinalIgnoreCase) && t.Contains("suppress", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return false;
     }
 
     /// <summary>yt-dlp accepts a path to the ffmpeg binary or its directory; we pass the full exe when it exists on disk.</summary>
