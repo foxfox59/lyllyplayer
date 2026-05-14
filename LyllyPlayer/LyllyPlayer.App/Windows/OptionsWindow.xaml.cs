@@ -2720,6 +2720,10 @@ public partial class OptionsWindow : Window
         {
             // ignore
         }
+        finally
+        {
+            try { WindowSnapService.EnsureInteractiveDragEnded(this); } catch { /* ignore */ }
+        }
     }
 
     // Legacy manual drag helpers removed; DragMove() uses WM_MOVING so snap service works reliably.

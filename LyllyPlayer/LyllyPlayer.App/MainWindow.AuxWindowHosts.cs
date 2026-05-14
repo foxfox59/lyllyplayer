@@ -422,6 +422,7 @@ public partial class MainWindow
         w.LocationChanged += (_, _) =>
         {
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
+            if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
             WindowCoordinator.CaptureWindowBounds(w, out _lastPlaylistBounds, out _lastPlaylistWindowState);
             try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             // Legacy "dock to main" snapping fights the new snap service.
@@ -431,6 +432,7 @@ public partial class MainWindow
         w.SizeChanged += (_, _) =>
         {
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
+            if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
             WindowCoordinator.CaptureWindowBounds(w, out _lastPlaylistBounds, out _lastPlaylistWindowState);
             try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
@@ -1075,6 +1077,7 @@ public partial class MainWindow
         w.LocationChanged += (_, _) =>
         {
         if (_syncingWindowMove || _restoringAuxFromMinimize) return;
+        if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
         WindowCoordinator.CaptureWindowBounds(w, out _lastOptionsBounds, out _lastOptionsWindowState);
         try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
         // Legacy "dock to main" snapping fights the new snap service.
@@ -1083,6 +1086,7 @@ public partial class MainWindow
         w.SizeChanged += (_, _) =>
         {
         if (_syncingWindowMove || _restoringAuxFromMinimize) return;
+        if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
         WindowCoordinator.CaptureWindowBounds(w, out _lastOptionsBounds, out _lastOptionsWindowState);
         try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
         // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
@@ -1181,6 +1185,7 @@ public partial class MainWindow
         w.LocationChanged += (_, _) =>
         {
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
+            if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
             WindowCoordinator.CaptureWindowBounds(w, out var lastLyricsBounds, out var lastLyricsState);
             try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             // Legacy "dock to main" snapping fights the new snap service.
@@ -1189,6 +1194,7 @@ public partial class MainWindow
         w.SizeChanged += (_, _) =>
         {
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
+            if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
             WindowCoordinator.CaptureWindowBounds(w, out var lastLyricsBounds, out var lastLyricsState);
             try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.

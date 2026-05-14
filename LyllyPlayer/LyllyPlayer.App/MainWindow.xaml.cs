@@ -1291,6 +1291,13 @@ public partial class MainWindow : Window
         };
         _uiTimer.Tick += (_, _) =>
         {
+            try
+            {
+                if (WindowSnapService.AnyWindowDragging)
+                    return;
+            }
+            catch { /* ignore */ }
+
             UpdateTimelineUi();
             UpdateVisualizerUi();
             // WPF/Chrome can flip WS_EX_TOOLWINDOW without WM_STYLECHANGED; periodic re-assert keeps Task Manager "Apps" stable.
@@ -3215,6 +3222,7 @@ public partial class MainWindow : Window
         finally
         {
             _chromeDragging = false;
+            try { WindowSnapService.EnsureInteractiveDragEnded(this); } catch { /* ignore */ }
         }
     }
 
@@ -5225,6 +5233,13 @@ public partial class MainWindow : Window
 
     private void OnMainWindowMovedOrSized()
     {
+        try
+        {
+            if (WindowSnapService.AnyWindowDragging)
+                return;
+        }
+        catch { /* ignore */ }
+
         try
         {
             // If the user moves the expanded (non-compact) window after we expanded it, do not "snap back"

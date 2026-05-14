@@ -5,7 +5,6 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
-using System.Windows.Threading;
 using LyllyPlayer.Utils;
 
 namespace LyllyPlayer.Utils;
@@ -47,6 +46,7 @@ public static class WindowSnapService
         public IntPtr Hwnd { get; }
         public WeakReference<Window> WindowRef { get; }
         public HwndSource? Source { get; set; }
+        public bool IsMain { get; }
 
         public bool IsDragging;
         public IntPtr LatchedTargetHwnd;
@@ -57,6 +57,14 @@ public static class WindowSnapService
         public RECT LastRaw;
         public bool HasLastApplied;
         public RECT LastApplied;
+        public int LastClusterMainLeft;
+        public int LastClusterMainTop;
+        public bool HasLastClusterMain;
+        public int DragWidth;
+        public int DragHeight;
+        public bool HasDragSize;
+        public List<(IntPtr hwnd, bool isMain)>? DragSnapHwnds;
+        public List<(IntPtr hwnd, RECT rect)>? DragSnapTargetRects;
 
         // When Main is being dragged, we capture cluster member offsets relative to Main at drag start.
         // This avoids drift / stale parent-child latch trees and ensures cluster movement is consistent from Main.
@@ -66,6 +74,7 @@ public static class WindowSnapService
         {
             Hwnd = hwnd;
             WindowRef = new WeakReference<Window>(w);
+            IsMain = w is LyllyPlayer.MainWindow;
         }
     }
 
@@ -76,14 +85,6 @@ public static class WindowSnapService
 
     public static bool IsEnabled => _enabled;
 
-    public static bool AnyWindowDragging
-    {
-        get
-        {
-            try { return _windows.Values.Any(w => w.IsDragging); }
-            catch { return false; }
-        }
-    }
     private sealed class LatchRelation
     {
         public IntPtr TargetHwnd { get; set; }
@@ -97,7 +98,33 @@ public static class WindowSnapService
     // Key = snapped window hwnd, Value = the target window it is latched to.
     private static readonly ConcurrentDictionary<IntPtr, LatchRelation> _latchedTo = new();
     private static volatile int _clusterMoveGuard;
+    private static int _activeDragCount;
     private const int RestoreAdjacencyPx = 2;
+    private const int SnapScanMarginPx = 24;
+
+    /// <summary>True while any registered window is in an interactive move/resize (WM_ENTERSIZEMOVE…EXITSIZEMOVE).</summary>
+    public static bool AnyWindowDragging => _activeDragCount > 0;
+
+    /// <summary>Skip aux LocationChanged snap inference / settings churn while the user is dragging.</summary>
+    public static bool ShouldDeferAuxLayoutSideEffects => _activeDragCount > 0;
+
+    /// <summary>Call after <see cref="Window.DragMove"/> returns if WM_EXITSIZEMOVE was missed.</summary>
+    public static void EnsureInteractiveDragEnded(Window w)
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(w).Handle;
+            if (hwnd == IntPtr.Zero)
+                return;
+            if (!_windows.TryGetValue(hwnd, out var self) || !self.IsDragging)
+                return;
+            EndInteractiveDragState(self, hwnd);
+        }
+        catch
+        {
+            // ignore
+        }
+    }
 
     public static void RestoreLatchedRelationsFromCurrentPositionsBestEffort()
     {
@@ -265,6 +292,13 @@ public static class WindowSnapService
 
             if (msg == WM_ENTERSIZEMOVE)
             {
+                if (self.IsDragging)
+                {
+                    handled = false;
+                    return IntPtr.Zero;
+                }
+
+                System.Threading.Interlocked.Increment(ref _activeDragCount);
                 self.IsDragging = true;
                 // Keep latch target across tiny pauses; it's cleared on exit.
                 try
@@ -278,25 +312,56 @@ public static class WindowSnapService
                 catch { /* ignore */ }
                 self.HasLastRaw = false;
                 self.HasLastApplied = false;
+                self.HasLastClusterMain = false;
+                self.HasDragSize = false;
+                self.DragSnapHwnds = BuildDragSnapHwndList(hwnd);
+                self.DragSnapTargetRects = SnapshotDragSnapTargetRects(self.DragSnapHwnds);
                 self.ClusterOffsetsFromMainAtDragStart = null;
+
+                try
+                {
+                    if (TryGetWindowRect(hwnd, out var wr) && wr.Width > 0 && wr.Height > 0)
+                    {
+                        self.DragWidth = wr.Width;
+                        self.DragHeight = wr.Height;
+                        self.HasDragSize = true;
+                    }
+                }
+                catch { /* ignore */ }
+
+                if (!self.IsMain && _latchedTo.TryGetValue(hwnd, out var existingRel))
+                {
+                    self.LatchedTargetHwnd = existingRel.TargetHwnd;
+                    self.LatchedSide = existingRel.Side;
+                }
 
                 // If Main begins dragging and has a cluster, snapshot member offsets from Main immediately.
                 try
                 {
-                    if (IsMainWindow(hwnd) && HasAnyLatchedChildren(hwnd) && TryGetWindowRect(hwnd, out var mainRect))
+                    if (self.IsMain && TryGetWindowRect(hwnd, out var mainRect))
                     {
-                        var members = GetClusterMembersIncludingRoot(hwnd);
-                        if (members.Count > 1)
+                        Dictionary<IntPtr, POINT>? map = null;
+                        if (HasAnyLatchedChildren(hwnd))
                         {
-                            var map = new Dictionary<IntPtr, POINT>(members.Count);
-                            foreach (var m in members)
+                            var members = GetClusterMembersIncludingRoot(hwnd);
+                            if (members.Count > 1)
                             {
-                                if (m == hwnd) continue;
-                                if (!TryGetWindowRect(m, out var r)) continue;
-                                map[m] = new POINT { X = r.Left - mainRect.Left, Y = r.Top - mainRect.Top };
+                                map = new Dictionary<IntPtr, POINT>(members.Count);
+                                foreach (var m in members)
+                                {
+                                    if (m == hwnd) continue;
+                                    if (!TryGetWindowRect(m, out var r)) continue;
+                                    map[m] = new POINT { X = r.Left - mainRect.Left, Y = r.Top - mainRect.Top };
+                                }
                             }
-                            self.ClusterOffsetsFromMainAtDragStart = map;
                         }
+                        else
+                        {
+                            map = SnapshotGaplessAdjacentOffsets(hwnd, mainRect);
+                        }
+
+                        if (map is { Count: > 0 })
+                            self.ClusterOffsetsFromMainAtDragStart = map;
                     }
                 }
                 catch { /* ignore */ }
@@ -306,62 +371,13 @@ public static class WindowSnapService
 
             if (msg == WM_EXITSIZEMOVE)
             {
-                try
+                if (!self.IsDragging)
                 {
-                    // "Settle" after interactive move: enforce exact gapless coordinates once.
-                    // This prevents small seams/drift caused by async window pos + rounding during heavy UI activity.
-                    if (IsMainWindow(hwnd))
-                    {
-                        if (TryGetWindowRect(hwnd, out var mr))
-                        {
-                            var offsets = self.ClusterOffsetsFromMainAtDragStart;
-                            if (offsets is not null && offsets.Count > 0)
-                            {
-                                System.Threading.Interlocked.Exchange(ref _clusterMoveGuard, 1);
-                                try
-                                {
-                                    foreach (var kv in offsets)
-                                    {
-                                        var child = kv.Key;
-                                        if (child == IntPtr.Zero) continue;
-                                        if (IsIconic(child) || !IsWindowVisible(child)) continue;
-
-                                        var desiredLeft = mr.Left + kv.Value.X;
-                                        var desiredTop = mr.Top + kv.Value.Y;
-                                        SetWindowPos(child, IntPtr.Zero, desiredLeft, desiredTop, 0, 0,
-                                            SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING);
-                                    }
-                                }
-                                finally
-                                {
-                                    System.Threading.Interlocked.Exchange(ref _clusterMoveGuard, 0);
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        if (_latchedTo.TryGetValue(hwnd, out var rel) &&
-                            rel.TargetHwnd != IntPtr.Zero &&
-                            TryGetWindowRect(hwnd, out var cr) &&
-                            TryGetWindowRect(rel.TargetHwnd, out var tr) &&
-                            TryComputeLatchedRect(cr, tr, rel.Side, rel.EdgeOffsetPx, out var desired))
-                        {
-                            SetWindowPos(hwnd, IntPtr.Zero, desired.Left, desired.Top, 0, 0,
-                                SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING);
-                            // Refresh stored offset from the settled final coordinates.
-                            rel.EdgeOffsetPx = ComputeEdgeOffset(desired, tr, rel.Side);
-                        }
-                    }
+                    handled = false;
+                    return IntPtr.Zero;
                 }
-                catch { /* ignore */ }
 
-                self.IsDragging = false;
-                self.LatchedTargetHwnd = IntPtr.Zero;
-                self.LatchedSide = SnapSide.None;
-                self.HasLastRaw = false;
-                self.HasLastApplied = false;
-                self.ClusterOffsetsFromMainAtDragStart = null;
+                EndInteractiveDragState(self, hwnd);
                 handled = false;
                 return IntPtr.Zero;
             }
@@ -373,6 +389,34 @@ public static class WindowSnapService
                 return IntPtr.Zero;
 
             if (!_enabled)
+                return IntPtr.Zero;
+
+            // Main + cluster: move children in lockstep with main (no timer / no snap scan).
+            if (self.IsMain && self.ClusterOffsetsFromMainAtDragStart is { Count: > 0 })
+            {
+                var clusterProposed = Marshal.PtrToStructure<RECT>(lParam);
+                if (clusterProposed.Width > 0 && clusterProposed.Height > 0)
+                    ApplyClusterFollowIfMainMoved(self, clusterProposed);
+                return IntPtr.Zero;
+            }
+
+            // Main with no cluster: skip all per-tick work unless a snap target could matter.
+            if (self.IsMain)
+            {
+                if (self.DragSnapHwnds is null || self.DragSnapHwnds.Count == 0)
+                    return IntPtr.Zero;
+
+                var proposedOnly = Marshal.PtrToStructure<RECT>(lParam);
+                if (proposedOnly.Width <= 0 || proposedOnly.Height <= 0)
+                    return IntPtr.Zero;
+
+                if (self.LatchedSide == SnapSide.None &&
+                    self.DragSnapTargetRects is { Count: > 0 } &&
+                    !IsWithinSnapScanRange(proposedOnly, self.DragSnapTargetRects))
+                    return IntPtr.Zero;
+            }
+
+            if (_clusterMoveGuard != 0)
                 return IntPtr.Zero;
 
             // Proposed rect (screen pixels).
@@ -388,19 +432,13 @@ public static class WindowSnapService
             {
                 if (GetCursorPos(out var p))
                 {
-                    // WM_MOVING rect size can be unreliable with borderless + WindowChrome + transparency.
-                    // Prefer the real current window size from Win32 if available.
-                    var w = proposed.Width;
-                    var h = proposed.Height;
-                    try
+                    var w = self.HasDragSize ? self.DragWidth : proposed.Width;
+                    var h = self.HasDragSize ? self.DragHeight : proposed.Height;
+                    if (w <= 0 || h <= 0)
                     {
-                        if (TryGetWindowRect(hwnd, out var curRect) && curRect.Width > 0 && curRect.Height > 0)
-                        {
-                            w = curRect.Width;
-                            h = curRect.Height;
-                        }
+                        w = proposed.Width;
+                        h = proposed.Height;
                     }
-                    catch { /* ignore */ }
 
                     var left = p.X - self.DragOffsetX;
                     var top = p.Y - self.DragOffsetY;
@@ -412,22 +450,65 @@ public static class WindowSnapService
             }
             catch { /* ignore */ }
 
-            // Gather viable targets: other registered windows that are visible and normal.
-            var targets = GetSnapTargets(hwnd);
-            if (targets.Count == 0)
-                return IntPtr.Zero;
-
-            // When dragging Main, don't snap against windows that are already in Main's own cluster.
-            // Otherwise Main can "snap to thin air" due to children temporarily lagging during cluster movement.
-            if (IsMainWindow(hwnd))
+            // Aux already latched: only need the latched target rect, not a full target scan.
+            if (!self.IsMain && self.LatchedSide != SnapSide.None && self.LatchedTargetHwnd != IntPtr.Zero)
             {
-                try
+                if (TryGetWindowRect(self.LatchedTargetHwnd, out var latchedTargetRect))
                 {
-                    targets = targets.Where(t => !IsInCluster(t.hwnd, rootLeaderHwnd: hwnd)).ToList();
+                    if (ShouldDetach(raw, latchedTargetRect, self.LatchedSide))
+                    {
+                        self.LatchedSide = SnapSide.None;
+                        self.LatchedTargetHwnd = IntPtr.Zero;
+                        _latchedTo.TryRemove(hwnd, out _);
+                    }
+                    else
+                    {
+                        proposed = raw;
+                        if (ApplyLatchedMove(ref proposed, latchedTargetRect, self.LatchedSide, allowAlignMagnets: true))
+                        {
+                            _latchedTo[hwnd] = new LatchRelation
+                            {
+                                TargetHwnd = self.LatchedTargetHwnd,
+                                Side = self.LatchedSide,
+                                EdgeOffsetPx = ComputeEdgeOffset(proposed, latchedTargetRect, self.LatchedSide)
+                            };
+                            Marshal.StructureToPtr(proposed, lParam, fDeleteOld: false);
+                            handled = true;
+                            self.LastRaw = raw;
+                            self.HasLastRaw = true;
+                            self.LastApplied = proposed;
+                            self.HasLastApplied = true;
+                            return IntPtr.Zero;
+                        }
+                    }
                 }
-                catch { /* ignore */ }
-                // If nothing outside the cluster exists, we still need cluster-follow to run.
-                // An empty target list just means "no snapping targets this tick".
+                else
+                {
+                    self.LatchedSide = SnapSide.None;
+                    self.LatchedTargetHwnd = IntPtr.Zero;
+                    _latchedTo.TryRemove(hwnd, out _);
+                }
+            }
+
+            var targets = BuildLiveSnapTargetsFromDragCache(self, hwnd);
+            if (targets.Count == 0)
+            {
+                TryMoveClusterIfMainLeader(self, hwnd, raw);
+                self.LastRaw = raw;
+                self.HasLastRaw = true;
+                self.LastApplied = raw;
+                self.HasLastApplied = true;
+                return IntPtr.Zero;
+            }
+
+            if (self.LatchedSide == SnapSide.None && !IsWithinSnapScanRange(raw, targets))
+            {
+                TryMoveClusterIfMainLeader(self, hwnd, raw);
+                self.LastRaw = raw;
+                self.HasLastRaw = true;
+                self.LastApplied = raw;
+                self.HasLastApplied = true;
+                return IntPtr.Zero;
             }
 
             // If we are latched, enforce latch with snap-out hysteresis.
@@ -446,7 +527,7 @@ public static class WindowSnapService
                     {
                         // Still latched: apply the constraint (gapless touch + optional align magnets).
                         proposed = raw;
-                        if (ApplyLatchedMove(ref proposed, targetRect, self.LatchedSide, allowAlignMagnets: !IsMainWindow(hwnd)))
+                        if (ApplyLatchedMove(ref proposed, targetRect, self.LatchedSide, allowAlignMagnets: !self.IsMain))
                         {
                             // Persist the relation so clusters follow when the target is moved.
                             _latchedTo[hwnd] = new LatchRelation
@@ -486,7 +567,7 @@ public static class WindowSnapService
 
                 // Apply the latch immediately.
                 proposed = raw;
-                if (ApplyLatchedMove(ref proposed, latch.targetRect, latch.side, allowAlignMagnets: !IsMainWindow(hwnd)))
+                if (ApplyLatchedMove(ref proposed, latch.targetRect, latch.side, allowAlignMagnets: !self.IsMain))
                 {
                     _latchedTo[hwnd] = new LatchRelation
                     {
@@ -495,8 +576,7 @@ public static class WindowSnapService
                         EdgeOffsetPx = ComputeEdgeOffset(proposed, latch.targetRect, latch.side)
                     };
                     // If Main snaps onto an existing cluster, Main should become the leader.
-                    // Convert "Main latched to X" into "X latched to Main" so the cluster sticks to Main.
-                    if (IsMainWindow(hwnd))
+                    if (self.IsMain)
                         PromoteMainToLeader(hwnd, latch.targetHwnd, latch.side);
 
                     TryMoveClusterIfMainLeader(self, hwnd, proposed);
@@ -523,53 +603,303 @@ public static class WindowSnapService
         }
     }
 
+    private static void EndInteractiveDragState(SnapWindow self, IntPtr hwnd)
+    {
+        try
+        {
+            if (self.IsMain)
+            {
+                if (TryGetWindowRect(hwnd, out var mr))
+                {
+                    var offsets = self.ClusterOffsetsFromMainAtDragStart;
+                    if (offsets is not null && offsets.Count > 0)
+                        ApplyClusterOffsetsImmediate(mr, offsets, interactive: false);
+                }
+            }
+            else
+            {
+                if (_latchedTo.TryGetValue(hwnd, out var rel) &&
+                    rel.TargetHwnd != IntPtr.Zero &&
+                    TryGetWindowRect(hwnd, out var cr) &&
+                    TryGetWindowRect(rel.TargetHwnd, out var tr) &&
+                    TryComputeLatchedRect(cr, tr, rel.Side, rel.EdgeOffsetPx, out var desired))
+                {
+                    SetWindowPos(hwnd, IntPtr.Zero, desired.Left, desired.Top, 0, 0,
+                        SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING);
+                    rel.EdgeOffsetPx = ComputeEdgeOffset(desired, tr, rel.Side);
+                }
+            }
+        }
+        catch { /* ignore */ }
+
+        self.IsDragging = false;
+        self.LatchedTargetHwnd = IntPtr.Zero;
+        self.LatchedSide = SnapSide.None;
+        self.HasLastRaw = false;
+        self.HasLastApplied = false;
+        self.HasLastClusterMain = false;
+        self.HasDragSize = false;
+        self.DragSnapHwnds = null;
+        self.DragSnapTargetRects = null;
+        self.ClusterOffsetsFromMainAtDragStart = null;
+        if (System.Threading.Interlocked.Decrement(ref _activeDragCount) < 0)
+            System.Threading.Interlocked.Exchange(ref _activeDragCount, 0);
+    }
+
+    private static void ApplyClusterFollowIfMainMoved(SnapWindow self, RECT mainRect)
+    {
+        var offsets = self.ClusterOffsetsFromMainAtDragStart;
+        if (offsets is null || offsets.Count == 0)
+            return;
+        if (self.HasLastClusterMain &&
+            self.LastClusterMainLeft == mainRect.Left &&
+            self.LastClusterMainTop == mainRect.Top)
+            return;
+
+        self.HasLastClusterMain = true;
+        self.LastClusterMainLeft = mainRect.Left;
+        self.LastClusterMainTop = mainRect.Top;
+        ApplyClusterOffsetsImmediate(mainRect, offsets, interactive: true);
+    }
+
     private static void TryMoveClusterIfMainLeader(SnapWindow self, IntPtr hwnd, RECT finalRect)
     {
         try
         {
             if (_clusterMoveGuard != 0)
                 return;
-            if (!HasAnyLatchedChildren(hwnd))
-                return;
-            if (!IsMainWindow(hwnd))
+            if (!self.IsMain)
                 return;
 
-            // Prefer the drag-start offsets snapshot if available; it's more stable than any evolving latch tree.
             var offsets = self.ClusterOffsetsFromMainAtDragStart;
-            if (offsets is not null && offsets.Count > 0)
+            if (offsets is null || offsets.Count == 0)
             {
-                System.Threading.Interlocked.Exchange(ref _clusterMoveGuard, 1);
-                try
-                {
-                    foreach (var kv in offsets)
-                    {
-                        var child = kv.Key;
-                        if (child == IntPtr.Zero) continue;
-                        if (IsIconic(child) || !IsWindowVisible(child)) continue;
-
-                        var desiredLeft = finalRect.Left + kv.Value.X;
-                        var desiredTop = finalRect.Top + kv.Value.Y;
-
-                        if (TryGetWindowRect(child, out var cr) && cr.Left == desiredLeft && cr.Top == desiredTop)
-                            continue;
-
-                        SetWindowPos(child, IntPtr.Zero, desiredLeft, desiredTop, 0, 0,
-                            SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_ASYNCWINDOWPOS);
-                    }
-                }
-                finally
-                {
-                    System.Threading.Interlocked.Exchange(ref _clusterMoveGuard, 0);
-                }
+                if (!HasAnyLatchedChildren(hwnd))
+                    return;
+                TryMoveLatchedCluster(hwnd, finalRect);
                 return;
             }
 
-            // Fallback: compute from latch relations.
-            TryMoveLatchedCluster(hwnd, finalRect);
+            if (self.HasLastClusterMain &&
+                self.LastClusterMainLeft == finalRect.Left &&
+                self.LastClusterMainTop == finalRect.Top)
+                return;
+
+            self.HasLastClusterMain = true;
+            self.LastClusterMainLeft = finalRect.Left;
+            self.LastClusterMainTop = finalRect.Top;
+            ApplyClusterOffsetsImmediate(finalRect, offsets, interactive: self.IsDragging);
         }
         catch
         {
             // ignore
+        }
+    }
+
+    private static void ApplyClusterOffsetsImmediate(RECT finalRect, Dictionary<IntPtr, POINT> offsets, bool interactive = false)
+    {
+        System.Threading.Interlocked.Exchange(ref _clusterMoveGuard, 1);
+        try
+        {
+            var flags = SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING;
+            if (!interactive)
+                flags |= SWP_ASYNCWINDOWPOS;
+
+            if (interactive)
+            {
+                ApplyClusterOffsetsFallback(finalRect, offsets, flags);
+                return;
+            }
+
+            var count = 0;
+            foreach (var kv in offsets)
+            {
+                var child = kv.Key;
+                if (child == IntPtr.Zero) continue;
+                if (IsIconic(child) || !IsWindowVisible(child)) continue;
+                count++;
+            }
+
+            if (count <= 0)
+                return;
+
+            var hdwp = BeginDeferWindowPos(count);
+            if (hdwp == IntPtr.Zero)
+            {
+                ApplyClusterOffsetsFallback(finalRect, offsets, flags);
+                return;
+            }
+
+            var deferOk = true;
+            foreach (var kv in offsets)
+            {
+                var child = kv.Key;
+                if (child == IntPtr.Zero) continue;
+                if (IsIconic(child) || !IsWindowVisible(child)) continue;
+
+                var desiredLeft = finalRect.Left + kv.Value.X;
+                var desiredTop = finalRect.Top + kv.Value.Y;
+
+                hdwp = DeferWindowPos(hdwp, child, IntPtr.Zero, desiredLeft, desiredTop, 0, 0, flags);
+                if (hdwp == IntPtr.Zero)
+                {
+                    deferOk = false;
+                    break;
+                }
+            }
+
+            if (deferOk && hdwp != IntPtr.Zero)
+            {
+                if (!EndDeferWindowPos(hdwp))
+                    ApplyClusterOffsetsFallback(finalRect, offsets, flags);
+            }
+            else
+            {
+                ApplyClusterOffsetsFallback(finalRect, offsets, flags);
+            }
+        }
+        finally
+        {
+            System.Threading.Interlocked.Exchange(ref _clusterMoveGuard, 0);
+        }
+    }
+
+    private static void ApplyClusterOffsetsFallback(RECT finalRect, Dictionary<IntPtr, POINT> offsets, uint flags)
+    {
+        foreach (var kv in offsets)
+        {
+            var child = kv.Key;
+            if (child == IntPtr.Zero) continue;
+            if (IsIconic(child) || !IsWindowVisible(child)) continue;
+
+            var desiredLeft = finalRect.Left + kv.Value.X;
+            var desiredTop = finalRect.Top + kv.Value.Y;
+            SetWindowPos(child, IntPtr.Zero, desiredLeft, desiredTop, 0, 0, flags);
+        }
+    }
+
+    private static List<(IntPtr hwnd, bool isMain)> BuildDragSnapHwndList(IntPtr excludeHwnd)
+    {
+        var list = new List<(IntPtr hwnd, bool isMain)>(8);
+        foreach (var kv in _windows)
+        {
+            var hwnd = kv.Key;
+            if (hwnd == IntPtr.Zero || hwnd == excludeHwnd)
+                continue;
+            if (kv.Value.WindowRef.TryGetTarget(out var win) && win is Window { IsVisible: false })
+                continue;
+            if (!IsWindowVisible(hwnd) || IsIconic(hwnd))
+                continue;
+            list.Add((hwnd, kv.Value.IsMain));
+        }
+        return list;
+    }
+
+    private static List<(IntPtr hwnd, RECT rect)> SnapshotDragSnapTargetRects(List<(IntPtr hwnd, bool isMain)>? hwnds)
+    {
+        if (hwnds is null || hwnds.Count == 0)
+            return new List<(IntPtr hwnd, RECT rect)>(0);
+
+        var list = new List<(IntPtr hwnd, RECT rect)>(hwnds.Count);
+        foreach (var (hwnd, _) in hwnds)
+        {
+            if (!TryGetWindowRect(hwnd, out var r) || r.Width <= 1 || r.Height <= 1)
+                continue;
+            list.Add((hwnd, r));
+        }
+        return list;
+    }
+
+    private static bool IsWithinSnapScanRange(RECT moving, List<(IntPtr hwnd, RECT rect)> targets)
+    {
+        var threshold = SnapInPx + SnapScanMarginPx;
+        foreach (var t in targets)
+        {
+            var tr = t.rect;
+            if (Math.Abs(moving.Left - tr.Right) <= threshold && HasVerticalOverlap(moving, tr))
+                return true;
+            if (Math.Abs(moving.Right - tr.Left) <= threshold && HasVerticalOverlap(moving, tr))
+                return true;
+            if (Math.Abs(moving.Top - tr.Bottom) <= threshold && HasHorizontalOverlap(moving, tr))
+                return true;
+            if (Math.Abs(moving.Bottom - tr.Top) <= threshold && HasHorizontalOverlap(moving, tr))
+                return true;
+        }
+        return false;
+    }
+
+    private static List<(IntPtr hwnd, RECT rect, bool isMain)> BuildLiveSnapTargetsFromDragCache(SnapWindow self, IntPtr movingHwnd)
+    {
+        var cache = self.DragSnapHwnds;
+        if (cache is null || cache.Count == 0)
+            return new List<(IntPtr hwnd, RECT rect, bool isMain)>(0);
+
+        var list = new List<(IntPtr hwnd, RECT rect, bool isMain)>(cache.Count);
+        foreach (var (thwnd, isMain) in cache)
+        {
+            if (self.IsMain && IsInCluster(thwnd, movingHwnd))
+                continue;
+            if (!TryGetWindowRect(thwnd, out var r) || r.Width <= 1 || r.Height <= 1)
+                continue;
+            if (!IsWindowVisible(thwnd) || IsIconic(thwnd))
+                continue;
+            list.Add((thwnd, r, isMain));
+        }
+        return list;
+    }
+
+    private static bool IsWithinSnapScanRange(RECT moving, List<(IntPtr hwnd, RECT rect, bool isMain)> targets)
+    {
+        var threshold = SnapInPx + SnapScanMarginPx;
+        foreach (var t in targets)
+        {
+            var tr = t.rect;
+            if (Math.Abs(moving.Left - tr.Right) <= threshold && HasVerticalOverlap(moving, tr))
+                return true;
+            if (Math.Abs(moving.Right - tr.Left) <= threshold && HasVerticalOverlap(moving, tr))
+                return true;
+            if (Math.Abs(moving.Top - tr.Bottom) <= threshold && HasHorizontalOverlap(moving, tr))
+                return true;
+            if (Math.Abs(moving.Bottom - tr.Top) <= threshold && HasHorizontalOverlap(moving, tr))
+                return true;
+        }
+        return false;
+    }
+
+    private static Dictionary<IntPtr, POINT>? SnapshotGaplessAdjacentOffsets(IntPtr mainHwnd, RECT mainRect)
+    {
+        try
+        {
+            Dictionary<IntPtr, POINT>? map = null;
+            foreach (var kv in _windows)
+            {
+                var hwnd = kv.Key;
+                if (hwnd == IntPtr.Zero || hwnd == mainHwnd)
+                    continue;
+                if (kv.Value.IsMain)
+                    continue;
+                if (!TryGetWindowRect(hwnd, out var r))
+                    continue;
+                if (IsIconic(hwnd) || !IsWindowVisible(hwnd))
+                    continue;
+
+                var gapless =
+                    (Math.Abs(r.Left - mainRect.Right) <= RestoreAdjacencyPx && HasVerticalOverlap(r, mainRect)) ||
+                    (Math.Abs(r.Right - mainRect.Left) <= RestoreAdjacencyPx && HasVerticalOverlap(r, mainRect)) ||
+                    (Math.Abs(r.Top - mainRect.Bottom) <= RestoreAdjacencyPx && HasHorizontalOverlap(r, mainRect)) ||
+                    (Math.Abs(r.Bottom - mainRect.Top) <= RestoreAdjacencyPx && HasHorizontalOverlap(r, mainRect));
+                if (!gapless)
+                    continue;
+
+                map ??= new Dictionary<IntPtr, POINT>(4);
+                map[hwnd] = new POINT { X = r.Left - mainRect.Left, Y = r.Top - mainRect.Top };
+            }
+
+            return map;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -1184,5 +1514,14 @@ public static class WindowSnapService
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr BeginDeferWindowPos(int nNumWindows);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr DeferWindowPos(IntPtr hWinPosInfo, IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool EndDeferWindowPos(IntPtr hWinPosInfo);
 }
 

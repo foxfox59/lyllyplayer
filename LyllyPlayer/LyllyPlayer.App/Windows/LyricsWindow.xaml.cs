@@ -170,7 +170,16 @@ public partial class LyricsWindow : Window
 
     private void ChromeBar_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        try { if (e.ClickCount == 2) return; DragMove(); } catch { /* ignore */ }
+        try
+        {
+            if (e.ClickCount == 2) return;
+            DragMove();
+        }
+        catch { /* ignore */ }
+        finally
+        {
+            try { WindowSnapService.EnsureInteractiveDragEnded(this); } catch { /* ignore */ }
+        }
     }
 
     private void ChromeCloseButton_OnClick(object sender, RoutedEventArgs e)

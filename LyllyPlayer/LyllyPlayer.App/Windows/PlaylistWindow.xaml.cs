@@ -609,6 +609,10 @@ public partial class PlaylistWindow : Window
         {
             // ignore
         }
+        finally
+        {
+            try { WindowSnapService.EnsureInteractiveDragEnded(this); } catch { /* ignore */ }
+        }
     }
 
     // Legacy manual drag handlers removed (DragMove is used instead).

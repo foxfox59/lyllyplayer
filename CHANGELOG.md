@@ -1,5 +1,7 @@
 ### What's new, pussycat?
 
+- 2.6.5:
+  - Window dragging should be a bit less CPU intensive
 - 2.6.4:
   - Focus on last added playlist item even if it was a duplicate
 - 2.6.3:
