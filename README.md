@@ -18,6 +18,7 @@ A desktop audio player for YouTube, streams and local files
 
 - Lyrics matching from LRCLIB is still very much a work in progress. It mostly works, but occasionally gets incorrect results.
 - DisplayFusion has a slight conflict/race situation with how LyllyPlayer handles "always on top" - for now, use the Compatibility settings in DF. I'm going to fix this at some point, just not right now.
+- Dragging the windows still causes CPU to spike - would need a more thorough rework of app surfaces
 
 ---
 
