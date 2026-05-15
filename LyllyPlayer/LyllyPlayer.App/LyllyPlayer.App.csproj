@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Version>2.6.5</Version>
+    <Version>2.6.6</Version>
     <AssemblyTitle>LyllyPlayer</AssemblyTitle>
     <Product>LyllyPlayer</Product>
     <Company>MuiluFox</Company>
@@ -10,7 +10,16 @@
     <OutputType>WinExe</OutputType>
     <!-- net8.0-windows: WPF on Windows 10+. Local build/run uses the shared runtime if installed (no bundled runtime). -->
     <!-- Shipping to bare Windows (no .NET SDK/runtime): only dotnet publish with Win10-SelfContained.pubxml or repo-root publish-win10-selfcontained.cmd. -->
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- Versioned TFM: WinRT (SMTC). LibVLCSharp also references WindowsAppSDK on this TFM — bootstrap disabled below. -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableCoreMrtTooling>false</EnableCoreMrtTooling>
+    <EnableDefaultWindowsAppSdkContentItems>false</EnableDefaultWindowsAppSdkContentItems>
+    <EnableDefaultWindowsAppSdkPRIResourceItems>false</EnableDefaultWindowsAppSdkPRIResourceItems>
+    <AppxGeneratePriEnabled>false</AppxGeneratePriEnabled>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
@@ -41,6 +50,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Satisfy LibVLCSharp's dependency without injecting bootstrap auto-init at startup -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.5.240627000">
+      <ExcludeAssets>all</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="2.0.1" />
     <PackageReference Include="LibVLCSharp" Version="3.9.2" />
     <PackageReference Include="NAudio" Version="2.3.0" />

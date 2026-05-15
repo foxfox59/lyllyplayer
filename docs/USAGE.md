@@ -52,9 +52,12 @@ When **Read metadata on load** is enabled for folders/M3U, the app probes **dura
 
 ### Global media keys (optional)
 
-In **Options → System**, **Enable global media keys** registers a low-level hook so **Play/Pause**, **Next**, and **Previous** media keys control LyllyPlayer even when it is not focused.
+In **Options → System**, **Enable global media keys** registers:
 
-Note from the implementation: the hook consumes those keys (other apps may not see them). If another media tool “wins” instead, try restarting LyllyPlayer after that tool.
+- A low-level keyboard hook so **Play/Pause**, **Next**, and **Previous** media keys control LyllyPlayer even when it is not focused.
+- **System Media Transport Controls** (when supported on your PC) so Bluetooth headsets and lock-screen transport can target LyllyPlayer while it is playing. Transport only (no rich Now Playing flyout).
+
+Note: the keyboard hook consumes those keys (other apps may not see them). If another media app “wins” instead, try restarting LyllyPlayer after that app. Headset buttons that route through Windows’ media session use the transport path, not the keyboard hook.
 
 ---
 

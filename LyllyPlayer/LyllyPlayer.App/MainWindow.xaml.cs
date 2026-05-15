@@ -611,6 +611,10 @@ public partial class MainWindow : Window
     private string? _loadedPlaylistId;
     private bool _globalMediaKeysEnabled;
     private GlobalMediaHotkeys? _mediaHotkeys;
+    private SystemMediaTransportService? _mediaTransport;
+    private bool _mediaTransportEventsWired;
+    private bool _lastEngineIsPlayingForSmtc;
+    private long _lastExternalMediaCommandTick;
     private readonly Random _rng = new();
     private bool _ignoreSeekBar;
     private bool _isSeeking;
@@ -1156,6 +1160,7 @@ public partial class MainWindow : Window
                     }
                 }
                 catch { /* ignore */ }
+                try { SyncSystemMediaTransportSession(); } catch { /* ignore */ }
             });
         _engine.PlaybackFailed += (_, payload) =>
             Dispatcher.Invoke(() => HandlePlaybackFailed(payload.entry, payload.message));
@@ -1415,6 +1420,12 @@ public partial class MainWindow : Window
             // Restore minimized auxiliaries even when activation came from a click (RaiseAux is mouse-gated).
             try { TryRestoreAuxAfterTopTaskbarMinimize(); } catch { /* ignore */ }
             QueueRaiseAuxWindowsOnce();
+            try
+            {
+                if (_globalMediaKeysEnabled && _engine.IsPlaying)
+                    SyncSystemMediaTransportSession(reclaimFocus: true);
+            }
+            catch { /* ignore */ }
             // (Startup tray gap workaround runs in ContentRendered.)
         };
         ContentRendered += (_, _) =>
@@ -1518,6 +1529,10 @@ public partial class MainWindow : Window
             try { _persistTimer.Stop(); } catch { /* ignore */ }
             try { _refreshTimer?.Stop(); } catch { /* ignore */ }
             try { _mediaHotkeys?.Dispose(); } catch { /* ignore */ }
+            UnwireSystemMediaTransportEvents();
+            try { _mediaTransport?.Dispose(); } catch { /* ignore */ }
+            _mediaTransport = null;
+            _lastEngineIsPlayingForSmtc = false;
             try
             {
                 var hwnd = new WindowInteropHelper(this).Handle;
@@ -1811,13 +1826,15 @@ public partial class MainWindow : Window
             {
                 try { _mediaHotkeys?.Dispose(); } catch { /* ignore */ }
                 _mediaHotkeys = null;
+                UnwireSystemMediaTransportEvents();
+                try { _mediaTransport?.Dispose(); } catch { /* ignore */ }
+                _mediaTransport = null;
+                _lastEngineIsPlayingForSmtc = false;
                 return;
             }
 
-            if (_mediaHotkeys is not null)
-                return;
-
-            InitializeGlobalMediaKeys();
+            if (_mediaHotkeys is null)
+                InitializeGlobalMediaKeys();
         }
         catch
         {
@@ -3237,9 +3254,9 @@ public partial class MainWindow : Window
                 return;
 
             _mediaHotkeys = new GlobalMediaHotkeys(hwnd);
-            _mediaHotkeys.PlayPausePressed += (_, _) => Dispatcher.Invoke(OnGlobalPlayPause);
-            _mediaHotkeys.NextPressed += (_, _) => Dispatcher.Invoke(NavigateNextFromResolverBestEffort);
-            _mediaHotkeys.PrevPressed += (_, _) => Dispatcher.Invoke(() => NavigatePreviousFromHistoryBestEffort());
+            _mediaHotkeys.PlayPausePressed += (_, _) => Dispatcher.Invoke(OnExternalMediaPlayPause);
+            _mediaHotkeys.NextPressed += (_, _) => Dispatcher.Invoke(OnExternalMediaNext);
+            _mediaHotkeys.PrevPressed += (_, _) => Dispatcher.Invoke(OnExternalMediaPrevious);
 
             _mediaHotkeys.TryRegister();
         }
@@ -3247,6 +3264,144 @@ public partial class MainWindow : Window
         {
             // ignore
         }
+    }
+
+    private void UnwireSystemMediaTransportEvents()
+    {
+        if (!_mediaTransportEventsWired || _mediaTransport is null)
+            return;
+
+        try
+        {
+            _mediaTransport.PlayPausePressed -= OnSmtcPlayPause;
+            _mediaTransport.NextPressed -= OnSmtcNext;
+            _mediaTransport.PrevPressed -= OnSmtcPrevious;
+        }
+        catch { /* ignore */ }
+
+        _mediaTransportEventsWired = false;
+    }
+
+    private bool EnsureSystemMediaTransportService()
+    {
+        if (!_globalMediaKeysEnabled)
+            return false;
+
+        if (!IsLoaded)
+            return _mediaTransport?.IsAvailable == true;
+
+        try
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero)
+                return false;
+
+            _mediaTransport ??= new SystemMediaTransportService();
+            if (!_mediaTransport.TryInitialize(hwnd))
+            {
+                try { _mediaTransport.Dispose(); } catch { /* ignore */ }
+                _mediaTransport = null;
+                _mediaTransportEventsWired = false;
+                return false;
+            }
+
+            if (!_mediaTransportEventsWired)
+            {
+                _mediaTransport.PlayPausePressed += OnSmtcPlayPause;
+                _mediaTransport.NextPressed += OnSmtcNext;
+                _mediaTransport.PrevPressed += OnSmtcPrevious;
+                _mediaTransportEventsWired = true;
+            }
+
+            return true;
+        }
+        catch
+        {
+            try { _mediaTransport?.Dispose(); } catch { /* ignore */ }
+            _mediaTransport = null;
+            _mediaTransportEventsWired = false;
+            return false;
+        }
+    }
+
+    private void OnSmtcPlayPause(object? sender, EventArgs e) =>
+        Dispatcher.BeginInvoke(OnExternalMediaPlayPause, DispatcherPriority.Normal);
+
+    private void OnSmtcNext(object? sender, EventArgs e) =>
+        Dispatcher.BeginInvoke(OnExternalMediaNext, DispatcherPriority.Normal);
+
+    private void OnSmtcPrevious(object? sender, EventArgs e) =>
+        Dispatcher.BeginInvoke(OnExternalMediaPrevious, DispatcherPriority.Normal);
+
+    private void SyncSystemMediaTransportSession(bool reclaimFocus = false)
+    {
+        if (!_globalMediaKeysEnabled)
+            return;
+
+        try
+        {
+            var cur = _engine.GetCurrent();
+            var isPlaying = _engine.IsPlaying;
+            var hasTrack = cur is not null;
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero || !IsLoaded)
+                return;
+
+            var startedPlaying = isPlaying && !_lastEngineIsPlayingForSmtc;
+            _lastEngineIsPlayingForSmtc = isPlaying;
+
+            var shouldActivate = hasTrack && (reclaimFocus || startedPlaying);
+            if (shouldActivate)
+            {
+                _mediaTransport ??= new SystemMediaTransportService();
+                if (!_mediaTransportEventsWired)
+                {
+                    _mediaTransport.PlayPausePressed += OnSmtcPlayPause;
+                    _mediaTransport.NextPressed += OnSmtcNext;
+                    _mediaTransport.PrevPressed += OnSmtcPrevious;
+                    _mediaTransportEventsWired = true;
+                }
+
+                _mediaTransport.ActivateForPlayback(hwnd, hasTrack, isPlaying, cur?.Title, cur?.Channel);
+                return;
+            }
+
+            if (!EnsureSystemMediaTransportService() || _mediaTransport is null)
+                return;
+
+            _mediaTransport.UpdateSession(hasTrack, isPlaying, cur?.Title, cur?.Channel);
+        }
+        catch { /* ignore */ }
+    }
+
+    private bool TryConsumeExternalMediaCommand()
+    {
+        var now = Environment.TickCount64;
+        if (now - _lastExternalMediaCommandTick < 350)
+            return false;
+        _lastExternalMediaCommandTick = now;
+        return true;
+    }
+
+    private void OnExternalMediaPlayPause()
+    {
+        if (!TryConsumeExternalMediaCommand())
+            return;
+        OnGlobalPlayPause();
+    }
+
+    private void OnExternalMediaNext()
+    {
+        if (!TryConsumeExternalMediaCommand())
+            return;
+        NavigateNextFromResolverBestEffort();
+    }
+
+    private void OnExternalMediaPrevious()
+    {
+        if (!TryConsumeExternalMediaCommand())
+            return;
+        NavigatePreviousFromHistoryBestEffort();
     }
 
     private void NavigatePreviousFromHistoryBestEffort()
@@ -3721,11 +3876,13 @@ public partial class MainWindow : Window
         _seekMouseDownVideoId = null;
         try { SeekSlider.ReleaseMouseCapture(); } catch { /* ignore */ }
 
+        var reclaimMediaFocus = false;
         if (entry is not null)
         {
             try { AppLog.Warn("NowPlayingChanged(UI): entry_not_null"); } catch { /* ignore */ }
             var isSameTrack = _nowPlayingEntry is not null &&
                 string.Equals(entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase);
+            reclaimMediaFocus = !isSameTrack;
 
             if (_nowPlayingEntry is not null && !isSameTrack && !_suppressPreviousTrackHistoryPushOnce && !_shuffleEnabled)
             {
@@ -3815,6 +3972,7 @@ public partial class MainWindow : Window
             SelectAndScrollToNowPlaying(entry);
         try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
         UpdateDurationUi(entry?.DurationSeconds ?? _engine.CurrentDurationSeconds);
+        try { SyncSystemMediaTransportSession(reclaimMediaFocus); } catch { /* ignore */ }
         try { AppLog.Warn("NowPlayingChanged(UI): end"); } catch { /* ignore */ }
     }
 
@@ -6056,10 +6214,35 @@ public partial class MainWindow : Window
     {
         const int WM_STYLECHANGED = 0x007D;
         const int WM_SYSCOMMAND = 0x0112;
+        const int WM_APPCOMMAND = 0x0319;
         const int SC_MINIMIZE = 0xF020;
         const int SC_RESTORE = 0xF120;
 
         // Tray icon messages are handled by the dedicated tray message HWND.
+
+        if (msg == WM_APPCOMMAND && _globalMediaKeysEnabled)
+        {
+            try
+            {
+                var cmd = ((int)((long)lParam >> 16)) & ~0xF000;
+                switch (cmd)
+                {
+                    case 14: // APPCOMMAND_MEDIA_PLAY_PAUSE
+                        Dispatcher.BeginInvoke(OnExternalMediaPlayPause);
+                        handled = true;
+                        return IntPtr.Zero;
+                    case 11: // APPCOMMAND_MEDIA_NEXTTRACK
+                        Dispatcher.BeginInvoke(OnExternalMediaNext);
+                        handled = true;
+                        return IntPtr.Zero;
+                    case 12: // APPCOMMAND_MEDIA_PREVIOUSTRACK
+                        Dispatcher.BeginInvoke(OnExternalMediaPrevious);
+                        handled = true;
+                        return IntPtr.Zero;
+                }
+            }
+            catch { /* ignore */ }
+        }
 
         // Taskbar click on an already-active window should minimize it (normal Windows behavior).
         // However, when TOP is enabled we keep the app visible (treat TOP as "stay up").
