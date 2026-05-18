@@ -1,5 +1,9 @@
 ### What's new, pussycat?
 
+- 2.8.1:
+  - Fixed an issue where seeking would lower volume
+  - Fixed an issue with seek bar being disabled on app launch
+  - Fixed an issue where hitting Play after app launch would freeze 
 - 2.8.0:
   - Fixed an UI thread deadlock that would occasionally cause the app to freeze
   - Fixed VU meters being laggy and out of sync on some occasions

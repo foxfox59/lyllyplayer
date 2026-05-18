@@ -99,9 +99,11 @@ public static class LibVlcHost
     {
         get
         {
+            // Never hold Gate while marshaling onto the LibVLC STA thread — another thread may already
+            // be inside RunOnUiThread waiting for that thread, which then needs Gate (classic deadlock).
+            EnsureInitialized();
             lock (Gate)
             {
-                EnsureInitialized();
                 return _libVlc!;
             }
         }

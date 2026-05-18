@@ -21,10 +21,14 @@ public partial class App : System.Windows.Application
         // Before any HWND: stable shell identity (taskbar / Task Manager "Apps" grouping).
         ShellProcessIdentity.TrySetExplicitAppUserModelId();
 
-        // LibVLC native runtime (VideoLAN.LibVLC.Windows) + LibVLCSharp must initialize before Media/MediaPlayer.
-        try { LibVlcHost.EnsureInitialized(); } catch { /* logged on first real use */ }
-
         base.OnStartup(e);
+
+        // LibVLC native runtime (VideoLAN.LibVLC.Windows) + LibVLCSharp must initialize before Media/MediaPlayer.
+        // Do not block the WPF dispatcher here — init runs on the dedicated LibVLC STA thread.
+        _ = Task.Run(() =>
+        {
+            try { LibVlcHost.EnsureInitialized(); } catch { /* logged on first real use */ }
+        });
 
         // Primary instance only: start IPC server for Explorer "open with" / file associations.
         try

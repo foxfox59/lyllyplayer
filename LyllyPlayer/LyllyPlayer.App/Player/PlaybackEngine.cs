@@ -156,7 +156,13 @@ public sealed partial class PlaybackEngine : IDisposable
         }
     }
     public int? CurrentDurationSeconds => _currentDurationSeconds;
-    public (float vuL, float vuR, float[] bands) GetAudioAnalysisSnapshot() => _analyzer.GetSnapshot();
+    public (float vuL, float vuR, float[] bands) GetAudioAnalysisSnapshot()
+    {
+        // Paused / stopped: do not show decaying stale levels from the last decode session.
+        if (!_pauseGate.IsSet)
+            return (0f, 0f, new float[AudioAnalyzer.SpectrumBands]);
+        return _analyzer.GetSnapshot();
+    }
 
     public event EventHandler<PlaylistEntry?>? NowPlayingChanged;
     public event EventHandler<int>? CurrentDurationSecondsChanged;
@@ -205,14 +211,39 @@ public sealed partial class PlaybackEngine : IDisposable
             if (_vlcMp is null)
                 return;
 
-            lock (_vlcGate)
-            {
-                // When LibVLC audio callbacks are enabled, LibVLC is not the audible output device.
-                // Apply volume only on our WaveOut sink to avoid double-scaling / non-linear behavior.
-                _vlcMp.Volume = _playbackUsesWaveOutSink ? 100 : (int)Math.Clamp(_volume * 100.0, 0, 100);
-            }
+            var waveOutSink = _playbackUsesWaveOutSink;
+            if (!waveOutSink && _lastResolvedForWarmup is { } resolved)
+                waveOutSink = RequiresVlcWaveOutSink(resolved);
+
+            _ = TryApplyPlaybackVolumeToVlcLocked(waveOutSink);
         }
         catch { /* ignore */ }
+    }
+
+    /// <returns><see langword="true"/> when volume was applied; <see langword="false"/> when <see cref="_vlcGate"/> was busy.</returns>
+    private bool TryApplyPlaybackVolumeToVlcLocked(bool waveOutSink)
+    {
+        if (_vlcMp is null)
+            return true;
+
+        if (!Monitor.TryEnter(_vlcGate))
+            return false;
+
+        try
+        {
+            if (_vlcMp is null)
+                return true;
+
+            // When LibVLC audio callbacks are enabled, LibVLC is not the audible output device.
+            // Apply volume only on our WaveOut sink. Never leave LibVLC muted or at a low level after seek.
+            _vlcMp.Volume = waveOutSink ? 100 : (int)Math.Clamp(_volume * 100.0, 0, 100);
+            try { _vlcMp.Mute = false; } catch { /* ignore */ }
+            return true;
+        }
+        finally
+        {
+            Monitor.Exit(_vlcGate);
+        }
     }
 
     /// <summary>
@@ -332,13 +363,31 @@ public sealed partial class PlaybackEngine : IDisposable
             return;
 
         var d = entry.DurationSeconds is > 0 ? entry.DurationSeconds : resolvedInput.ResolvedDurationSeconds;
-        if (d is not > 0)
+        if (d is > 0)
+            ApplyPlaybackDurationSeconds(entry, resolvedInput, d.Value, playGeneration);
+    }
+
+    private void ApplyPlaybackDurationSeconds(PlaylistEntry entry, YoutubeStreamInput? resolvedInput, int durationSeconds, int playGeneration)
+    {
+        if (durationSeconds <= 0)
+            return;
+        if (playGeneration != Volatile.Read(ref _playGeneration))
+            return;
+        if (GetCurrent() is not PlaylistEntry cur ||
+            !string.Equals(cur.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
             return;
 
-        OverrideCurrentDurationSeconds(d);
+        OverrideCurrentDurationSeconds(durationSeconds);
+        try
+        {
+            if (resolvedInput is not null)
+                UpdateSeekableBuffered(entry, resolvedInput);
+        }
+        catch { /* ignore */ }
+
         RaiseOnUi(DispatcherPriority.Background, () =>
         {
-            try { CurrentDurationSecondsChanged?.Invoke(this, d.Value); }
+            try { CurrentDurationSecondsChanged?.Invoke(this, durationSeconds); }
             catch { /* ignore */ }
         });
     }
@@ -353,7 +402,8 @@ public sealed partial class PlaybackEngine : IDisposable
             _prefetchSkipVideoIds.Clear();
             PlayOrder = order;
             CurrentIndex = order.Count == 0 ? -1 : Math.Clamp(startIndex, 0, order.Count - 1);
-            if (!raiseNowPlayingChanged) {}
+            if (raiseNowPlayingChanged && GetCurrent() is { } nowPlaying)
+                RaiseNowPlayingChanged(nowPlaying);
         }
         finally
         {
@@ -414,7 +464,10 @@ public sealed partial class PlaybackEngine : IDisposable
             return false;
 
         try { AppLog.Warn($"PlayCurrentAsync: dispatching PlayEntryAsync videoId={current.VideoId}"); } catch { /* ignore */ }
-        return await PlayEntryAsync(current, startSeconds: 0, raiseNowPlayingChanged: true).ConfigureAwait(false);
+
+        // Callers that change tracks (Next, double-click, SetQueue+play) should raise via SetQueue/PlayEntryAsync.
+        // PlayCurrentAsync only starts decode for the already-selected row (avoids duplicate FETCHING UI work).
+        return await PlayEntryAsync(current, startSeconds: 0, raiseNowPlayingChanged: false).ConfigureAwait(false);
     }
 
     public async Task<bool> SeekAsync(double seconds)
@@ -571,9 +624,10 @@ public sealed partial class PlaybackEngine : IDisposable
 
         // Fallback
         var next = GetNextEntry();
-        if (next == null) return;
+        if (next is null)
+            return;
         CurrentIndex++;
-        await PlayCurrentAsync();
+        await PlayEntryAsync(next, startSeconds: 0, raiseNowPlayingChanged: true).ConfigureAwait(false);
     }
 
     public async Task PrevAsync()
@@ -619,8 +673,9 @@ public sealed partial class PlaybackEngine : IDisposable
         if (IsPlaying)
         {
             _pauseGate.Reset();
-            try { _visualizerTap.SetPaused(true); } catch { /* ignore */ }
-            try { _vlcVisualizerTap.SetPaused(true); } catch { /* ignore */ }
+            try { _visualizerTap.Stop(); } catch { /* ignore */ }
+            try { LibVlcHost.RunOnUiThread(_vlcVisualizerTap.Stop, TimeSpan.FromMilliseconds(400)); } catch { /* ignore */ }
+            try { _analyzer.Reset(); } catch { /* ignore */ }
             try { _vlcMp?.SetPause(true); } catch { /* ignore */ }
             try { _audio?.Pause(); } catch { /* ignore */ }
             try { _positionSw.Stop(); } catch { /* ignore */ }
@@ -629,8 +684,6 @@ public sealed partial class PlaybackEngine : IDisposable
         else
         {
             _pauseGate.Set();
-            try { _visualizerTap.SetPaused(false); } catch { /* ignore */ }
-            try { _vlcVisualizerTap.SetPaused(false); } catch { /* ignore */ }
             try { _vlcMp?.SetPause(false); } catch { /* ignore */ }
             if (_audio is not null && !_audio.TryPlay() && !TryRecoverAudioOutput(leaveStoppedSinkOnTotalFailure: true))
             {
@@ -783,8 +836,11 @@ public sealed partial class PlaybackEngine : IDisposable
 
             var isSeekRestart = !raiseNowPlayingChanged;
 
+            if (!isSeekRestart)
+                ClearResolvedInputCache();
+
             // Internal restart for track change/seek: don't signal a full "stopped" state to UI.
-            StopInternal(signalPlaybackStopped: false, preserveMetering: isSeekRestart);
+            StopInternal(signalPlaybackStopped: false, preserveMetering: isSeekRestart, skipSyncVlcTeardown: true);
 
             try
             {
@@ -815,6 +871,8 @@ public sealed partial class PlaybackEngine : IDisposable
             _positionSw.Reset();
             if (!isSeekRestart)
                 _analyzer.Reset();
+            try { _visualizerTap.Stop(); } catch { /* ignore */ }
+            try { LibVlcHost.RunOnUiThread(_vlcVisualizerTap.Stop, TimeSpan.FromMilliseconds(400)); } catch { /* ignore */ }
 
             try { AppLog.Warn($"PlayEntryAsync: timeline_reset_done videoId={entry.VideoId} startOffset={_startOffsetSeconds:0.###} dur={_currentDurationSeconds?.ToString() ?? "(null)"}"); } catch { /* ignore */ }
 
@@ -861,7 +919,13 @@ public sealed partial class PlaybackEngine : IDisposable
                 if (myGeneration != Volatile.Read(ref _playGeneration))
                     return false;
 
+                RaiseStatusChanged(entry, "BUFFERING", null);
+
                 TryApplyResolvedDurationSeconds(entry, resolvedInput, myGeneration);
+                await TryProbeLocalMediaDurationBeforePlayAsync(entry, resolvedInput, ct, myGeneration).ConfigureAwait(false);
+
+                if (myGeneration != Volatile.Read(ref _playGeneration))
+                    return false;
 
                 if (requestedStart > 0.5 &&
                     IsRemoteHttpStreamInput(resolvedInput) &&
@@ -936,7 +1000,7 @@ public sealed partial class PlaybackEngine : IDisposable
         try
         {
             var disp = System.Windows.Application.Current?.Dispatcher;
-            if (disp is not null && !disp.CheckAccess())
+            if (disp is not null)
             {
                 disp.BeginInvoke(new Action(() =>
                 {
@@ -1997,6 +2061,10 @@ public sealed partial class PlaybackEngine : IDisposable
         return true;
     }
 
+    /// <summary>True when a full yt-dlp cache file exists for the current track (unlimited seek + full seek bar).</summary>
+    public bool HasCompletedYoutubeDiskCacheForCurrent()
+        => GetCurrent() is { } cur && TryGetYoutubeDiskCachePath(cur, out _);
+
     public void Stop()
     {
         StopInternal(signalPlaybackStopped: true);
@@ -2014,7 +2082,7 @@ public sealed partial class PlaybackEngine : IDisposable
         CancelNextTrackWarmBestEffort();
     }
 
-    private void StopInternal(bool signalPlaybackStopped, bool preserveMetering = false)
+    private void StopInternal(bool signalPlaybackStopped, bool preserveMetering = false, bool skipSyncVlcTeardown = false)
     {
         try { _playCts?.Cancel(); } catch { /* ignore */ }
         _playCts = null;
@@ -2033,7 +2101,8 @@ public sealed partial class PlaybackEngine : IDisposable
         if (!preserveMetering)
         {
             try { _visualizerTap.Stop(); } catch { /* ignore */ }
-            try { LibVlcHost.RunOnUiThread(_vlcVisualizerTap.Stop, TimeSpan.FromSeconds(1)); } catch { /* ignore */ }
+            if (!skipSyncVlcTeardown)
+                try { LibVlcHost.RunOnUiThread(_vlcVisualizerTap.Stop, TimeSpan.FromSeconds(1)); } catch { /* ignore */ }
             try { _analyzer.Reset(); } catch { /* ignore */ }
         }
 
@@ -2041,7 +2110,8 @@ public sealed partial class PlaybackEngine : IDisposable
 
         _pauseGate.Set();
 
-        try { TeardownVlcBestEffort(); } catch { /* ignore */ }
+        if (!skipSyncVlcTeardown)
+            try { TeardownVlcBestEffort(); } catch { /* ignore */ }
 
         if (!preserveMetering)
             try { _audio?.Stop(); } catch { /* ignore */ }

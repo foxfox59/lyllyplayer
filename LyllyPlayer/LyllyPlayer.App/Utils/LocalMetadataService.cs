@@ -10,6 +10,14 @@ public static class LocalMetadataService
 {
     public sealed record LocalInfo(string? Title, string? Artist, int? DurationSeconds);
 
+    /// <summary>Container duration without LibVLC (safe to call before playback starts).</summary>
+    public static Task<int?> TryGetDurationSecondsAsync(string filePath, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+            return Task.FromResult<int?>(null);
+        return TryGetDurationSecondsWithMediaFoundationAsync(filePath, ct);
+    }
+
     public static async Task<LocalInfo?> TryGetInfoAsync(string filePath, CancellationToken ct)
     {
         try

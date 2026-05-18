@@ -63,6 +63,8 @@ public sealed partial class PlaybackEngine
         {
             if (GetCurrent() is not { } cur)
                 return false;
+            if (HasCompletedYoutubeDiskCacheForCurrent())
+                return false;
             if (_lastResolvedForWarmup is { } resolved)
                 return IsLimitedSeekInput(resolved, cur);
             // Briefly null during seek restarts — still streaming via WaveOut sink.
@@ -75,11 +77,21 @@ public sealed partial class PlaybackEngine
     {
         get
         {
-            if (GetCurrent() is { } cur && _lastResolvedForWarmup is { } resolved &&
-                IsLimitedSeekInput(resolved, cur))
+            if (GetCurrent() is { } cur)
             {
-                try { UpdateSeekableBuffered(cur, resolved); } catch { /* ignore */ }
-                return ComputeDiskBufferedSeekMaxSeconds(cur, resolved);
+                if (HasCompletedYoutubeDiskCacheForCurrent())
+                {
+                    if (_currentDurationSeconds is int dCache && dCache > 0)
+                        return dCache;
+                    if (cur.DurationSeconds is int dEntry && dEntry > 0)
+                        return dEntry;
+                }
+
+                if (_lastResolvedForWarmup is { } resolved && IsLimitedSeekInput(resolved, cur))
+                {
+                    try { UpdateSeekableBuffered(cur, resolved); } catch { /* ignore */ }
+                    return ComputeDiskBufferedSeekMaxSeconds(cur, resolved);
+                }
             }
 
             if (_currentDurationSeconds is int d0 && d0 > 0)
@@ -132,6 +144,14 @@ public sealed partial class PlaybackEngine
                 return;
             }
 
+            if (HasCompletedYoutubeDiskCacheForCurrent() &&
+                TryGetYoutubeDiskCachePath(cur, out var cachedPath) &&
+                !string.IsNullOrWhiteSpace(cachedPath))
+            {
+                UpdateSeekableBuffered(cur, new YoutubeStreamInput(cachedPath, null));
+                return;
+            }
+
             // Brief gap while restarting — still advance the live decode head for the seek bar.
             if (_playbackUsesWaveOutSink &&
                 string.Equals(cur.VideoId, _vlcActiveVideoId, StringComparison.OrdinalIgnoreCase))
@@ -159,10 +179,16 @@ public sealed partial class PlaybackEngine
     {
         get
         {
-            try { RefreshSeekableBufferedFromCache(); } catch { /* ignore */ }
-
             if (GetCurrent() is not { } cur)
                 return Math.Max(0, SeekableBufferedSeconds);
+
+            if (HasCompletedYoutubeDiskCacheForCurrent())
+            {
+                if (_currentDurationSeconds is int dCache && dCache > 0)
+                    return dCache;
+                if (cur.DurationSeconds is int dEntry && dEntry > 0)
+                    return dEntry;
+            }
 
             if (_lastResolvedForWarmup is not { } resolved)
             {
@@ -242,7 +268,8 @@ public sealed partial class PlaybackEngine
                     try { _vlcMp.Stopped -= _vlcStoppedHandler; } catch { /* ignore */ }
                 }
 
-                try { lock (_vlcGate) { _vlcMp.Stop(); } } catch { /* ignore */ }
+                // Do not hold _vlcGate across Stop() — audio callbacks may call ApplyPlaybackVolume().
+                try { _vlcMp.Stop(); } catch { /* ignore */ }
             }
         }
         catch { /* ignore */ }
@@ -268,8 +295,8 @@ public sealed partial class PlaybackEngine
     }
 
     /// <summary>
-    /// Route LibVLC through app <see cref="AudioOut"/> (audio callbacks + NAudio). Required for yt-dlp pipe
-    /// and remote HTTP(S) so VU taps audible PCM instead of a second LibVLC decoder.
+    /// Route LibVLC through app <see cref="AudioOut"/> (audio callbacks + NAudio). Required for yt-dlp pipe,
+    /// HTTP(S), and local/cached files so the visualizer taps the same PCM sent to the device (in sync).
     /// </summary>
     private static bool RequiresVlcWaveOutSink(YoutubeStreamInput input)
     {
@@ -287,7 +314,7 @@ public sealed partial class PlaybackEngine
         try
         {
             if (File.Exists(input.Url.Trim()))
-                return false;
+                return true;
         }
         catch { /* ignore */ }
 
@@ -401,8 +428,8 @@ public sealed partial class PlaybackEngine
         if (_playbackUsesWaveOutSink)
         {
             try { _audio?.Clear(); } catch { /* ignore */ }
+            try { _analyzer.Reset(); } catch { /* ignore */ }
             Volatile.Write(ref _deferWaveOutStart, 1);
-            try { _audio?.Pause(); } catch { /* ignore */ }
             ApplyPlaybackVolume();
         }
     }
@@ -504,7 +531,7 @@ public sealed partial class PlaybackEngine
         {
             if (IsResolvedLocalMediaPath(resolved))
             {
-                SeekableBufferedSeconds = 0;
+                SeekableBufferedSeconds = entry.DurationSeconds is int dLocal && dLocal > 0 ? dLocal : 0;
                 return;
             }
 
@@ -661,7 +688,12 @@ public sealed partial class PlaybackEngine
 
         var pathOrUrl = resolved.Url.Trim();
         if (File.Exists(pathOrUrl))
-            return new Media(lib, pathOrUrl, FromType.FromPath);
+        {
+            var fileMedia = new Media(lib, pathOrUrl, FromType.FromPath);
+            if (_startOffsetSeconds > 0.5)
+                fileMedia.AddOption($":start-time={Math.Max(0, (int)Math.Floor(_startOffsetSeconds))}");
+            return fileMedia;
+        }
 
         var media = new Media(lib, pathOrUrl, FromType.FromLocation);
         if (resolved.HttpHeaders is not null)
@@ -797,7 +829,6 @@ public sealed partial class PlaybackEngine
                 }
                 else
                 {
-                    try { _audio!.Stop(); } catch { /* ignore */ }
                     try { _audio!.Clear(); } catch { /* ignore */ }
                 }
 
@@ -822,14 +853,13 @@ public sealed partial class PlaybackEngine
             _waveOutSinkDeviceNumber = int.MinValue;
         }
 
-        RaisePlaybackStateChanged(true);
-        RaiseStatusChanged(entry, "BUFFERING", null);
         _pauseGate.Set();
         try { _positionSw.Reset(); } catch { /* ignore */ }
 
         playbackTiming.Step("vlc_before_play");
         bool ok;
-        lock (_vlcGate) { ok = _vlcMp.Play(); }
+        try { ok = _vlcMp.Play(); }
+        catch { ok = false; }
         if (!ok)
         {
             LogPlaybackError(entry, "LibVLC failed to start playback.");
@@ -838,7 +868,73 @@ public sealed partial class PlaybackEngine
             return false;
         }
 
+        playbackTiming.Step("vlc_after_play_invoke");
+        _vlcIsPlayingFlag = true;
+        RaisePlaybackStateChanged(true);
+
+        // Native LibVLC audio (disk cache / local files): mark started here — some builds never raise Playing promptly.
+        if (!useVlcAudioOutputSink)
+            TryMarkNativeVlcPlaybackStarted(entry, playbackSessionCts);
+
         return true;
+    }
+
+    /// <summary>First-audio bookkeeping for native LibVLC output (no WaveOut sink / audio callbacks).</summary>
+    private void TryMarkNativeVlcPlaybackStarted(PlaylistEntry entry, CancellationTokenSource playbackSessionCts)
+    {
+        if (!ReferenceEquals(_playCts, playbackSessionCts))
+            return;
+
+        if (Interlocked.CompareExchange(ref _vlcFirstAudioGate, 1, 0) != 0)
+            return;
+
+        _vlcFirstAudioRaised = true;
+        if (Volatile.Read(ref _awaitingVlcSeekSettle) == 0)
+            try { _positionSw.Restart(); } catch { /* ignore */ }
+        ApplyPlaybackVolume();
+
+        try
+        {
+            if (GetCurrent() is { } cur && _vlcActiveVideoId is not null &&
+                string.Equals(cur.VideoId, _vlcActiveVideoId, StringComparison.OrdinalIgnoreCase))
+            {
+                RaiseStatusChanged(cur, "PLAYING", null);
+                _firstAudioForCurrentPlayTcs?.TrySetResult(true);
+                RunDeferredWarmupsAfterFirstAudio(cur, _lastResolvedForWarmup, _lastRaiseNowPlayingForWarmup);
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    /// <summary>
+    /// Probe file duration before <see cref="MediaPlayer.Play"/> when metadata is missing.
+    /// Uses Media Foundation only — never LibVLC <see cref="Media.Parse"/> (crashes when overlapping playback).
+    /// </summary>
+    private async Task TryProbeLocalMediaDurationBeforePlayAsync(
+        PlaylistEntry entry,
+        YoutubeStreamInput resolvedInput,
+        CancellationToken ct,
+        int playGeneration)
+    {
+        if (_currentDurationSeconds is int known && known > 0)
+            return;
+        if (!IsResolvedLocalMediaPath(resolvedInput))
+            return;
+        if (entry.DurationSeconds is > 0 || resolvedInput.ResolvedDurationSeconds is > 0)
+            return;
+
+        try
+        {
+            var fromFile = await LocalMetadataService.TryGetDurationSecondsAsync(resolvedInput.Url.Trim(), ct)
+                .ConfigureAwait(false);
+            if (fromFile is > 0 && playGeneration == Volatile.Read(ref _playGeneration))
+                ApplyPlaybackDurationSeconds(entry, resolvedInput, fromFile.Value, playGeneration);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch { /* ignore */ }
     }
 
     private async Task<bool> PlayResolvedWithLibVlcAsync(
@@ -849,7 +945,8 @@ public sealed partial class PlaybackEngine
         CancellationTokenSource playbackSessionCts,
         bool raiseNowPlayingChanged)
     {
-        await TeardownVlcBestEffortAsync(ct).ConfigureAwait(false);
+        // PlayEntryAsync already tore down the previous session; a second synchronous teardown here can
+        // deadlock the LibVLC STA thread behind Stop() while Play() is starting.
 
         YtdlpPipeMediaInput? pipeInput = null;
         if (resolvedInput.DecodeViaYtdlpStdoutPipe)
@@ -900,7 +997,7 @@ public sealed partial class PlaybackEngine
             _ = EnsureWaveOutStartedFallbackAsync(playbackSessionCts.Token);
 
         if (!RequiresVlcWaveOutSink(resolvedInput))
-            await StartSecondaryAnalyzerTapAsync(entry, resolvedInput, ct).ConfigureAwait(false);
+            _ = StartSecondaryAnalyzerTapDeferredAsync(entry, resolvedInput, playbackSessionCts.Token);
 
         if (_startOffsetSeconds > 0.01)
         {
@@ -919,6 +1016,33 @@ public sealed partial class PlaybackEngine
         catch { /* ignore */ }
 
         return true;
+    }
+
+    /// <summary>Defer MF visualizer tap so LibVLC can open and decode the same cached file first.</summary>
+    private async Task StartSecondaryAnalyzerTapDeferredAsync(
+        PlaylistEntry entry,
+        YoutubeStreamInput resolvedInput,
+        CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(2500, ct).ConfigureAwait(false);
+            if (ct.IsCancellationRequested)
+                return;
+            if (GetCurrent() is not { } cur ||
+                !string.Equals(cur.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            await StartSecondaryAnalyzerTapAsync(entry, resolvedInput, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore
+        }
+        catch
+        {
+            // ignore
+        }
     }
 
     /// <summary>Secondary LibVLC decode for VU when the main player uses native LibVLC audio (no WaveOut sink).</summary>
@@ -989,6 +1113,12 @@ public sealed partial class PlaybackEngine
             if (_vlcDecodeViaPipe)
             {
                 _startOffsetSeconds = targetSeconds;
+                if (_playbackUsesWaveOutSink)
+                {
+                    try { _audio?.Clear(); } catch { /* ignore */ }
+                    Volatile.Write(ref _deferWaveOutStart, 1);
+                }
+
                 await LibVlcHost.RunOnUiThreadAsync(() =>
                 {
                     try
@@ -997,7 +1127,6 @@ public sealed partial class PlaybackEngine
                         {
                             if (_vlcMp is null)
                                 return;
-                            try { _vlcMp.Mute = true; } catch { /* ignore */ }
                             _vlcMp.Time = targetMs;
                         }
                     }
@@ -1005,12 +1134,6 @@ public sealed partial class PlaybackEngine
                 }, ct).ConfigureAwait(false);
 
                 await DiscardPipeStartOffsetAsync(ct).ConfigureAwait(false);
-
-                await LibVlcHost.RunOnUiThreadAsync(() =>
-                {
-                    try { lock (_vlcGate) { _vlcMp!.Mute = false; } } catch { /* ignore */ }
-                }, ct).ConfigureAwait(false);
-
                 ApplyPlaybackVolume();
                 _startOffsetSeconds = targetSeconds;
             }
@@ -1062,22 +1185,7 @@ public sealed partial class PlaybackEngine
 
                 _startOffsetSeconds = targetSeconds;
 
-                if (_playbackUsesWaveOutSink)
-                {
-                    try { _audio?.Clear(); } catch { /* ignore */ }
-                    Volatile.Write(ref _deferWaveOutStart, 1);
-                    if (!resumePlayback)
-                    {
-                        try { _audio?.Pause(); } catch { /* ignore */ }
-                    }
-                    else if (_audio is { } sink)
-                    {
-                        if (!sink.TryEnsurePlaybackStarted(minBufferedSeconds: 0.05))
-                            Volatile.Write(ref _deferWaveOutStart, 1);
-                        else
-                            Volatile.Write(ref _deferWaveOutStart, 0);
-                    }
-                }
+                // PCM flush is handled in OnVlcAudioFlush (_pendingSeekSinkFlush).
             }
 
             try { _positionSw.Restart(); } catch { /* ignore */ }
@@ -1107,6 +1215,14 @@ public sealed partial class PlaybackEngine
         {
             if (_startOffsetSeconds <= 0.01)
                 return;
+
+            if (_lastResolvedForWarmup is { } localResolved &&
+                IsResolvedLocalMediaPath(localResolved))
+            {
+                try { _positionSw.Restart(); } catch { /* ignore */ }
+                Interlocked.Exchange(ref _pendingSeekSinkFlush, 0);
+                return;
+            }
 
             if (_vlcDecodeViaPipe)
             {
@@ -1163,9 +1279,9 @@ public sealed partial class PlaybackEngine
 
                 if (_playbackUsesWaveOutSink)
                 {
+                    Volatile.Write(ref _pendingSeekSinkFlush, 1);
                     try { _audio?.Clear(); } catch { /* ignore */ }
                     Volatile.Write(ref _deferWaveOutStart, 1);
-                    try { _audio?.Pause(); } catch { /* ignore */ }
                 }
 
                 Interlocked.Exchange(ref _pendingSeekSinkFlush, 0);
@@ -1200,7 +1316,16 @@ public sealed partial class PlaybackEngine
 
         await LibVlcHost.RunOnUiThreadAsync(() =>
         {
-            try { lock (_vlcGate) { _vlcMp!.Mute = true; } } catch { /* ignore */ }
+            if (_playbackUsesWaveOutSink)
+            {
+                try { _audio?.Clear(); } catch { /* ignore */ }
+                Volatile.Write(ref _deferWaveOutStart, 1);
+                ApplyPlaybackVolume();
+            }
+            else
+            {
+                try { lock (_vlcGate) { _vlcMp!.Mute = true; } } catch { /* ignore */ }
+            }
         }, ct).ConfigureAwait(false);
 
         try
@@ -1227,14 +1352,17 @@ public sealed partial class PlaybackEngine
         }
         finally
         {
-            try
+            if (!_playbackUsesWaveOutSink)
             {
-                await LibVlcHost.RunOnUiThreadAsync(() =>
+                try
                 {
-                    try { lock (_vlcGate) { _vlcMp!.Mute = false; } } catch { /* ignore */ }
-                }, CancellationToken.None).ConfigureAwait(false);
+                    await LibVlcHost.RunOnUiThreadAsync(() =>
+                    {
+                        try { lock (_vlcGate) { _vlcMp!.Mute = false; } } catch { /* ignore */ }
+                    }, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch { /* ignore */ }
             }
-            catch { /* ignore */ }
 
             ApplyPlaybackVolume();
         }

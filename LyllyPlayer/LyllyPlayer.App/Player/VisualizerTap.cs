@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
-using System.Threading.Tasks;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 
@@ -16,7 +15,7 @@ public sealed class VisualizerTap : IDisposable
 {
     private readonly AudioAnalyzer _analyzer;
     private CancellationTokenSource? _cts;
-    private Task? _task;
+    private Thread? _decodeThread;
     private readonly ManualResetEventSlim _pauseGate = new(initialState: true);
 
     public VisualizerTap(AudioAnalyzer analyzer) => _analyzer = analyzer;
@@ -35,7 +34,12 @@ public sealed class VisualizerTap : IDisposable
     {
         try { _cts?.Cancel(); } catch { /* ignore */ }
         _cts = null;
-        _task = null;
+        var t = _decodeThread;
+        _decodeThread = null;
+        if (t is { IsAlive: true })
+        {
+            try { t.Join(TimeSpan.FromMilliseconds(250)); } catch { /* ignore */ }
+        }
     }
 
     public void StartFromLocalFile(string filePath, double startSeconds = 0)
@@ -46,7 +50,15 @@ public sealed class VisualizerTap : IDisposable
 
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
-        _task = Task.Run(() => RunDecodeLoop(filePath, startSeconds, ct), ct);
+        // Media Foundation expects STA; running on the thread-pool (MTA) alongside LibVLC can hang the process.
+        var thread = new Thread(() => RunDecodeLoop(filePath, startSeconds, ct))
+        {
+            IsBackground = true,
+            Name = "LyllyPlayer.VisualizerTap",
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        _decodeThread = thread;
+        thread.Start();
     }
 
     private void RunDecodeLoop(string filePath, double startSeconds, CancellationToken ct)
@@ -104,7 +116,7 @@ public sealed class VisualizerTap : IDisposable
                 var sleepMs = (int)Math.Floor(targetMs - sw.Elapsed.TotalMilliseconds);
                 if (sleepMs > 0)
                 {
-                    try { Task.Delay(Math.Min(sleepMs, 25), ct).Wait(ct); } catch { /* ignore */ }
+                    try { Thread.Sleep(Math.Min(sleepMs, 25)); } catch { /* ignore */ }
                 }
             }
         }

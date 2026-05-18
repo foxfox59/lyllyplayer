@@ -630,6 +630,8 @@ public partial class MainWindow : Window
     private DispatcherTimer? _refreshTimer;
     private int _uiTimerTickCounter;
     private long _lastSeekBufRefreshMs;
+    private System.Windows.Shapes.Rectangle? _seekFullTrackPart;
+    private System.Windows.Shapes.Rectangle? _seekBufferedTrackPart;
 
     // If we closed while paused, restore the timeline but only start playback when user hits Play.
     private string? _pendingResumeVideoId;
@@ -1178,7 +1180,14 @@ public partial class MainWindow : Window
                     }
                 }
                 catch { /* ignore */ }
-                try { SyncSystemMediaTransportSession(); } catch { /* ignore */ }
+                try
+                {
+                    // SMTC/COM init on the UI thread during first Play has caused full-app hangs on some systems.
+                    Dispatcher.BeginInvoke(
+                        () => { try { SyncSystemMediaTransportSession(); } catch { /* ignore */ } },
+                        DispatcherPriority.ApplicationIdle);
+                }
+                catch { /* ignore */ }
             });
         _engine.PlaybackFailed += (_, payload) =>
             RunOnUi(() => HandlePlaybackFailed(payload.entry, payload.message));
@@ -1295,6 +1304,22 @@ public partial class MainWindow : Window
             {
                 if (SeekSliderHostGrid is not null)
                     SeekSliderHostGrid.SizeChanged += (_, _) => { try { UpdateSeekBufferedVisuals(); } catch { /* ignore */ } };
+                if (SeekSlider is not null)
+                {
+                    void OnSeekSliderLoaded(object? s, RoutedEventArgs e)
+                    {
+                        try { SeekSlider.Loaded -= OnSeekSliderLoaded; } catch { /* ignore */ }
+                        try { EnsureSeekSliderTrackPartsCached(); } catch { /* ignore */ }
+                        try { UpdateSeekBufferedVisuals(); } catch { /* ignore */ }
+                    }
+
+                    if (SeekSlider.IsLoaded)
+                    {
+                        try { EnsureSeekSliderTrackPartsCached(); } catch { /* ignore */ }
+                    }
+                    else
+                        SeekSlider.Loaded += OnSeekSliderLoaded;
+                }
             }
             catch { /* ignore */ }
 
@@ -9944,12 +9969,13 @@ public partial class MainWindow : Window
                 catch { /* ignore */ }
             }
 
-            if (dur is not int durSec || durSec <= 0 || !SeekSlider.IsEnabled)
+            if (dur is not int durSec || durSec <= 0)
             {
                 HideSeekTrackVisuals();
                 return;
             }
 
+            EnsureSeekSliderTrackPartsCached();
             if (!TryGetSeekSliderTrackParts(out var fullTrack, out var bufferedTrack))
             {
                 HideSeekTrackVisuals();
@@ -10002,14 +10028,12 @@ public partial class MainWindow : Window
         }
     }
 
-    private bool TryGetSeekSliderTrackParts(
-        out System.Windows.Shapes.Rectangle? fullTrack,
-        out System.Windows.Shapes.Rectangle? bufferedTrack)
+    private void EnsureSeekSliderTrackPartsCached()
     {
-        fullTrack = null;
-        bufferedTrack = null;
         if (SeekSlider is null)
-            return false;
+            return;
+        if (_seekFullTrackPart is not null && _seekBufferedTrackPart is not null)
+            return;
 
         try
         {
@@ -10020,11 +10044,19 @@ public partial class MainWindow : Window
 
         try
         {
-            fullTrack = SeekSlider.Template?.FindName("PART_FullTrack", SeekSlider) as System.Windows.Shapes.Rectangle;
-            bufferedTrack = SeekSlider.Template?.FindName("PART_BufferedTrack", SeekSlider) as System.Windows.Shapes.Rectangle;
+            _seekFullTrackPart ??= SeekSlider.Template?.FindName("PART_FullTrack", SeekSlider) as System.Windows.Shapes.Rectangle;
+            _seekBufferedTrackPart ??= SeekSlider.Template?.FindName("PART_BufferedTrack", SeekSlider) as System.Windows.Shapes.Rectangle;
         }
         catch { /* ignore */ }
+    }
 
+    private bool TryGetSeekSliderTrackParts(
+        out System.Windows.Shapes.Rectangle? fullTrack,
+        out System.Windows.Shapes.Rectangle? bufferedTrack)
+    {
+        EnsureSeekSliderTrackPartsCached();
+        fullTrack = _seekFullTrackPart;
+        bufferedTrack = _seekBufferedTrackPart;
         return fullTrack is not null || bufferedTrack is not null;
     }
 
