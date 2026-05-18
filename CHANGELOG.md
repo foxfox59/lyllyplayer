@@ -1,11 +1,15 @@
 ### What's new, pussycat?
 
+- 2.9.0:
+  - Fixed opening associated audio files not being added to playlist properly
+  - Fixed a bug where opening the app via an associated audio file did not focus the file correctly in playlist 
 - 2.8.1:
   - Fixed an issue where seeking would lower volume
   - Fixed an issue with seek bar being disabled on app launch
   - Fixed an issue where hitting Play after app launch would freeze 
 - 2.8.0:
   - Fixed an UI thread deadlock that would occasionally cause the app to freeze
+  - LibVLC audio callbacks removed due to VU rework
   - Fixed VU meters being laggy and out of sync on some occasions
   - Fixed a track seeking issue
   - Fixed a bug in SMTC session query

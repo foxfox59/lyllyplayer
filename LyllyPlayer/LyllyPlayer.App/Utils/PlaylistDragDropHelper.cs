@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -38,10 +39,21 @@ public static class PlaylistDragDropHelper
                 return new DropPayload(local, urls);
 
             if (TryGetDroppedFilePaths(data, out var paths))
-                local.AddRange(paths);
+            {
+                foreach (var p in paths)
+                    TryAddNormalizedLocalPath(local, p);
+            }
+
+            if (data.GetDataPresent("UniformResourceLocatorW"))
+                TryAddNormalizedLocalPath(local, TryReadStringLikeData(data.GetData("UniformResourceLocatorW")));
+            if (data.GetDataPresent("UniformResourceLocator"))
+                TryAddNormalizedLocalPath(local, TryReadStringLikeData(data.GetData("UniformResourceLocator")));
 
             if (TryGetDroppedText(data, out var text))
+            {
+                TryAddNormalizedLocalPath(local, text);
                 urls.AddRange(ParseUrlsFromText(text));
+            }
         }
         catch
         {
@@ -51,6 +63,84 @@ public static class PlaylistDragDropHelper
         return new DropPayload(
             LocalPaths: local.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             Urls: urls.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+    }
+
+    /// <summary>
+    /// When Explorer opens a file, drag/drop often includes both <see cref="DropPayload.LocalPaths"/> and a redundant
+    /// file:// (or path-like) URL. Feeding those into YouTube import shows "Added 1 items" and can replace the playlist.
+    /// </summary>
+    public static List<string> FilterYoutubeHttpUrlsOnly(IReadOnlyList<string> urls)
+    {
+        var acc = new List<string>();
+        if (urls is null || urls.Count == 0)
+            return acc;
+
+        foreach (var raw in urls)
+        {
+            var s = (raw ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(s))
+                continue;
+
+            if (!Uri.TryCreate(s, UriKind.Absolute, out var uri))
+                continue;
+
+            if (!uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+                !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var host = uri.Host ?? "";
+            if (host.Contains("youtube", StringComparison.OrdinalIgnoreCase) ||
+                host.Contains("youtu.be", StringComparison.OrdinalIgnoreCase) ||
+                host.Contains("music.youtube", StringComparison.OrdinalIgnoreCase))
+                acc.Add(s);
+        }
+
+        return acc;
+    }
+
+    public static bool LooksLikeLocalFilesystemPath(string? raw)
+        => TryNormalizeLocalAudioPath(raw) is not null;
+
+    /// <summary>Resolve Explorer / shell arguments to a full local path when possible.</summary>
+    public static string? TryNormalizeLocalAudioPath(string? raw)
+    {
+        try
+        {
+            var s = (raw ?? "").Trim().Trim('"');
+            if (string.IsNullOrWhiteSpace(s))
+                return null;
+
+            if (Uri.TryCreate(s, UriKind.Absolute, out var uri) &&
+                (uri.Scheme.Equals(Uri.UriSchemeFile, StringComparison.OrdinalIgnoreCase) || uri.IsFile))
+            {
+                var local = uri.LocalPath;
+                if (!string.IsNullOrWhiteSpace(local))
+                {
+                    try { return Path.GetFullPath(local); } catch { return local; }
+                }
+            }
+
+            if (File.Exists(s))
+            {
+                try { return Path.GetFullPath(s); } catch { return s; }
+            }
+
+            var ext = Path.GetExtension(s);
+            if (LocalPlaylistLoader.IsSupportedAudioExtension(ext))
+            {
+                try { return Path.GetFullPath(s); } catch { return s; }
+            }
+        }
+        catch { /* ignore */ }
+
+        return null;
+    }
+
+    private static void TryAddNormalizedLocalPath(List<string> local, string? raw)
+    {
+        var p = TryNormalizeLocalAudioPath(raw);
+        if (!string.IsNullOrWhiteSpace(p))
+            local.Add(p);
     }
 
     private static bool TryGetDroppedFilePaths(System.Windows.IDataObject data, out List<string> paths)

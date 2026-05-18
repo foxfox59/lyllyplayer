@@ -59,6 +59,8 @@ public sealed record PlaylistWindowOps(
     /// <summary>Drag/drop: add local files/folders to playlist (append/replace is decided by the shell).</summary>
     Func<IReadOnlyList<string>, CancellationToken, Task> HandleDroppedLocalPathsAsync,
     /// <summary>Drag/drop: add URLs (e.g. browser tabs) to playlist (append/replace is decided by the shell).</summary>
-    Func<IReadOnlyList<string>, CancellationToken, Task> HandleDroppedUrlsAsync
+    Func<IReadOnlyList<string>, CancellationToken, Task> HandleDroppedUrlsAsync,
+    /// <summary>False while the saved playlist is still loading (drop/open-with must wait).</summary>
+    Func<bool> IsStartupPlaylistReady
 );
 

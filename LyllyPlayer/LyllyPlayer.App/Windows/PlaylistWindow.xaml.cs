@@ -85,6 +85,7 @@ public partial class PlaylistWindow : Window
     private readonly Func<string, Task> _removeFromPlaylistAsync;
     private readonly Func<IReadOnlyList<string>, CancellationToken, Task> _handleDroppedLocalPathsAsync;
     private readonly Func<IReadOnlyList<string>, CancellationToken, Task> _handleDroppedUrlsAsync;
+    private readonly Func<bool> _isStartupPlaylistReady;
     private int _lastClickedIndex = -1;
     private int _centerRequestId;
     private bool _suppressQueueListUntilInitialScroll;
@@ -218,7 +219,8 @@ public partial class PlaylistWindow : Window
             ops.RemoveQueuedInstanceAsync,
             ops.RemoveFromPlaylistAsync,
             ops.HandleDroppedLocalPathsAsync,
-            ops.HandleDroppedUrlsAsync)
+            ops.HandleDroppedUrlsAsync,
+            ops.IsStartupPlaylistReady)
     {
     }
 
@@ -268,7 +270,8 @@ public partial class PlaylistWindow : Window
         Func<Guid, Task> removeQueuedInstanceAsync,
         Func<string, Task> removeFromPlaylistAsync,
         Func<IReadOnlyList<string>, CancellationToken, Task> handleDroppedLocalPathsAsync,
-        Func<IReadOnlyList<string>, CancellationToken, Task> handleDroppedUrlsAsync
+        Func<IReadOnlyList<string>, CancellationToken, Task> handleDroppedUrlsAsync,
+        Func<bool> isStartupPlaylistReady
     )
     {
         _loadUrlAsync = loadUrlAsync;
@@ -319,6 +322,7 @@ public partial class PlaylistWindow : Window
         _removeFromPlaylistAsync = removeFromPlaylistAsync;
         _handleDroppedLocalPathsAsync = handleDroppedLocalPathsAsync;
         _handleDroppedUrlsAsync = handleDroppedUrlsAsync;
+        _isStartupPlaylistReady = isStartupPlaylistReady;
 
         InitializeComponent();
 
@@ -418,6 +422,13 @@ public partial class PlaylistWindow : Window
             if (_busyCount > 0)
                 return;
 
+            try
+            {
+                if (!_isStartupPlaylistReady())
+                    return;
+            }
+            catch { /* ignore */ }
+
             if (e.Data is null)
                 return;
 
@@ -432,10 +443,20 @@ public partial class PlaylistWindow : Window
             try
             {
                 if (payload.LocalPaths.Count > 0)
+                {
+                    // Always process local audio (Open with often delivers the file only as a shell drop, not argv).
                     await _handleDroppedLocalPathsAsync(payload.LocalPaths, cts.Token).ConfigureAwait(true);
-
-                if (payload.Urls.Count > 0)
+                    // Explorer "open with" / shell drops often include a redundant file:// URL alongside FileDrop paths.
+                    var ytOnly = PlaylistDragDropHelper.FilterYoutubeHttpUrlsOnly(payload.Urls);
+                    if (ytOnly.Count > 0 && !App.ShouldSuppressAutomatedPlaylistImports())
+                        await _handleDroppedUrlsAsync(ytOnly, cts.Token).ConfigureAwait(true);
+                }
+                else if (payload.Urls.Count > 0)
+                {
+                    if (App.ShouldSuppressAutomatedPlaylistImports())
+                        return;
                     await _handleDroppedUrlsAsync(payload.Urls, cts.Token).ConfigureAwait(true);
+                }
             }
             finally
             {
@@ -1052,7 +1073,7 @@ public partial class PlaylistWindow : Window
                 {
                     if (_playlistItemsSource is null || _playlistItemsSource.Count == 0)
                         return;
-                    var item = _playlistItemsSource.FirstOrDefault(q =>
+                    var item = _playlistItemsSource.LastOrDefault(q =>
                         !q.IsQueued &&
                         q.Entry is not null &&
                         string.Equals(q.Entry.VideoId, vid, StringComparison.OrdinalIgnoreCase));
@@ -1126,7 +1147,7 @@ public partial class PlaylistWindow : Window
             // 2. Fallback to Base Playlist
             if (_playlistItemsSource is not null && _playlistItemsSource.Any())
             {
-                var baseItem = _playlistItemsSource.FirstOrDefault(q =>
+                var baseItem = _playlistItemsSource.LastOrDefault(q =>
                     !q.IsQueued &&
                     q.Entry is not null &&
                     string.Equals(q.Entry.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase));

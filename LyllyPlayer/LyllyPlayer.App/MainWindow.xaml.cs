@@ -32,6 +32,13 @@ namespace LyllyPlayer;
 public partial class MainWindow : Window
 {
     private int _externalOpenRequestId;
+    private int _playlistUiRebuildGeneration;
+    private volatile bool _playlistStartupLoadComplete;
+    private bool _allowAppendSummaryDialogs;
+    private string? _pendingExternalOpenPath;
+    private string? _lastAppliedExternalOpenPath;
+    private string? _coldStartTargetPath;
+    private bool _coldStartAuthoritativeApplyDone;
 
     // Prefer topmost/active window as dialog owner.
 
@@ -46,20 +53,92 @@ public partial class MainWindow : Window
             if (!FileOpenIpc.LooksLikeSupportedFileOpenArg(p))
                 return;
 
-            var requestId = Interlocked.Increment(ref _externalOpenRequestId);
-            Dispatcher.BeginInvoke(async () =>
+            try
             {
-                if (requestId != _externalOpenRequestId)
-                    return;
+                AppLog.Warn(
+                    $"External open (IPC/warm): file={p} handlerExe={AppVersion.ProcessExePath} " +
+                    $"handlerVersion={AppVersion.FileVersion}");
+            }
+            catch { /* ignore */ }
 
-                try { await HandleExternalOpenFileRequestCoreAsync(p).ConfigureAwait(true); }
-                catch { /* ignore */ }
-            }, DispatcherPriority.Loaded);
+            if (!_playlistStartupLoadComplete)
+            {
+                _pendingExternalOpenPath = p;
+                return;
+            }
+
+            if (IsSameLocalMediaPathAsLastApplied(p))
+                return;
+
+            _ = ProcessExternalOpenFileRequestAsync(p);
         }
         catch { /* ignore */ }
     }
 
-    private async Task HandleExternalOpenFileRequestCoreAsync(string path)
+    private async Task ProcessExternalOpenFileRequestAsync(string path)
+    {
+        var requestId = Interlocked.Increment(ref _externalOpenRequestId);
+        try
+        {
+            await Dispatcher.InvokeAsync(
+                async () =>
+                {
+                    if (requestId != Volatile.Read(ref _externalOpenRequestId))
+                        return;
+                    await HandleExternalOpenFileRequestCoreAsync(path, showAppendSummary: false).ConfigureAwait(true);
+                },
+                DispatcherPriority.Normal).Task.Unwrap().ConfigureAwait(true);
+        }
+        catch { /* ignore */ }
+    }
+
+    private string? GetPendingColdStartOpenPath()
+    {
+        try
+        {
+            var p = (_pendingExternalOpenPath ?? App.ColdStartOpenFilePath)?.Trim().Trim('"');
+            return string.IsNullOrWhiteSpace(p) ? null : p;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void EnsureColdStartTrackVisibleAfterStartupLoadBestEffort()
+    {
+        var p = _lastAppliedExternalOpenPath ?? GetPendingColdStartOpenPath();
+        if (string.IsNullOrWhiteSpace(p))
+            return;
+
+        try { _playlistWindow?.ClearPlaylistViewFilter(); } catch { /* ignore */ }
+
+        var idx = FindPlaylistIndexForLocalPath(p);
+        if (_playlistCore.Entries.Count > 0)
+        {
+            var focusIdx = idx >= 0 ? idx : _playlistCore.Entries.Count - 1;
+            try { SyncPlaylistUiFromCoreEntries(focusIdx); } catch { /* ignore */ }
+        }
+    }
+
+    private bool IsSameLocalMediaPathAsLastApplied(string path)
+    {
+        if (string.IsNullOrWhiteSpace(_lastAppliedExternalOpenPath))
+            return false;
+        try
+        {
+            return string.Equals(
+                NormalizeLocalPathKey(_lastAppliedExternalOpenPath),
+                NormalizeLocalPathKey(path),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task HandleExternalOpenFileRequestCoreAsync(string path, bool showAppendSummary = false)
     {
         var p = (path ?? "").Trim().Trim('"');
         if (!FileOpenIpc.LooksLikeSupportedFileOpenArg(p))
@@ -82,18 +161,66 @@ public partial class MainWindow : Window
 
         if (LocalPlaylistLoader.IsSupportedAudioExtension(ext))
         {
-            // Explorer double-click on an audio file: append to current playlist by default (portable associations / Open with).
-            var localId = "";
-            try { localId = LocalPlaylistLoader.CreateLocalIdFromPath(p); } catch { localId = ""; }
-            await AddFilesAsync(
+            await OpenLocalAudioFilesFromExplorerAsync(
                 new[] { p },
                 append: true,
                 removeDuplicates: _localImportRemoveDuplicates,
                 cancellationToken: CancellationToken.None,
-                progress: null).ConfigureAwait(true);
-            try { _playlistWindow?.FocusVideoIdBestEffort(localId); } catch { /* ignore */ }
+                progress: null,
+                showImportSummary: showAppendSummary,
+                fastMetadata: true).ConfigureAwait(true);
+            try { EnsurePlaylistWindowOpen(); } catch { /* ignore */ }
+            FocusLocalFileInPlaylistBestEffort(p);
             return;
         }
+    }
+
+    private void FocusPlaylistEntryBestEffort(PlaylistEntry? entry, int attempt = 0, bool openPlaylistWindow = false)
+    {
+        if (entry is null)
+            return;
+
+        const int maxAttempts = 16;
+        RunUnlessPlaylistContextMenuOpen(() =>
+        {
+            if (openPlaylistWindow)
+            {
+                try { EnsurePlaylistWindowOpen(); } catch { /* ignore */ }
+            }
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    if (_playlistWindow is null)
+                    {
+                        if (openPlaylistWindow && attempt < maxAttempts)
+                            FocusPlaylistEntryBestEffort(entry, attempt + 1, openPlaylistWindow);
+                        return;
+                    }
+
+                    var hasItems = _playlistItems.Count > 0 || (_playlistCore.Entries?.Count ?? 0) > 0;
+                    if (!hasItems && attempt < maxAttempts)
+                    {
+                        FocusPlaylistEntryBestEffort(entry, attempt + 1, openPlaylistWindow);
+                        return;
+                    }
+
+                    try { _playlistWindow.CenterNowPlaying(entry); } catch { /* ignore */ }
+
+                    var entries = _playlistCore.Entries;
+                    if (entries is { Count: > 0 })
+                    {
+                        var idx = FindLastIndexByVideoId(entries, entry.VideoId);
+                        if (idx < 0 && TryExtractLocalPathBestEffort(entry.WebpageUrl, out var path))
+                            idx = FindPlaylistIndexForLocalPath(path);
+                        if (idx >= 0)
+                            try { _playlistWindow.SelectAndScrollToPlaylistIndex(idx); } catch { /* ignore */ }
+                    }
+                }
+                catch { /* ignore */ }
+            }, attempt == 0 ? DispatcherPriority.Loaded : DispatcherPriority.Background);
+        });
     }
 
     private Task ApplyThemeFromFileBestEffortAsync(string path)
@@ -159,12 +286,12 @@ public partial class MainWindow : Window
 
             _playlistIsCompound = true;
             var removeDupes = _localImportRemoveDuplicates;
-            var (added, removedDupes) = AppendEntriesPreserveCurrent(
+            var (added, removedDupes) = await AppendEntriesPreserveCurrentAsync(
                 entries,
                 originLabel: string.IsNullOrWhiteSpace(title) ? "Playlist" : title,
                 originSource: path,
                 removeDuplicates: removeDupes,
-                cancellationToken: CancellationToken.None);
+                cancellationToken: CancellationToken.None).ConfigureAwait(true);
             TryShowAppendSummaryDialog("Playlist", added, removedDupes);
 
             try { ApplySavedPlaylistOriginsIfAny(pl, entries); } catch { /* ignore */ }
@@ -924,6 +1051,14 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        try
+        {
+            App.SetColdStartOpenFilePathIfUnset(
+                FileOpenIpc.TryGetFirstSupportedPathFromArgs(Environment.GetCommandLineArgs())
+                ?? FileOpenIpc.TryGetFirstSupportedPathFromCommandLine());
+        }
+        catch { /* ignore */ }
+
         _shellStyleHook = MainWindowShellStyleHwndHook;
         _isFreshSettingsInstall = !File.Exists(_settingsService.GetSettingsPath());
         _startupSettings = _settingsService.LoadStartup(out _settingsStartupLoadInfo);
@@ -1325,32 +1460,55 @@ public partial class MainWindow : Window
 
             // Borderless chrome can leave WS_EX_TOOLWINDOW set, which drops the process from Task Manager "Apps".
             ApplyMainWindowShellIntegration();
-            // Load playlist first; aux windows open after the main window has rendered (see QueueStartupAuxWindowRestore).
+
+            // Capture cold-start file before any async playlist load (App may queue HandleExternal later).
+            try
+            {
+                var coldStart = PlaylistDragDropHelper.TryNormalizeLocalAudioPath(App.ColdStartOpenFilePath);
+                if (!string.IsNullOrWhiteSpace(coldStart) && FileOpenIpc.LooksLikeSupportedFileOpenArg(coldStart))
+                {
+                    _pendingExternalOpenPath = coldStart;
+                    _coldStartTargetPath = coldStart;
+                }
+            }
+            catch { /* ignore */ }
+
+            // Load playlist first; open aux windows only after pending Explorer file is merged.
             Dispatcher.BeginInvoke(new Func<Task>(async () =>
             {
-                try { await LoadLastPlaylistFromSettingsAsync().ConfigureAwait(true); } catch { /* ignore */ }
+                try
+                {
+                    try { await LoadLastPlaylistFromSettingsAsync().ConfigureAwait(true); } catch { /* ignore */ }
 
-                try
-                {
-                    if (_isFreshSettingsInstall)
+                    try
                     {
-                        ApplyFirstRunMainWindowPlacement();
-                        _ = ShowFirstRunExternalToolsNoticeAsync();
-                    }
-                }
-                catch { /* ignore */ }
-                try
-                {
-                    if (_isFreshSettingsInstall)
-                    {
-                        await Dispatcher.InvokeAsync(() =>
+                        if (_isFreshSettingsInstall)
                         {
-                            try { RequestPersistSnapshot(); } catch { /* ignore */ }
-                        }, DispatcherPriority.ContextIdle).Task.ConfigureAwait(true);
+                            ApplyFirstRunMainWindowPlacement();
+                            _ = ShowFirstRunExternalToolsNoticeAsync();
+                        }
                     }
+                    catch { /* ignore */ }
+                    try
+                    {
+                        if (_isFreshSettingsInstall)
+                        {
+                            await Dispatcher.InvokeAsync(() =>
+                            {
+                                try { RequestPersistSnapshot(); } catch { /* ignore */ }
+                            }, DispatcherPriority.ContextIdle).Task.ConfigureAwait(true);
+                        }
+                    }
+                    catch { /* ignore */ }
                 }
-                catch { /* ignore */ }
-                try { QueueStartupAuxWindowRestore(); } catch { /* ignore */ }
+                finally
+                {
+                    try { await ApplyColdStartAudioOpenAuthoritativeAsync().ConfigureAwait(true); } catch { /* ignore */ }
+                    _playlistStartupLoadComplete = true;
+                    try { EnsureColdStartTrackVisibleAfterStartupLoadBestEffort(); } catch { /* ignore */ }
+                    try { QueueStartupAuxWindowRestore(); } catch { /* ignore */ }
+                    try { await FinishColdStartSettlementIfNoAuxRestoreAsync().ConfigureAwait(true); } catch { /* ignore */ }
+                }
             }), DispatcherPriority.Background);
         };
 
@@ -4131,14 +4289,8 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var idx = _playlistCore.Entries.FindIndex(e => string.Equals(e.VideoId, cur.VideoId, StringComparison.OrdinalIgnoreCase));
-            if (idx < 0 || idx >= _playlistCore.Entries.Count)
-            {
-                try { _playlistWindow.EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
-                return;
-            }
-
-            //try { _playlistWindow.CenterNowPlaying(cur); } catch { /* ignore */ }
+            try { SelectAndScrollToNowPlayingCore(cur); } catch { /* ignore */ }
+            try { _playlistWindow.EndSuppressQueueListUntilInitialScroll(); } catch { /* ignore */ }
         }
         catch
         {
@@ -4328,12 +4480,12 @@ public partial class MainWindow : Window
             }
 
             // Append: preserve current playback. Search doesn't have a stable source URL, so treat as compound origin label.
-            var (added, removedDupes) = AppendEntriesPreserveCurrent(
+            var (added, removedDupes) = await AppendEntriesPreserveCurrentAsync(
                 entries,
                 originLabel: title,
                 originSource: sourceKey,
                 removeDuplicates: removeDuplicates,
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken).ConfigureAwait(true);
 
             TryShowAppendSummaryDialog("Playlist", added, removedDupes);
         }
@@ -4378,24 +4530,70 @@ public partial class MainWindow : Window
             return;
         }
 
-        var (added, removedDupes) = AppendEntriesPreserveCurrent(entries, originLabel: title, originSource: f, removeDuplicates, cancellationToken);
-        TryShowAppendSummaryDialog("Playlist", added, removedDupes);
+        _ = await AppendEntriesPreserveCurrentAsync(entries, originLabel: title, originSource: f, removeDuplicates, cancellationToken).ConfigureAwait(true);
     }
 
-    private async Task AddFilesAsync(IReadOnlyList<string> files, bool append, bool removeDuplicates, CancellationToken cancellationToken, IProgress<(int done, int total)>? progress = null)
+    private Task AddFilesAsync(
+        IReadOnlyList<string> files,
+        bool append,
+        bool removeDuplicates,
+        CancellationToken cancellationToken,
+        IProgress<(int done, int total)>? progress = null,
+        bool showAppendSummary = false)
+        => ImportExternalMediaFilesCoreAsync(files, append, removeDuplicates, cancellationToken, progress, showAppendSummary);
+
+    private Task ImportExternalMediaFilesCoreAsync(
+        IReadOnlyList<string> files,
+        bool append,
+        bool removeDuplicates,
+        CancellationToken cancellationToken,
+        IProgress<(int done, int total)>? progress = null,
+        bool showAppendSummary = false)
+        => OpenLocalAudioFilesFromExplorerAsync(files, append, removeDuplicates, cancellationToken, progress, showAppendSummary);
+
+    /// <summary>
+    /// Explorer / shell open and playlist file-drop for local audio. Uses a single ReplaceEntries+UI rebuild path
+    /// (not yt-dlp) so cold-start opens cannot be misrouted to YouTube import ("Added 1 items" with an empty list).
+    /// </summary>
+    private async Task OpenLocalAudioFilesFromExplorerAsync(
+        IReadOnlyList<string> rawPaths,
+        bool append,
+        bool removeDuplicates,
+        CancellationToken cancellationToken,
+        IProgress<(int done, int total)>? progress = null,
+        bool showImportSummary = false,
+        bool fastMetadata = false)
     {
-        var list = files?.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim()).Where(p => p.Length > 0).ToList()
-                   ?? new List<string>();
-        if (list.Count == 0)
+        var files = new List<string>();
+        foreach (var raw in rawPaths ?? Array.Empty<string>())
+        {
+            var p = PlaylistDragDropHelper.TryNormalizeLocalAudioPath(raw);
+            if (!string.IsNullOrWhiteSpace(p) && FileOpenIpc.LooksLikeSupportedFileOpenArg(p))
+                files.Add(p);
+        }
+
+        files = files.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (files.Count == 0)
             return;
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        var readMeta = _readMetadataOnLoad;
-        var entries = await LoadLocalFilesEntriesAsync(list, readMeta, cancellationToken, progress).ConfigureAwait(true);
+        var readMeta = _readMetadataOnLoad && !fastMetadata;
+        var entries = await LoadLocalFilesEntriesAsync(files, readMeta, cancellationToken, progress).ConfigureAwait(true);
+        if (entries.Count == 0)
+        {
+            try
+            {
+                AppLog.Info(
+                    $"OpenLocalAudioFiles: LoadLocalFilesEntries returned 0 (fastMeta={fastMetadata}, paths={string.Join("; ", files)})",
+                    AppLogInfoTier.Diagnostic);
+            }
+            catch { /* ignore */ }
+            return;
+        }
 
-        var title = list.Count == 1 ? "File" : "Files";
-        var sourceKey = list.Count == 1 ? list[0] : "Local files";
+        var title = files.Count == 1 ? "File" : "Files";
+        var sourceKey = files.Count == 1 ? files[0] : "Local files";
 
         if (!append)
         {
@@ -4406,8 +4604,221 @@ public partial class MainWindow : Window
             return;
         }
 
-        var (added, removedDupes) = AppendEntriesPreserveCurrent(entries, originLabel: title, originSource: sourceKey, removeDuplicates, cancellationToken);
-        TryShowAppendSummaryDialog("Playlist", added, removedDupes);
+        var merged = _playlistCore.Entries.ToList();
+        var (appended, removedDupes) = FilterEntriesForAppend(merged, entries, removeDuplicates);
+        if (appended.Count == 0)
+        {
+            if (files.Count == 1)
+            {
+                _lastAppliedExternalOpenPath = files[0];
+                try { SyncPlaylistUiFromCoreEntries(FindPlaylistIndexForLocalPath(files[0])); } catch { /* ignore */ }
+                try { _playlistWindow?.ClearPlaylistViewFilter(); } catch { /* ignore */ }
+                try { FocusLocalFileInPlaylistBestEffort(files[0]); } catch { /* ignore */ }
+            }
+
+            if (showImportSummary && _allowAppendSummaryDialogs)
+                TryShowAppendSummaryDialog("Playlist", 0, removedDupes);
+            return;
+        }
+
+        foreach (var e in appended)
+            merged.Add(e);
+        try
+        {
+            foreach (var e in appended)
+                _playlistCore.OriginByVideoId[e.VideoId] = new PlaylistOriginInfo(title, sourceKey);
+        }
+        catch { /* ignore */ }
+
+        _playlistIsCompound = true;
+        _playlistCore.ReplaceEntries(merged);
+
+        var curId = _engine.GetCurrent()?.VideoId;
+        var startIdx = FindIndexByVideoId(_playlistCore.Entries, curId);
+        _engine.SetQueue(
+            _playlistCore.Entries,
+            startIndex: startIdx >= 0 ? startIdx : (_playlistCore.Entries.Count > 0 ? 0 : -1),
+            raiseNowPlayingChanged: false);
+
+        var focusIdx = files.Count == 1 ? FindPlaylistIndexForLocalPath(files[0]) : merged.Count - 1;
+        if (focusIdx < 0)
+            focusIdx = Math.Max(0, merged.Count - 1);
+
+        await SetQueueListAsync(_playlistCore.Entries, focusIdx, forceFullRebuild: true, cancellationToken: cancellationToken).ConfigureAwait(true);
+
+        if (files.Count == 1)
+            _lastAppliedExternalOpenPath = files[0];
+
+        await FinishExternalAudioPlaylistUiRefreshAsync(files, appended.Count).ConfigureAwait(true);
+        UpdateRefreshEnabled();
+        UpdatePlaylistTitleDisplayForNowPlaying();
+        MarkLastPlaylistSnapshotDirty();
+        RequestPersistSnapshot();
+
+        if (showImportSummary && _allowAppendSummaryDialogs)
+            TryShowAppendSummaryDialog("Playlist", appended.Count, removedDupes);
+    }
+
+    private async Task FinishExternalAudioPlaylistUiRefreshAsync(IReadOnlyList<string> sourceFiles, int added)
+    {
+        if (added <= 0)
+            return;
+
+        var focusIdx = -1;
+        if (sourceFiles.Count == 1)
+            focusIdx = FindPlaylistIndexForLocalPath(sourceFiles[0]);
+        if (focusIdx < 0 && _playlistCore.Entries.Count > 0)
+            focusIdx = _playlistCore.Entries.Count - 1;
+
+        try { SyncPlaylistUiFromCoreEntries(focusIdx); } catch { /* ignore */ }
+        try { _playlistWindow?.ClearPlaylistViewFilter(); } catch { /* ignore */ }
+        try { _playlistWindow?.SetItemsSource(_queueItems, _playlistItems); } catch { /* ignore */ }
+
+        if (sourceFiles.Count == 1)
+        {
+            try { FocusLocalFileInPlaylistBestEffort(sourceFiles[0]); } catch { /* ignore */ }
+        }
+
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Single cold-start handler: ensure the Explorer file is in <see cref="PlaylistService"/> and the playlist UI,
+    /// without running shell drop / YouTube import paths that show "Added 1 items" and can wipe the list.
+    /// </summary>
+    private async Task ApplyColdStartAudioOpenAuthoritativeAsync()
+    {
+        var p = PlaylistDragDropHelper.TryNormalizeLocalAudioPath(
+            _coldStartTargetPath ?? _pendingExternalOpenPath ?? App.ColdStartOpenFilePath);
+        if (string.IsNullOrWhiteSpace(p) || !FileOpenIpc.LooksLikeSupportedFileOpenArg(p))
+            return;
+
+        if (_coldStartAuthoritativeApplyDone && FindPlaylistIndexForLocalPath(p) >= 0)
+        {
+            try { FocusLocalFileInPlaylistBestEffort(p); } catch { /* ignore */ }
+            return;
+        }
+
+        _coldStartTargetPath = p;
+        _pendingExternalOpenPath = null;
+
+        try
+        {
+            if (!EntryListContainsLocalPath(_playlistCore.Entries, p))
+            {
+                var fileEntries = await LoadLocalFilesEntriesAsync(
+                    new[] { p },
+                    readMetadata: false,
+                    CancellationToken.None,
+                    progress: null).ConfigureAwait(true);
+                if (fileEntries.Count == 0)
+                {
+                    try
+                    {
+                        AppLog.Warn($"Cold-start: no playlist entry built for path={p}");
+                    }
+                    catch { /* ignore */ }
+                    return;
+                }
+
+                var merged = _playlistCore.Entries.ToList();
+                merged.Add(fileEntries[0]);
+                _playlistCore.ReplaceEntries(merged);
+                try
+                {
+                    _playlistCore.OriginByVideoId[fileEntries[0].VideoId] = new PlaylistOriginInfo("File", p);
+                }
+                catch { /* ignore */ }
+
+                _playlistIsCompound = true;
+                var curId = _engine.GetCurrent()?.VideoId;
+                var startIdx = FindIndexByVideoId(_playlistCore.Entries, curId);
+                _engine.SetQueue(
+                    _playlistCore.Entries,
+                    startIndex: _playlistCore.Entries.Count == 0 ? -1 : (startIdx >= 0 ? startIdx : 0),
+                    raiseNowPlayingChanged: false);
+            }
+
+            var idx = FindPlaylistIndexForLocalPath(p);
+            if (idx < 0)
+            {
+                try
+                {
+                    AppLog.Warn(
+                        $"Cold-start: file still missing from core (count={_playlistCore.Entries.Count}, path={p})");
+                }
+                catch { /* ignore */ }
+                return;
+            }
+
+            await SetQueueListAsync(
+                _playlistCore.Entries,
+                selectedIndex: idx,
+                forceFullRebuild: true,
+                cancellationToken: CancellationToken.None).ConfigureAwait(true);
+
+            _lastAppliedExternalOpenPath = p;
+            _coldStartAuthoritativeApplyDone = true;
+
+            try { _playlistWindow?.ClearPlaylistViewFilter(); } catch { /* ignore */ }
+            try { SyncPlaylistUiFromCoreEntries(idx); } catch { /* ignore */ }
+            try { _playlistWindow?.SetItemsSource(_queueItems, _playlistItems); } catch { /* ignore */ }
+            try { FocusLocalFileInPlaylistBestEffort(p); } catch { /* ignore */ }
+
+            App.ConsumeColdStartOpenFilePath();
+            _coldStartTargetPath = null;
+
+            MarkLastPlaylistSnapshotDirty();
+            RequestPersistSnapshot();
+
+            try
+            {
+                AppLog.Warn($"Cold-start applied: {p} (playlist rows={_playlistCore.Entries.Count})");
+            }
+            catch { /* ignore */ }
+        }
+        catch (Exception ex)
+        {
+            try { AppLog.Exception(ex, "Cold-start apply failed"); } catch { /* ignore */ }
+        }
+    }
+
+    private async Task FinishColdStartSettlementIfNoAuxRestoreAsync()
+    {
+        if (ShouldRestoreStartupAuxWindows())
+            return;
+
+        try
+        {
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle).Task.ConfigureAwait(true);
+            try { EnsurePlaylistWindowOpen(); } catch { /* ignore */ }
+            await ApplyColdStartAudioOpenAuthoritativeAsync().ConfigureAwait(true);
+        }
+        catch { /* ignore */ }
+
+        FinishColdStartSettlementBestEffort();
+    }
+
+    internal void FinishColdStartSettlementBestEffort()
+    {
+        try { App.CompleteColdStartOpenSettlement(); } catch { /* ignore */ }
+        try { _allowAppendSummaryDialogs = true; } catch { /* ignore */ }
+    }
+
+    internal async Task CompleteColdStartUiAfterStartupAsync()
+    {
+        try
+        {
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle).Task.ConfigureAwait(true);
+            await ApplyColdStartAudioOpenAuthoritativeAsync().ConfigureAwait(true);
+            try { RevealColdStartTrackInPlaylistAfterAuxRestoreBestEffort(); } catch { /* ignore */ }
+            try { EnsureColdStartTrackVisibleAfterStartupLoadBestEffort(); } catch { /* ignore */ }
+        }
+        catch { /* ignore */ }
+        finally
+        {
+            FinishColdStartSettlementBestEffort();
+        }
     }
 
     private async Task<List<PlaylistEntry>> LoadLocalFilesEntriesAsync(IReadOnlyList<string> files, bool readMetadata, CancellationToken ct, IProgress<(int done, int total)>? progress = null)
@@ -4470,12 +4881,13 @@ public partial class MainWindow : Window
         return res.ToList();
     }
 
-    private (int added, int removedDuplicates) AppendEntriesPreserveCurrent(
+    private async Task<(int added, int removedDuplicates)> AppendEntriesPreserveCurrentAsync(
         IReadOnlyList<PlaylistEntry> toAppend,
         string originLabel,
         string originSource,
         bool removeDuplicates,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool rebuildUi = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -4587,7 +4999,10 @@ public partial class MainWindow : Window
                     AppLog.Info($"AppendEntriesPreserveCurrent: nothing to append (existing={existingCountBefore}, incoming={appended0.Count}, removedDupes={removedDupes})", AppLogInfoTier.Diagnostic);
             }
             catch { /* ignore */ }
-            FocusPlaylistIndexBestEffort(FindExistingPlaylistIndexForIncomingEntries(appended0));
+            var existingIdx = FindExistingPlaylistIndexForIncomingEntries(appended0);
+            var existingEntries = _playlistCore.Entries;
+            if (existingIdx >= 0 && existingEntries is { Count: > 0 } && existingIdx < existingEntries.Count)
+                FocusPlaylistEntryBestEffort(existingEntries[existingIdx]);
             return (added: 0, removedDuplicates: removedDupes);
         }
 
@@ -4614,12 +5029,153 @@ public partial class MainWindow : Window
         // RebuildEffectivePlayOrderPreserveCurrent(raiseNowPlayingChanged: false);
         var final = entries.ToArray();
         _engine.SetQueue(final, startIndex: _engine.CurrentIndex); // , raiseNowPlayingChanged: false);
-        var focusIndex = appended.Count > 0 ? final.Length - 1 : -1;
-        SetQueueList(final, selectedIndex: focusIndex);
+        var focusIndex = -1;
+        if (appended.Count > 0)
+        {
+            var last = appended[^1];
+            if (TryExtractLocalPathBestEffort(last.WebpageUrl, out var addedPath))
+                focusIndex = FindPlaylistIndexForLocalPath(addedPath);
+            if (focusIndex < 0)
+                focusIndex = final.Length - 1;
+        }
+
+        if (rebuildUi)
+            await SetQueueListAsync(final, selectedIndex: focusIndex, forceFullRebuild: true, cancellationToken: cancellationToken).ConfigureAwait(true);
         UpdatePlaylistTitleDisplayForNowPlaying();
         RequestPersistSnapshot();
 
         return (added: appended.Count, removedDuplicates: removedDupes);
+    }
+
+    /// <summary>
+    /// Merge Explorer "open with" file into the entry list before <see cref="PlaylistService.ReplaceEntries"/>,
+    /// so the first playlist UI build includes the track (avoids append vs. restore races).
+    /// </summary>
+    private async Task<string?> TryMergePendingExternalAudioIntoEntryListAsync(List<PlaylistEntry> list, CancellationToken cancellationToken)
+    {
+        var raw = GetPendingColdStartOpenPath();
+        var p = PlaylistDragDropHelper.TryNormalizeLocalAudioPath(raw);
+        if (p is null || !FileOpenIpc.LooksLikeSupportedFileOpenArg(p))
+            return null;
+
+        _pendingExternalOpenPath = null;
+
+        var fileEntries = await LoadLocalFilesEntriesAsync(new[] { p }, readMetadata: false, cancellationToken, progress: null).ConfigureAwait(true);
+        if (fileEntries.Count == 0)
+            return null;
+
+        var (appended, _) = FilterEntriesForAppend(list, fileEntries, _localImportRemoveDuplicates);
+        if (appended.Count == 0)
+        {
+            if (!EntryListContainsLocalPath(list, p))
+                return null;
+
+            _lastAppliedExternalOpenPath = p;
+            return p;
+        }
+
+        foreach (var e in appended)
+            list.Add(e);
+
+        try
+        {
+            foreach (var e in appended)
+                _playlistCore.OriginByVideoId[e.VideoId] = new PlaylistOriginInfo("File", p);
+        }
+        catch { /* ignore */ }
+
+        _lastAppliedExternalOpenPath = p;
+        return p;
+    }
+
+    private static bool EntryListContainsLocalPath(IReadOnlyList<PlaylistEntry> list, string localPath)
+    {
+        if (list is null || list.Count == 0 || string.IsNullOrWhiteSpace(localPath))
+            return false;
+
+        string key;
+        try { key = NormalizeLocalPathKey(localPath); }
+        catch { key = localPath.Trim(); }
+
+        foreach (var e in list)
+        {
+            if (TryExtractLocalPathBestEffort(e.WebpageUrl, out var existing) &&
+                string.Equals(NormalizeLocalPathKey(existing), key, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        try
+        {
+            var id = LocalPlaylistLoader.CreateLocalIdFromPath(localPath);
+            foreach (var e in list)
+            {
+                if (string.Equals(e.VideoId, id, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+        catch { /* ignore */ }
+
+        return false;
+    }
+
+    private static (List<PlaylistEntry> appended, int removedDuplicates) FilterEntriesForAppend(
+        IReadOnlyList<PlaylistEntry> existingEntries,
+        IReadOnlyList<PlaylistEntry> toAppend0,
+        bool removeDuplicates)
+    {
+        var appended0 = toAppend0?.ToList() ?? new List<PlaylistEntry>();
+        if (appended0.Count == 0)
+            return (new List<PlaylistEntry>(), 0);
+
+        if (!removeDuplicates)
+            return (appended0, 0);
+
+        var existingVideoIds = new HashSet<string>(existingEntries.Select(e => e.VideoId), StringComparer.OrdinalIgnoreCase);
+        var existingLocalPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var existingLocalFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var e in existingEntries)
+        {
+            if (TryExtractLocalPathBestEffort(e.WebpageUrl, out var lp))
+            {
+                existingLocalPaths.Add(NormalizeLocalPathKey(lp));
+                try { existingVideoIds.Add(LocalPlaylistLoader.CreateLocalIdFromPath(lp)); } catch { /* ignore */ }
+            }
+
+            var fn0 = NormalizeLocalFileNameKey(e.WebpageUrl ?? "");
+            if (!string.IsNullOrWhiteSpace(fn0))
+                existingLocalFileNames.Add(fn0);
+        }
+
+        var acc = new List<PlaylistEntry>(appended0.Count);
+        foreach (var e in appended0)
+        {
+            if (string.IsNullOrWhiteSpace(e.VideoId) || !existingVideoIds.Add(e.VideoId))
+                continue;
+
+            if (TryExtractLocalPathBestEffort(e.WebpageUrl, out var path))
+            {
+                var k = NormalizeLocalPathKey(path);
+                if (!existingLocalPaths.Add(k))
+                    continue;
+
+                try
+                {
+                    var derivedId = LocalPlaylistLoader.CreateLocalIdFromPath(path);
+                    if (!string.Equals(derivedId, e.VideoId, StringComparison.OrdinalIgnoreCase) &&
+                        !existingVideoIds.Add(derivedId))
+                        continue;
+                }
+                catch { /* ignore */ }
+            }
+
+            var fn = NormalizeLocalFileNameKey(e.WebpageUrl ?? "");
+            if (!string.IsNullOrWhiteSpace(fn) && existingLocalFileNames.Contains(fn))
+                continue;
+
+            acc.Add(e);
+        }
+
+        return (acc, Math.Max(0, appended0.Count - acc.Count));
     }
 
     private List<PlaylistEntry> RemoveLocalDuplicatesByFullPath(List<PlaylistEntry> entries)
@@ -4709,22 +5265,85 @@ public partial class MainWindow : Window
         return false;
     }
 
-    private static void TryShowAppendSummaryDialog(string title, int added, int removedDuplicates)
+    private void TryShowAppendSummaryDialog(string title, int added, int removedDuplicates)
     {
+        // Never show "Added N items" to the user — cold-start shell drops and stale UI rebuilds made this
+        // dialog report success while the playlist stayed empty. Log only for diagnostics.
+        if (added <= 0)
+            return;
+
         try
         {
-            var msg = removedDuplicates > 0
-                ? $"Added {added} items.\nSkipped {removedDuplicates} duplicates."
-                : $"Added {added} items.";
-            TopmostMessageBox.Show(msg, title, MessageBoxButton.OK, MessageBoxImage.Information);
+            AppLog.Info(
+                $"Append summary suppressed (title={title}, added={added}, dupes={removedDuplicates}, " +
+                $"coldStartPending={App.ColdStartOpenSettlementPending})",
+                AppLogInfoTier.Diagnostic);
         }
         catch { /* ignore */ }
+    }
+
+    private int BeginPlaylistUiRebuild() => Interlocked.Increment(ref _playlistUiRebuildGeneration);
+
+    private bool IsPlaylistUiRebuildCurrent(int generation)
+        => generation == Volatile.Read(ref _playlistUiRebuildGeneration);
+
+    private static bool PathsMatchForColdStart(string? a, string? b)
+    {
+        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b))
+            return false;
+        try
+        {
+            return string.Equals(
+                NormalizeLocalPathKey(a),
+                NormalizeLocalPathKey(b),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return string.Equals(a.Trim(), b.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private bool IsColdStartPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+        if (PathsMatchForColdStart(path, _coldStartTargetPath))
+            return true;
+        if (PathsMatchForColdStart(path, App.ColdStartOpenFilePath))
+            return true;
+        if (PathsMatchForColdStart(path, _lastAppliedExternalOpenPath))
+            return true;
+        return false;
     }
 
     private async Task ImportYoutubePlaylistAsync(string playlistUrlOrId, bool append, bool dedupe, CancellationToken cancellationToken)
     {
         var src = (playlistUrlOrId ?? "").Trim();
         if (string.IsNullOrWhiteSpace(src))
+            return;
+
+        if (!string.IsNullOrWhiteSpace(App.ColdStartOpenFilePath) || !string.IsNullOrWhiteSpace(_coldStartTargetPath))
+            return;
+
+        var localPath = PlaylistDragDropHelper.TryNormalizeLocalAudioPath(src);
+        if (localPath is not null && FileOpenIpc.LooksLikeSupportedFileOpenArg(localPath))
+        {
+            await OpenLocalAudioFilesFromExplorerAsync(
+                new[] { localPath },
+                append: append,
+                removeDuplicates: dedupe,
+                cancellationToken: cancellationToken,
+                progress: null,
+                showImportSummary: false,
+                fastMetadata: true).ConfigureAwait(true);
+            return;
+        }
+
+        if (!TryParseHttpUrl(src, out var httpUri) || !LooksLikeYoutube(httpUri))
+            return;
+
+        if (App.ShouldSuppressAutomatedPlaylistImports())
             return;
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -4803,7 +5422,6 @@ public partial class MainWindow : Window
                 var removedDupes = dedupe ? Math.Max(0, imported.Count - added) : 0;
                 var namePart = string.IsNullOrWhiteSpace(plName) ? src : $"\"{plName}\"";
                 SetStatusMessage("INFO", $"Appended playlist: {namePart} (+{added} items).");
-                TryShowAppendSummaryDialog("Playlist", added, removedDupes);
             }
             catch { /* ignore */ }
 
@@ -4817,7 +5435,11 @@ public partial class MainWindow : Window
                 : FindExistingPlaylistIndexForIncomingEntries(imported);
             if (focusIndex < 0)
                 focusIndex = GetOriginalIndexByVideoId(curId) ?? 0;
-            SetQueueList(_playlistCore.Entries, selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : focusIndex);
+            await SetQueueListAsync(
+                _playlistCore.Entries,
+                selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : focusIndex,
+                forceFullRebuild: true,
+                cancellationToken: cancellationToken).ConfigureAwait(true);
             UpdateRefreshEnabled();
             MarkLastPlaylistSnapshotDirty();
             RequestPersistSnapshot();
@@ -4844,21 +5466,55 @@ public partial class MainWindow : Window
         try
         {
             ct.ThrowIfCancellationRequested();
+            if (!_playlistStartupLoadComplete)
+                return;
             if (paths is null || paths.Count == 0)
                 return;
+
+            // Shell "Open with" on many Windows builds does not put the file in argv; it drops onto the playlist HWND.
+            // Never suppress local path handling — only automated URL/YouTube imports are blocked during cold start.
+            if (paths.Count == 1)
+            {
+                var shellOpen = PlaylistDragDropHelper.TryNormalizeLocalAudioPath(paths[0]);
+                if (!string.IsNullOrWhiteSpace(shellOpen) && FileOpenIpc.LooksLikeSupportedFileOpenArg(shellOpen))
+                {
+                    App.SetColdStartOpenFilePathIfUnset(shellOpen);
+                    _coldStartTargetPath ??= shellOpen;
+                    try { AppLog.Warn($"Open-with shell drop: {shellOpen}"); } catch { /* ignore */ }
+                }
+            }
 
             // Drag/drop policy: folders are always recursive; unsupported files are ignored silently.
             var files = LocalPlaylistLoader.ExpandToSupportedAudioFilesRecursive(paths, ct);
             if (files.Count == 0)
                 return;
 
-            // Use the Playlist drag/drop defaults (append/replace + dedupe).
-            // Dedupe affects append only, but AddFilesAsync applies it safely either way.
-            await AddFilesAsync(
+            var append = _playlistDragDropAppend;
+            var dedupe = _playlistDragDropRemoveDuplicates;
+            if (App.ColdStartOpenSettlementPending && files.Count == 1)
+            {
+                append = true;
+                dedupe = false;
+            }
+
+            await OpenLocalAudioFilesFromExplorerAsync(
                 files,
-                append: _playlistDragDropAppend,
-                removeDuplicates: _playlistDragDropRemoveDuplicates,
-                ct).ConfigureAwait(true);
+                append: append,
+                removeDuplicates: dedupe,
+                cancellationToken: ct,
+                progress: null,
+                showImportSummary: false,
+                fastMetadata: true).ConfigureAwait(true);
+
+            if (files.Count == 1)
+            {
+                try
+                {
+                    _lastAppliedExternalOpenPath = files[0];
+                    await ApplyColdStartAudioOpenAuthoritativeAsync().ConfigureAwait(true);
+                }
+                catch { /* ignore */ }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -4875,10 +5531,19 @@ public partial class MainWindow : Window
         try
         {
             ct.ThrowIfCancellationRequested();
+            if (App.ShouldSuppressAutomatedPlaylistImports())
+                return;
             if (urls is null || urls.Count == 0)
                 return;
 
-            var list = urls.Where(u => !string.IsNullOrWhiteSpace(u)).Select(u => u.Trim()).Where(u => u.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var list = urls
+                .Where(u => !string.IsNullOrWhiteSpace(u))
+                .Select(u => u.Trim())
+                .Where(u => u.Length > 0)
+                .Where(u => !PlaylistDragDropHelper.LooksLikeLocalFilesystemPath(u))
+                .Where(u => !IsColdStartPath(PlaylistDragDropHelper.TryNormalizeLocalAudioPath(u) ?? u))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
             if (list.Count == 0)
                 return;
 
@@ -6841,8 +7506,8 @@ public partial class MainWindow : Window
                             cacheStartIndex = idx;
                     }
 
-                    var cacheDisplayIndex = GetOriginalIndexByVideoId(cacheDesiredId) ?? 0;
                     _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : cacheStartIndex, raiseNowPlayingChanged: true);
+                    var cacheDisplayIndex = ResolvePlaylistDisplayIndexForEntry(cacheDesiredId);
                     SetQueueList(_playlistCore.Entries, selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : cacheDisplayIndex);
                     _hasLoadedPlaylist = true;
                     _previousTrackHistory.Clear();
@@ -6957,7 +7622,7 @@ public partial class MainWindow : Window
         {
             cancellationToken.ThrowIfCancellationRequested();
             _playlistWindow?.SetLoadEnabled(false);
-            SetStatusMessage("INFO", deferNowPlayingChanged ? "Searching…" : "Loading playlist...");
+            SetStatusMessage("INFO", "Loading playlist...");
 
             // Changing playlist source should stop playback.
             var sourceChanged = _hasLoadedPlaylist &&
@@ -6982,6 +7647,13 @@ public partial class MainWindow : Window
             ClearQueue();
 
             var list = entries?.ToList() ?? new List<PlaylistEntry>();
+            string? coldStartFocusPath = null;
+            if (isStartupAutoLoad)
+            {
+                try { coldStartFocusPath = await TryMergePendingExternalAudioIntoEntryListAsync(list, cancellationToken).ConfigureAwait(true); }
+                catch { /* ignore */ }
+            }
+
             _playlistCore.ReplaceEntries(list);
 
             // Populate shuffle buffer so the first "Next" click has tracks ready
@@ -7018,32 +7690,36 @@ public partial class MainWindow : Window
                     _engine.OverrideCurrentDurationSeconds(ds);
             }
             catch { /* ignore */ }
-            var displayIndex = GetOriginalIndexByVideoId(desiredId) ?? 0;
+            var displayIndex = ResolvePlaylistDisplayIndexForEntry(desiredId);
+            if (!string.IsNullOrWhiteSpace(coldStartFocusPath))
+            {
+                var coldIdx = FindPlaylistIndexForLocalPath(coldStartFocusPath);
+                if (coldIdx >= 0)
+                    displayIndex = coldIdx;
+            }
             if (deferNowPlayingChanged && isStartupAutoLoad)
             {
-                // Startup restore: building the full playlist UI can take noticeable time for large lists and
-                // blocks the dispatcher, which makes the seek bar / lyrics look "stuck" even while audio plays.
-                // Defer the heavy UI rebuild until after the first render pass.
-                await Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    try
-                    {
-                        _ = SetQueueListAsync(
-                            _playlistCore.Entries,
-                            selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : displayIndex,
-                            forceFullRebuild: true,
-                            cancellationToken: CancellationToken.None);
-                    }
-                    catch { /* ignore */ }
-                }), DispatcherPriority.ContextIdle);
+                // Let the main window render once, then build the list and focus (must finish before focus — no overlap).
+                await Dispatcher.Yield(DispatcherPriority.ContextIdle);
             }
-            else
+
+            await SetQueueListAsync(
+                _playlistCore.Entries,
+                selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : displayIndex,
+                forceFullRebuild: true,
+                cancellationToken: cancellationToken).ConfigureAwait(true);
+
+            if (!string.IsNullOrWhiteSpace(coldStartFocusPath))
             {
-                await SetQueueListAsync(
-                    _playlistCore.Entries,
-                    selectedIndex: _playlistCore.Entries.Count == 0 ? -1 : displayIndex,
-                    cancellationToken: cancellationToken);
+                _lastAppliedExternalOpenPath = coldStartFocusPath;
+                try { _playlistWindow?.ClearPlaylistViewFilter(); } catch { /* ignore */ }
+                var coldIdx = FindPlaylistIndexForLocalPath(coldStartFocusPath);
+                if (coldIdx >= 0 && coldIdx < _playlistCore.Entries.Count)
+                {
+                    try { FocusPlaylistEntryBestEffort(_playlistCore.Entries[coldIdx], openPlaylistWindow: false); } catch { /* ignore */ }
+                }
             }
+
             _hasLoadedPlaylist = true;
             _previousTrackHistory.Clear();
             UpdateRefreshEnabled();
@@ -7051,13 +7727,10 @@ public partial class MainWindow : Window
                 FocusPlaylistOnNowPlaying();
             UpdatePlaylistTitleDisplayForNowPlaying();
 
+            SetStatusMessage("INFO", _playlistCore.Entries.Count == 0 ? "Playlist is empty." : $"Loaded {_playlistCore.Entries.Count} items.");
             if (!deferNowPlayingChanged)
-            {
-                SetStatusMessage("INFO", _playlistCore.Entries.Count == 0 ? "Playlist is empty." : $"Loaded {_playlistCore.Entries.Count} items.");
                 SyncNowPlayingFromEngine();
-            }
-            else
-                SetStatusMessage("INFO", _playlistCore.Entries.Count == 0 ? "Searching…" : $"Searching… ({_playlistCore.Entries.Count} found)");
+
             MarkLastPlaylistSnapshotDirty();
 
             if (!deferNowPlayingChanged && !isStartupAutoLoad)
@@ -7077,6 +7750,9 @@ public partial class MainWindow : Window
                 cancellationToken.ThrowIfCancellationRequested();
                 await TryResumePlaybackFromSettingsAsync(cancellationToken);
             }
+
+            if (isStartupAutoLoad && _engine.GetCurrent() is { } startupCur)
+                FocusPlaylistEntryBestEffort(startupCur, openPlaylistWindow: false);
         }
         finally
         {
@@ -7261,7 +7937,28 @@ public partial class MainWindow : Window
         {
             if (snap.Entries is null || snap.Entries.Count == 0)
             {
-                // Persisted "empty playlist" snapshot.
+                var bootstrap = new List<PlaylistEntry>();
+                string? coldStartPath = null;
+                try { coldStartPath = await TryMergePendingExternalAudioIntoEntryListAsync(bootstrap, CancellationToken.None).ConfigureAwait(true); }
+                catch { /* ignore */ }
+
+                if (bootstrap.Count > 0)
+                {
+                    _lastPlaylistSourceType = ParsePlaylistSourceType(snap.SourceType);
+                    _playlistSourceText = snap.Source ?? "";
+                    _playlistWindow?.SetSourceText(_playlistSourceText);
+                    await LoadPlaylistFromEntriesAsync(
+                        bootstrap,
+                        title: snap.Name,
+                        sourceKey: string.IsNullOrWhiteSpace(_playlistSourceText) ? "snapshot" : _playlistSourceText,
+                        isStartupAutoLoad: true,
+                        deferNowPlayingChanged: true).ConfigureAwait(true);
+                    if (!string.IsNullOrWhiteSpace(coldStartPath))
+                        _lastAppliedExternalOpenPath = coldStartPath;
+                    return true;
+                }
+
+                // Persisted "empty playlist" snapshot with no Explorer file to merge.
                 _hasLoadedPlaylist = false;
                 _loadedPlaylistId = null;
                 _lastPlaylistSourceType = ParsePlaylistSourceType(snap.SourceType);
@@ -8391,33 +9088,153 @@ public partial class MainWindow : Window
         return -1;
     }
 
+    private static int FindLastIndexByVideoId(IReadOnlyList<PlaylistEntry> entries, string? videoId)
+    {
+        if (string.IsNullOrWhiteSpace(videoId))
+            return -1;
+        for (var i = entries.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(entries[i].VideoId, videoId, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+        return -1;
+    }
+
+    private int FindPlaylistIndexForLocalPath(string filePath, bool preferLastMatch = true)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return -1;
+        var entries = _playlistCore.Entries;
+        if (entries is null || entries.Count == 0)
+            return -1;
+
+        try
+        {
+            var key = NormalizeLocalPathKey(filePath);
+            var found = -1;
+            for (var i = 0; i < entries.Count; i++)
+            {
+                if (TryExtractLocalPathBestEffort(entries[i].WebpageUrl, out var existingPath) &&
+                    string.Equals(NormalizeLocalPathKey(existingPath), key, StringComparison.OrdinalIgnoreCase))
+                {
+                    found = i;
+                    if (!preferLastMatch)
+                        return i;
+                }
+            }
+
+            if (found >= 0)
+                return found;
+        }
+        catch { /* ignore */ }
+
+        try
+        {
+            var id = LocalPlaylistLoader.CreateLocalIdFromPath(filePath);
+            return FindLastIndexByVideoId(entries, id);
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    private void FocusLocalFileInPlaylistBestEffort(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return;
+
+        var idx = FindPlaylistIndexForLocalPath(filePath);
+        if (idx >= 0 && idx < _playlistCore.Entries.Count)
+            FocusPlaylistEntryBestEffort(_playlistCore.Entries[idx], openPlaylistWindow: true);
+    }
+
+    private void SyncPlaylistUiFromCoreEntries(int selectedIndex)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            try
+            {
+                Dispatcher.Invoke(() => SyncPlaylistUiFromCoreEntries(selectedIndex));
+            }
+            catch { /* ignore */ }
+            return;
+        }
+
+        var entries = _playlistCore.Entries;
+        if (entries.Count == 0)
+        {
+            SetQueueListCore(Array.Empty<PlaylistEntry>(), selectedIndex: -1, forceFullRebuild: true);
+        }
+        else
+        {
+            if (selectedIndex < 0 || selectedIndex >= entries.Count)
+                selectedIndex = Math.Max(0, entries.Count - 1);
+            SetQueueListCore(entries, selectedIndex, forceFullRebuild: true);
+        }
+
+        try { _playlistWindow?.SetItemsSource(_queueItems, _playlistItems); } catch { /* ignore */ }
+        try { _playlistWindow?.RefreshSortChoices(); } catch { /* ignore */ }
+    }
+
+    private int ResolvePlaylistDisplayIndexForEntry(string? videoId)
+    {
+        var curIdx = _engine.CurrentIndex;
+        if (curIdx >= 0 && curIdx < _playlistCore.Entries.Count)
+            return curIdx;
+        return GetOriginalIndexByVideoId(videoId) ?? 0;
+    }
+
+    private void FocusPlaylistIndexBestEffortDeferred(int index, int attempt = 0)
+    {
+        if (index < 0)
+            return;
+
+        const int maxAttempts = 12;
+        RunUnlessPlaylistContextMenuOpen(() =>
+        {
+            try { EnsurePlaylistWindowOpen(); } catch { /* ignore */ }
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    if (_playlistWindow is null)
+                    {
+                        if (attempt < maxAttempts)
+                            FocusPlaylistIndexBestEffortDeferred(index, attempt + 1);
+                        return;
+                    }
+
+                    var hasItems = _playlistItems.Count > 0 || (_playlistCore.Entries?.Count ?? 0) > 0;
+                    if (!hasItems && attempt < maxAttempts)
+                    {
+                        FocusPlaylistIndexBestEffortDeferred(index, attempt + 1);
+                        return;
+                    }
+
+                    _playlistWindow.SelectAndScrollToPlaylistIndex(index);
+                }
+                catch { /* ignore */ }
+            }, attempt == 0 ? DispatcherPriority.Loaded : DispatcherPriority.Background);
+        });
+    }
+
     private int FindExistingPlaylistIndexForIncomingEntry(PlaylistEntry incoming)
     {
         var entries = _playlistCore.Entries;
         if (entries is null || entries.Count == 0)
             return -1;
 
-        var idx = FindIndexByVideoId(entries, incoming.VideoId);
+        var idx = FindLastIndexByVideoId(entries, incoming.VideoId);
         if (idx >= 0)
             return idx;
 
         if (TryExtractLocalPathBestEffort(incoming.WebpageUrl, out var path))
         {
-            var key = NormalizeLocalPathKey(path);
-            for (var i = 0; i < entries.Count; i++)
-            {
-                if (TryExtractLocalPathBestEffort(entries[i].WebpageUrl, out var existingPath) &&
-                    string.Equals(NormalizeLocalPathKey(existingPath), key, StringComparison.OrdinalIgnoreCase))
-                    return i;
-            }
-
-            try
-            {
-                idx = FindIndexByVideoId(entries, LocalPlaylistLoader.CreateLocalIdFromPath(path));
-                if (idx >= 0)
-                    return idx;
-            }
-            catch { /* ignore */ }
+            idx = FindPlaylistIndexForLocalPath(path);
+            if (idx >= 0)
+                return idx;
         }
 
         var fileName = NormalizeLocalFileNameKey(incoming.WebpageUrl ?? "");
@@ -8451,23 +9268,24 @@ public partial class MainWindow : Window
     }
 
     private void FocusPlaylistIndexBestEffort(int index)
-    {
-        if (index < 0)
-            return;
-
-        RunUnlessPlaylistContextMenuOpen(() =>
-        {
-            try { _playlistWindow?.SelectAndScrollToPlaylistIndex(index); } catch { /* ignore */ }
-        });
-    }
+        => FocusPlaylistIndexBestEffortDeferred(index);
 
     private void SetQueueList(IReadOnlyList<PlaylistEntry> entries, int selectedIndex, bool forceFullRebuild = true)
     {
-        RunUnlessPlaylistContextMenuOpen(() => SetQueueListCore(entries, selectedIndex, forceFullRebuild));
+        var generation = BeginPlaylistUiRebuild();
+        RunUnlessPlaylistContextMenuOpen(() =>
+        {
+            if (!IsPlaylistUiRebuildCurrent(generation))
+                return;
+            SetQueueListCore(entries, selectedIndex, forceFullRebuild, generation);
+        });
     }
 
-    private void SetQueueListCore(IReadOnlyList<PlaylistEntry> entries, int selectedIndex, bool forceFullRebuild = true)
+    private void SetQueueListCore(IReadOnlyList<PlaylistEntry> entries, int selectedIndex, bool forceFullRebuild = true, int? generation = null)
     {
+        if (generation is int gen && !IsPlaylistUiRebuildCurrent(gen))
+            return;
+
         if (!forceFullRebuild && PlaylistDisplaysSameEntryOrder(entries))
         {
             UpdateNowPlayingFlag(_engine.GetCurrent());
@@ -8485,6 +9303,9 @@ public partial class MainWindow : Window
         var baseIndex = 0;
         foreach (var e in entriesSnapshot)
         {
+            if (generation is int g0 && !IsPlaylistUiRebuildCurrent(g0))
+                return;
+
             baseIndex++;
             //var prefix = isLocal ? $"{baseIndex.ToString().PadLeft(pad, '0')}. " : null;
             var prefix = $"{baseIndex.ToString().PadLeft(pad, '0')}. ";
@@ -8508,8 +9329,7 @@ public partial class MainWindow : Window
 
         _playlistWindow?.SetItemsSource(_queueItems, _playlistItems);
         try { _playlistWindow?.RefreshSortChoices(); } catch { /* ignore */ }
-        if (selectedIndex >= 0)
-            _playlistWindow?.ScrollToIndex(selectedIndex);
+        SchedulePlaylistEntryFocusAfterListReady(entriesSnapshot, selectedIndex);
     }
 
     private async Task SetQueueListAsync(
@@ -8518,12 +9338,31 @@ public partial class MainWindow : Window
         bool forceFullRebuild = true,
         CancellationToken cancellationToken = default)
     {
+        var generation = BeginPlaylistUiRebuild();
+
         if (_playlistWindow is { ShouldDeferPlaylistMutations: true })
         {
+            var deferredSnapshot = CopyEntriesSnapshot(entries);
+            var deferred = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _playlistWindow.RunOrDeferForContextMenu(() =>
             {
-                try { _ = SetQueueListAsync(entries, selectedIndex, forceFullRebuild, cancellationToken); } catch { /* ignore */ }
+                try
+                {
+                    if (!IsPlaylistUiRebuildCurrent(generation))
+                    {
+                        deferred.TrySetResult();
+                        return;
+                    }
+
+                    SetQueueListCore(deferredSnapshot, selectedIndex, forceFullRebuild, generation);
+                    deferred.TrySetResult();
+                }
+                catch (Exception ex)
+                {
+                    deferred.TrySetException(ex);
+                }
             });
+            await deferred.Task.ConfigureAwait(true);
             return;
         }
 
@@ -8535,6 +9374,9 @@ public partial class MainWindow : Window
                 DispatcherPriority.Normal).Task.Unwrap();
             return;
         }
+
+        if (!IsPlaylistUiRebuildCurrent(generation))
+            return;
 
         if (!forceFullRebuild && PlaylistDisplaysSameEntryOrder(entries))
         {
@@ -8558,6 +9400,9 @@ public partial class MainWindow : Window
         var baseIndex = 0;
         for (var idx = 0; idx < entriesSnapshot.Length; idx++)
         {
+            if (!IsPlaylistUiRebuildCurrent(generation))
+                return;
+
             var e = entriesSnapshot[idx];
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -8586,11 +9431,23 @@ public partial class MainWindow : Window
                 await Dispatcher.Yield(DispatcherPriority.Background);
         }
 
+        if (!IsPlaylistUiRebuildCurrent(generation))
+            return;
+
         _playlistWindow?.SetItemsSource(_queueItems, _playlistItems);
-        if (selectedIndex >= 0)
+        SchedulePlaylistEntryFocusAfterListReady(entriesSnapshot, selectedIndex);
+    }
+
+    private void SchedulePlaylistEntryFocusAfterListReady(PlaylistEntry[] entriesSnapshot, int selectedIndex)
+    {
+        if (selectedIndex < 0 || selectedIndex >= entriesSnapshot.Length)
+            return;
+
+        var entry = entriesSnapshot[selectedIndex];
+        Dispatcher.BeginInvoke(() =>
         {
-            _playlistWindow?.ScrollToIndex(selectedIndex);
-        }
+            try { FocusPlaylistEntryBestEffort(entry, openPlaylistWindow: false); } catch { /* ignore */ }
+        }, DispatcherPriority.Loaded);
     }
 
     private bool PlaylistDisplaysSameEntryOrder(IReadOnlyList<PlaylistEntry> entries)
@@ -11507,7 +12364,7 @@ public partial class MainWindow : Window
             }
         }
         catch { /* ignore */ }
-        return "LyllyPlayer";
+        return $"LyllyPlayer {AppVersion.Current}";
     }
 
     private string? TryGetCurrentSongTitleForWindowTitle()
@@ -14345,6 +15202,7 @@ public partial class MainWindow : Window
                 }
                 catch { /* ignore */ }
             }
+
             return Task.CompletedTask;
         }
     }

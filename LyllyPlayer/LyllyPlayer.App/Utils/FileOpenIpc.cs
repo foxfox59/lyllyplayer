@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
@@ -36,11 +37,100 @@ public static class FileOpenIpc
         for (var i = 0; i < args.Length; i++)
         {
             var a = (args[i] ?? "").Trim().Trim('"');
+            if (IsIgnorableProcessArgument(a))
+                continue;
+
+            var normalized = PlaylistDragDropHelper.TryNormalizeLocalAudioPath(a);
+            if (!string.IsNullOrWhiteSpace(normalized) && LooksLikeSupportedFileOpenArg(normalized))
+                return normalized;
+
             if (!LooksLikeSupportedFileOpenArg(a))
                 continue;
-            return a;
+
+            try { return Path.GetFullPath(a); } catch { return a; }
         }
+
         return null;
+    }
+
+    /// <summary>Parse the raw Win32 command line (handles quoted paths Explorer passes to "Open with").</summary>
+    public static string? TryGetFirstSupportedPathFromCommandLine()
+    {
+        try
+        {
+            var raw = Environment.CommandLine;
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+
+            var argv = SplitCommandLineBestEffort(raw);
+            return TryGetFirstSupportedPathFromArgs(argv);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsIgnorableProcessArgument(string arg)
+    {
+        if (string.IsNullOrWhiteSpace(arg))
+            return true;
+
+        var s = arg.Trim();
+        if (s.Length == 0)
+            return true;
+
+        // Skip the host executable path (first arg is usually the .exe).
+        if (s.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+            (s.Contains('\\') || s.Contains('/') || s.Contains(':')))
+            return true;
+
+        if (s.StartsWith("-", StringComparison.Ordinal))
+            return true;
+
+        if (s.StartsWith("/prefetch:", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (string.Equals(s, "/Embedding", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return false;
+    }
+
+    private static string[] SplitCommandLineBestEffort(string commandLine)
+    {
+        var acc = new List<string>();
+        if (string.IsNullOrWhiteSpace(commandLine))
+            return Array.Empty<string>();
+
+        var s = commandLine;
+        var i = 0;
+        while (i < s.Length)
+        {
+            while (i < s.Length && char.IsWhiteSpace(s[i]))
+                i++;
+            if (i >= s.Length)
+                break;
+
+            if (s[i] == '"')
+            {
+                i++;
+                var start = i;
+                while (i < s.Length && s[i] != '"')
+                    i++;
+                acc.Add(s[start..Math.Min(i, s.Length)]);
+                if (i < s.Length && s[i] == '"')
+                    i++;
+                continue;
+            }
+
+            var start2 = i;
+            while (i < s.Length && !char.IsWhiteSpace(s[i]))
+                i++;
+            acc.Add(s[start2..i]);
+        }
+
+        return acc.ToArray();
     }
 
     public static async Task<bool> TrySendOpenFileRequestAsync(string path, int timeoutMs = 400)

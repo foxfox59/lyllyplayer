@@ -12,6 +12,53 @@ namespace LyllyPlayer;
 /// </summary>
 public partial class App : System.Windows.Application
 {
+    /// <summary>First supported media path from cold-start args (set before <see cref="MainWindow"/> load).</summary>
+    internal static string? ColdStartOpenFilePath { get; private set; }
+
+    internal static void ConsumeColdStartOpenFilePath()
+    {
+        ColdStartOpenFilePath = null;
+    }
+
+    internal static void SetColdStartOpenFilePathIfUnset(string? path)
+    {
+        if (!string.IsNullOrWhiteSpace(ColdStartOpenFilePath))
+            return;
+        var normalized = PlaylistDragDropHelper.TryNormalizeLocalAudioPath(path);
+        if (string.IsNullOrWhiteSpace(normalized) || !FileOpenIpc.LooksLikeSupportedFileOpenArg(normalized))
+            return;
+        ColdStartOpenFilePath = normalized;
+        BeginColdStartOpenSettlement();
+    }
+
+    /// <summary>
+    /// Explorer passes the opened file as a shell "drop" when the playlist window appears. That second pass
+    /// was invoking YouTube import and showing "Added 1 items" while wiping the real append. Block automated
+    /// drop/url imports until cold-start settlement completes (and briefly after).
+    /// </summary>
+    internal static DateTime SuppressAutomatedPlaylistImportsUntilUtc { get; private set; } =
+        DateTime.UtcNow.AddSeconds(20);
+
+    /// <summary>True while a cold-start Explorer file must be merged into the playlist without interference.</summary>
+    internal static bool ColdStartOpenSettlementPending { get; private set; }
+
+    internal static void BeginColdStartOpenSettlement()
+    {
+        ColdStartOpenSettlementPending = true;
+        SuppressAutomatedPlaylistImportsUntilUtc = DateTime.UtcNow.AddSeconds(60);
+    }
+
+    internal static void CompleteColdStartOpenSettlement()
+    {
+        ColdStartOpenSettlementPending = false;
+        SuppressAutomatedPlaylistImportsUntilUtc = DateTime.UtcNow.AddSeconds(8);
+    }
+
+    internal static bool ShouldSuppressAutomatedPlaylistImports()
+        => ColdStartOpenSettlementPending
+           || !string.IsNullOrWhiteSpace(ColdStartOpenFilePath)
+           || DateTime.UtcNow < SuppressAutomatedPlaylistImportsUntilUtc;
+
     private Mutex? _singleInstanceMutex;
     private CancellationTokenSource? _openIpcCts;
     private IDisposable? _openIpcServer;
@@ -22,6 +69,8 @@ public partial class App : System.Windows.Application
         ShellProcessIdentity.TrySetExplicitAppUserModelId();
 
         base.OnStartup(e);
+
+        try { AppVersion.LogRunningBuildIdentity(); } catch { /* ignore */ }
 
         // LibVLC native runtime (VideoLAN.LibVLC.Windows) + LibVLCSharp must initialize before Media/MediaPlayer.
         // Do not block the WPF dispatcher here — init runs on the dedicated LibVLC STA thread.
@@ -53,21 +102,39 @@ public partial class App : System.Windows.Application
         }
         catch { /* ignore */ }
 
-        // Cold-start: handle file open args after MainWindow exists.
+        // Cold-start: stash path so MainWindow can merge it during startup playlist load.
         try
         {
-            var p = FileOpenIpc.TryGetFirstSupportedPathFromArgs(e.Args);
-            if (!string.IsNullOrWhiteSpace(p))
+            // MainWindow captures this on Loaded and applies it after the saved playlist finishes loading.
+            // Do not queue HandleExternalOpen here — a second dispatch was racing startup and could show
+            // "Added 1 items" while the playlist UI was rebuilt from a stale snapshot.
+            ColdStartOpenFilePath =
+                FileOpenIpc.TryGetFirstSupportedPathFromArgs(e.Args)
+                ?? FileOpenIpc.TryGetFirstSupportedPathFromArgs(Environment.GetCommandLineArgs())
+                ?? FileOpenIpc.TryGetFirstSupportedPathFromCommandLine();
+
+            if (!string.IsNullOrWhiteSpace(ColdStartOpenFilePath))
             {
-                Dispatcher.BeginInvoke(() =>
+                ColdStartOpenFilePath = PlaylistDragDropHelper.TryNormalizeLocalAudioPath(ColdStartOpenFilePath)
+                                        ?? ColdStartOpenFilePath;
+                BeginColdStartOpenSettlement();
+                try
                 {
-                    try
-                    {
-                        if (System.Windows.Application.Current?.MainWindow is MainWindow mw)
-                            mw.HandleExternalOpenFileRequestBestEffort(p!);
-                    }
-                    catch { /* ignore */ }
-                }, DispatcherPriority.Loaded);
+                    AppLog.Warn($"Open-with argv path: {ColdStartOpenFilePath}");
+                }
+                catch { /* ignore */ }
+            }
+            else
+            {
+                SuppressAutomatedPlaylistImportsUntilUtc = DateTime.UtcNow.AddSeconds(20);
+                try
+                {
+                    var argc = Environment.GetCommandLineArgs().Length;
+                    AppLog.Warn(
+                        $"Open-with: no media path in argv ({argc} args). " +
+                        "Explorer may deliver the file via shell drop when the playlist window opens.");
+                }
+                catch { /* ignore */ }
             }
         }
         catch { /* ignore */ }

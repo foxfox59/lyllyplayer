@@ -161,10 +161,20 @@ public sealed class YtDlpClient
 
     public async Task<PlaylistResolveResult> ResolvePlaylistEntriesAsync(string playlistUrlOrId, CancellationToken cancellationToken)
     {
-        // Accept raw ID by converting to a canonical URL; yt-dlp accepts both, but this keeps things consistent.
-        var url = playlistUrlOrId.Contains("://", StringComparison.OrdinalIgnoreCase)
-            ? playlistUrlOrId
-            : $"https://www.youtube.com/playlist?list={playlistUrlOrId}";
+        var raw = (playlistUrlOrId ?? "").Trim();
+        if (PlaylistDragDropHelper.LooksLikeLocalFilesystemPath(raw))
+            return new PlaylistResolveResult(null, Array.Empty<PlaylistEntry>());
+
+        // Accept raw ID by converting to a canonical URL; never treat "D:\song.mp3" as a YouTube list id.
+        string url;
+        if (raw.Contains("://", StringComparison.OrdinalIgnoreCase))
+        {
+            url = raw;
+        }
+        else
+        {
+            url = $"https://www.youtube.com/playlist?list={Uri.EscapeDataString(raw)}";
+        }
 
         // --dump-single-json prints a single JSON object including an "entries" array for playlists.
         var args = new[]

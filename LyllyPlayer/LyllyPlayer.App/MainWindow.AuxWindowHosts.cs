@@ -121,7 +121,7 @@ public partial class MainWindow
             AddLocalFolderAsync: async (folder, append, dedupe, forceNoMetadata, ct, progress) =>
                 await AddFolderAsync(folder, append, dedupe, forceNoMetadata, ct, progress).ConfigureAwait(true),
             AddLocalFilesAsync: async (files, append, dedupe, ct, progress) =>
-                await AddFilesAsync(files, append, dedupe, ct, progress).ConfigureAwait(true),
+                await AddFilesAsync(files, append, dedupe, ct, progress, showAppendSummary: false).ConfigureAwait(true),
             ApplySortAsync: async (spec, ct) => await ApplyPlaylistSortAsync(spec, ct).ConfigureAwait(true),
             GetIsYoutubeSource: () => IsYoutubeLikeSource(_lastPlaylistSourceType),
             SavePlaylistToFileAsync: async (path, displayName) =>
@@ -367,7 +367,8 @@ public partial class MainWindow
             },
             RemoveFromPlaylistAsync: (videoId) => RemovePlaylistEntryAsync(videoId),
             HandleDroppedLocalPathsAsync: async (paths, ct) => await HandleDroppedLocalPathsAsync(paths, ct).ConfigureAwait(true),
-            HandleDroppedUrlsAsync: async (urls, ct) => await HandleDroppedUrlsAsync(urls, ct).ConfigureAwait(true)
+            HandleDroppedUrlsAsync: async (urls, ct) => await HandleDroppedUrlsAsync(urls, ct).ConfigureAwait(true),
+            IsStartupPlaylistReady: () => _playlistStartupLoadComplete
         ))
         {
             Owner = this,
@@ -460,7 +461,14 @@ public partial class MainWindow
         try { WindowCoordinator.RegisterSnapping(w); } catch { /* ignore */ }
         w.SetItemsSource(_queueItems, _playlistItems);
         UpdateRefreshEnabled();
-        try { w.ApplyPersistedPlaylistFilter(latestSettings.PlaylistWindowFilter); } catch { /* ignore */ }
+        var skipPersistedFilter = App.ColdStartOpenSettlementPending
+                                  || !string.IsNullOrWhiteSpace(App.ColdStartOpenFilePath)
+                                  || !string.IsNullOrWhiteSpace(_pendingExternalOpenPath)
+                                  || !string.IsNullOrWhiteSpace(_lastAppliedExternalOpenPath);
+        if (!skipPersistedFilter)
+        {
+            try { w.ApplyPersistedPlaylistFilter(latestSettings.PlaylistWindowFilter); } catch { /* ignore */ }
+        }
         return w;
     }
 
@@ -508,7 +516,15 @@ public partial class MainWindow
     private void QueueStartupAuxWindowRestore()
     {
         if (_startupAuxWindowsRestored)
+        {
+            try
+            {
+                if (!_allowAppendSummaryDialogs && !App.ColdStartOpenSettlementPending)
+                    _allowAppendSummaryDialogs = true;
+            }
+            catch { /* ignore */ }
             return;
+        }
 
         void RestoreAfterMainSettled()
         {
@@ -538,6 +554,8 @@ public partial class MainWindow
                 catch { /* ignore */ }
             }
 
+            try { _ = CompleteColdStartUiAfterStartupAsync(); } catch { /* ignore */ }
+
             try { StartSnapRestoreDebounceTimerOnStartup(); } catch { /* ignore */ }
             try { QueueAuxSnapSyncAfterLayout(); } catch { /* ignore */ }
         }
@@ -555,6 +573,32 @@ public partial class MainWindow
             Dispatcher.BeginInvoke(RestoreAfterMainSettled, DispatcherPriority.ApplicationIdle);
         };
         ContentRendered += onRendered;
+    }
+
+    private void RevealColdStartTrackInPlaylistAfterAuxRestoreBestEffort()
+    {
+        var p = _lastAppliedExternalOpenPath;
+        if (string.IsNullOrWhiteSpace(p))
+        {
+            try { p = App.ColdStartOpenFilePath?.Trim().Trim('"'); } catch { p = null; }
+        }
+
+        if (string.IsNullOrWhiteSpace(p))
+            return;
+
+        try { _playlistWindow?.ClearPlaylistViewFilter(); } catch { /* ignore */ }
+
+        var idx = FindPlaylistIndexForLocalPath(p);
+        if (_playlistCore.Entries.Count > 0)
+        {
+            var focusIdx = idx >= 0 ? idx : _playlistCore.Entries.Count - 1;
+            try { SyncPlaylistUiFromCoreEntries(focusIdx); } catch { /* ignore */ }
+            if (idx < 0)
+                idx = FindPlaylistIndexForLocalPath(p);
+        }
+
+        if (idx >= 0 && idx < _playlistCore.Entries.Count)
+            FocusPlaylistEntryBestEffort(_playlistCore.Entries[idx], openPlaylistWindow: false);
     }
 
     private void StartSnapRestoreDebounceTimerOnStartup()
