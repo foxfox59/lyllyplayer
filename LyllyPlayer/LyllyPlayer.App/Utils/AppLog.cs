@@ -159,6 +159,9 @@ public static class AppLog
             return true;
         if (t.Contains("strongly recommended to always use the latest version", StringComparison.OrdinalIgnoreCase))
             return true;
+        // yt-dlp optional postprocessor; we play via LibVLC / yt-dlp stdout pipe, not ffmpeg.
+        if (t.Contains("ffmpeg not found", StringComparison.OrdinalIgnoreCase))
+            return true;
         return false;
     }
 

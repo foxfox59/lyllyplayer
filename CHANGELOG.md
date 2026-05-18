@@ -1,5 +1,7 @@
 ### What's new, pussycat?
 
+- 2.7.1:
+  - Fixed a play state change when loading playlist 
 - 2.7.0:
   - SMTC session for media controls (Bluetooth headsets, for example)
 - 2.6.5:

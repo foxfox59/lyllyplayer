@@ -1080,6 +1080,7 @@ public partial class MainWindow : Window
         _engine.SetEnsureYtDlpReadyAsync(EnsureYtDlpReadyAsync);
         _engine.SetNextTrackResolver(ResolveNextTrack);
         _engine.SetNextTrackPeekResolver(PeekNextTrackForPreheatOrPrefetch);
+        ApplyResolvedToolPaths();
         ApplyYtdlpPlaybackOptions();
         try { _ytDlp.SetAudioQuality(_audioQuality); } catch { /* ignore */ }
         try { _engine.NotifyYoutubeAudioQualityChanged(); } catch { /* ignore */ }
@@ -6831,13 +6832,13 @@ public partial class MainWindow : Window
             var sourceChanged = _hasLoadedPlaylist &&
                                 !string.IsNullOrWhiteSpace(_loadedPlaylistId) &&
                                 !string.Equals(_loadedPlaylistId, sourceKey, StringComparison.OrdinalIgnoreCase);
-            //if (sourceChanged)
-            //{
-            try { _engine.Stop(); } catch { /* ignore */ }
-            _pendingResumeSeconds = 0;
-            _pendingResumeVideoId = null;
-            ResetTimelineUiToStart();
-            //}
+            if (sourceChanged)
+            {
+                try { _engine.Stop(); } catch { /* ignore */ }
+                _pendingResumeSeconds = 0;
+                _pendingResumeVideoId = null;
+                ResetTimelineUiToStart();
+            }
 
             _loadedPlaylistId = sourceKey;
             _playlistSourceText = sourceKey;

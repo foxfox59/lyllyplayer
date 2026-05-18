@@ -98,7 +98,6 @@ public sealed partial class PlaybackEngine : IDisposable
     public PlaybackEngine(YtDlpClient ytDlp)
     {
         _ytDlp = ytDlp;
-        _ytDlp.SetFfmpegPath(null);
         _format = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
         _visualizerTap = new VisualizerTap(_analyzer);
         _vlcVisualizerTap = new VlcVisualizerTap(_analyzer);
@@ -169,8 +168,8 @@ public sealed partial class PlaybackEngine : IDisposable
 
     public void SetAudioNormalizeEnabled(bool enabled) => _audioNormalizeEnabled = enabled;
 
-    [Obsolete("FFmpeg is no longer used; call is ignored.")]
-    public void SetFfmpegPath(string ffmpegPath)
+    /// <summary>Legacy no-op; playback uses LibVLC only.</summary>
+    public void SetFfmpegPath(string? ffmpegPath)
     {
         _ytDlp.SetFfmpegPath(null);
     }
