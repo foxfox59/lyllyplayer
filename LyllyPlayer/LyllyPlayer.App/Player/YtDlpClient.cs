@@ -16,7 +16,8 @@ namespace LyllyPlayer.Player;
 public sealed record YoutubeStreamInput(
     string Url,
     IReadOnlyDictionary<string, string>? HttpHeaders = null,
-    bool DecodeViaYtdlpStdoutPipe = false);
+    bool DecodeViaYtdlpStdoutPipe = false,
+    int? ResolvedDurationSeconds = null);
 
 public sealed class YtDlpClient
 {
@@ -743,7 +744,12 @@ public sealed class YtDlpClient
                 }
 
                 if (resolved is not null)
+                {
+                    var dur = TryReadDurationSecondsFromDumpJson(stdout);
+                    if (dur is > 0)
+                        resolved = resolved with { ResolvedDurationSeconds = dur };
                     return resolved;
+                }
             }
             catch (OperationCanceledException)
             {
@@ -780,6 +786,23 @@ public sealed class YtDlpClient
         }
 
         return dict.Count > 0 ? dict : null;
+    }
+
+    private static int? TryReadDurationSecondsFromDumpJson(string jsonStdout)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonStdout, SafeJson.CreateDocumentOptions());
+            var root = doc.RootElement;
+            if (root.TryGetProperty("duration", out var d) && d.TryGetDouble(out var sec) && sec > 0)
+                return (int)Math.Round(sec);
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return null;
     }
 
     private YoutubeStreamInput? TryExtractYoutubePlaybackFromDumpInternal(string jsonStdout)

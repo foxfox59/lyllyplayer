@@ -58,23 +58,43 @@ public sealed class SystemMediaTransportService : IDisposable
         }
     }
 
-    /// <summary>Re-register with Windows when playback starts (avoids stale session after restart).</summary>
-    public void ActivateForPlayback(IntPtr windowHandle, bool hasTrack, bool isPlaying, string? title, string? artist)
+    /// <summary>Register or refresh the session when playback starts. Avoid <paramref name="forceRecreate"/> on every track change.</summary>
+    public void ActivateForPlayback(IntPtr windowHandle, bool hasTrack, bool isPlaying, string? title, string? artist, bool forceRecreate = false)
     {
-        TryInitialize(windowHandle, forceRecreate: true);
+        TryInitialize(windowHandle, forceRecreate);
         UpdateSession(hasTrack, isPlaying, title, artist);
 
         if (!hasTrack || !isPlaying)
             return;
 
-        if (MediaSessionFocusHelper.IsLyllyPlayerCurrent())
-            return;
+        _ = ReclaimFocusIfNeededAsync(hasTrack, isPlaying, title, artist);
+    }
 
-        var other = MediaSessionFocusHelper.TryGetCurrentSessionAppId();
-        try { AppLog.Info($"System media transport: reclaiming focus (current={other ?? "unknown"})"); } catch { /* ignore */ }
-
-        // Nudge Windows to prefer this music session over a stale video session in the volume UI.
+    /// <summary>Lightweight metadata refresh when the track changes (no SMTC tear-down).</summary>
+    public void RefreshNowPlaying(bool hasTrack, bool isPlaying, string? title, string? artist)
+    {
         UpdateSession(hasTrack, isPlaying, title, artist);
+        if (!hasTrack || !isPlaying)
+            return;
+        _ = ReclaimFocusIfNeededAsync(hasTrack, isPlaying, title, artist);
+    }
+
+    private async Task ReclaimFocusIfNeededAsync(bool hasTrack, bool isPlaying, string? title, string? artist)
+    {
+        try
+        {
+            if (await MediaSessionFocusHelper.IsLyllyPlayerCurrentAsync().ConfigureAwait(false))
+                return;
+
+            var other = await MediaSessionFocusHelper.TryGetCurrentSessionAppIdAsync().ConfigureAwait(false);
+            try { AppLog.Info($"System media transport: reclaiming focus (current={other ?? "unknown"})"); } catch { /* ignore */ }
+
+            UpdateSession(hasTrack, isPlaying, title, artist);
+        }
+        catch
+        {
+            // ignore
+        }
     }
 
     public void UpdateSession(bool hasTrack, bool isPlaying, string? title = null, string? artist = null)

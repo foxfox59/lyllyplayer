@@ -16,9 +16,7 @@ public sealed class VlcVisualizerTap : IDisposable
     private readonly object _gate = new();
     private MediaPlayer? _mp;
     private Media? _media;
-    private long _minPtsUs;
 
-    // Keep delegates rooted.
     private MediaPlayer.LibVLCAudioPlayCb? _playCb;
     private MediaPlayer.LibVLCAudioPauseCb? _pauseCb;
     private MediaPlayer.LibVLCAudioResumeCb? _resumeCb;
@@ -39,11 +37,8 @@ public sealed class VlcVisualizerTap : IDisposable
 
         lock (_gate)
         {
-            try { _analyzer.Reset(); } catch { /* ignore */ }
-            _minPtsUs = startSeconds > 0.01 ? (long)(Math.Max(0, startSeconds) * 1_000_000.0) : 0;
             _mp = new MediaPlayer(lib);
 
-            // Wire callbacks.
             _playCb = OnAudioPlay;
             _pauseCb = (_, __) => { };
             _resumeCb = (_, __) => { };
@@ -53,13 +48,11 @@ public sealed class VlcVisualizerTap : IDisposable
             _mp.SetAudioCallbacks(_playCb, _pauseCb, _resumeCb, _flushCb, _drainCb);
             _mp.SetAudioFormat("S16N", 48000, 2);
 
-            // Build media (location only; this is for stream URLs).
             if (File.Exists(url))
                 _media = new Media(lib, url, FromType.FromPath);
             else
                 _media = new Media(lib, url, FromType.FromLocation);
 
-            // Prevent any real audio output; we only want decode callbacks.
             _media.AddOption(":no-video");
             _media.AddOption(":aout=dummy");
 
@@ -115,7 +108,6 @@ public sealed class VlcVisualizerTap : IDisposable
                     return;
                 var ms = (long)(Math.Max(0, seconds) * 1000.0);
                 _mp.Time = ms;
-                _minPtsUs = (long)(Math.Max(0, seconds) * 1_000_000.0);
             }
             catch { /* ignore */ }
         }
@@ -137,27 +129,13 @@ public sealed class VlcVisualizerTap : IDisposable
 
     private void OnAudioPlay(IntPtr data, IntPtr samples, uint count, long pts)
     {
-        // "count" is frames per channel. Format = S16N stereo @ 48k.
+        _ = (data, pts);
         if (samples == IntPtr.Zero || count == 0)
             return;
 
         try
         {
-            var min = _minPtsUs;
-            // LibVLC can emit a few chunks from before the seek target right after Play()/Time set.
-            // Gate by PTS so the visualizer doesn't "flash" old audio after seeking.
-            if (min > 0 && pts > 0)
-            {
-                const long slackUs = 120_000; // allow a small early window
-                if (pts + slackUs < min)
-                    return;
-            }
-        }
-        catch { /* ignore */ }
-
-        try
-        {
-            var frames = (int)Math.Min(count, 48000); // cap at 1s
+            var frames = (int)Math.Min(count, 48000);
             var shorts = frames * 2;
             var bytes = shorts * sizeof(short);
 
@@ -167,8 +145,6 @@ public sealed class VlcVisualizerTap : IDisposable
             {
                 Marshal.Copy(samples, rentedS16, 0, shorts);
 
-                // Convert s16 -> f32le
-                // (Write bytes directly to match AudioAnalyzer contract)
                 var o = 0;
                 for (var i = 0; i < shorts; i++)
                 {
@@ -215,4 +191,3 @@ public sealed class VlcVisualizerTap : IDisposable
 
     public void Dispose() => Stop();
 }
-

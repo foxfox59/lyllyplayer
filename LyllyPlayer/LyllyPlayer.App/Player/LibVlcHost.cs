@@ -14,45 +14,73 @@ public static class LibVlcHost
     private static LibVLC? _libVlc;
     private static bool _initialized;
 
-    /// <summary>Must be called from the UI thread before constructing <see cref="MediaPlayer"/> / <see cref="Media"/>.</summary>
-    public static void EnsureInitialized()
+    private static readonly TimeSpan DefaultMarshalTimeout = TimeSpan.FromSeconds(8);
+
+    private static Dispatcher VlcDispatcher
     {
-        // Fast path: if already initialized, return immediately (do NOT marshal/log).
-        lock (Gate)
+        get
         {
-            if (_initialized)
-                return;
+            VlcDispatcherHost.EnsureStarted();
+            return VlcDispatcherHost.Dispatcher;
+        }
+    }
+
+    /// <summary>Runs on the LibVLC STA thread (blocks the caller until done or timeout).</summary>
+    public static void RunOnUiThread(Action action, TimeSpan? timeout = null)
+    {
+        var disp = VlcDispatcher;
+        if (disp.CheckAccess())
+        {
+            action();
+            return;
         }
 
-        // IMPORTANT:
-        // - Some systems crash when initializing LibVLC off the UI thread
-        // - But synchronously Dispatching to UI can deadlock/hang if the UI thread is busy
-        // We do a bounded BeginInvoke to UI; if it doesn't complete quickly, we fall back to best-effort init.
         try
         {
-            var disp = System.Windows.Application.Current?.Dispatcher;
-            if (disp is not null && !disp.CheckAccess())
-            {
-                try { AppLog.Warn("LibVlcHost.EnsureInitialized: marshaling to UI thread"); } catch { /* ignore */ }
-
-                var done = new ManualResetEventSlim(false);
-                disp.BeginInvoke(new Action(() =>
-                {
-                    try { EnsureInitializedInner(); }
-                    finally { try { done.Set(); } catch { /* ignore */ } }
-                }), DispatcherPriority.Send);
-
-                if (done.Wait(millisecondsTimeout: 2500))
-                    return;
-
-                try { AppLog.Warn("LibVlcHost.EnsureInitialized: UI marshal timed out; falling back to best-effort init"); } catch { /* ignore */ }
-                // fall through to best-effort init
-            }
+            disp.InvokeAsync(action, DispatcherPriority.Normal).Task.Wait(timeout ?? DefaultMarshalTimeout);
         }
-        catch { /* ignore */ }
-
-        EnsureInitializedInner();
+        catch (Exception ex)
+        {
+            try { AppLog.Warn($"LibVlcHost.RunOnUiThread failed: {ex.Message}"); } catch { /* ignore */ }
+        }
     }
+
+    /// <summary>Runs on the LibVLC STA thread and returns the func result.</summary>
+    public static T RunOnUiThread<T>(Func<T> func, TimeSpan? timeout = null)
+    {
+        T? result = default;
+        RunOnUiThread(() => result = func(), timeout);
+        return result!;
+    }
+
+    public static async Task RunOnUiThreadAsync(Action action, CancellationToken cancellationToken = default)
+    {
+        var disp = VlcDispatcher;
+        if (disp.CheckAccess())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            action();
+            return;
+        }
+
+        await disp.InvokeAsync(action, DispatcherPriority.Normal).Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public static async Task<T> RunOnUiThreadAsync<T>(Func<T> func, CancellationToken cancellationToken = default)
+    {
+        var disp = VlcDispatcher;
+        if (disp.CheckAccess())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return func();
+        }
+
+        return await disp.InvokeAsync(func, DispatcherPriority.Normal).Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Must be called from the LibVLC thread before constructing <see cref="MediaPlayer"/> / <see cref="Media"/>.</summary>
+    public static void EnsureInitialized()
+        => RunOnUiThread(EnsureInitializedInner);
 
     private static void EnsureInitializedInner()
     {
@@ -63,7 +91,7 @@ public static class LibVlcHost
             Core.Initialize();
             _libVlc ??= new LibVLC("--no-video", "--intf=dummy");
             _initialized = true;
-            try { AppLog.Warn("LibVlcHost.EnsureInitialized: initialized"); } catch { /* ignore */ }
+            try { AppLog.Info("LibVlcHost: initialized", AppLogInfoTier.Diagnostic); } catch { /* ignore */ }
         }
     }
 

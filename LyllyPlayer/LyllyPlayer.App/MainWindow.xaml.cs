@@ -511,7 +511,6 @@ public partial class MainWindow : Window
     private bool _playlistDragDropAppend = true;
     private bool _playlistDragDropRemoveDuplicates = true;
     private readonly AppSettings _startupSettings;
-    private bool _vlcAudioCallbacksEnabled;
     private readonly AppShell _shell = new();
     private PlaylistService _playlistCore => _shell.Playlist;
     private PlayOrderService _playOrder => _shell.PlayOrder;
@@ -638,11 +637,14 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _persistTimer;
     private bool _snapshotDirty;
     private bool _snapshotPersistInFlight;
-    private int _youtubeDurationRequestId;
     private readonly Dictionary<string, int> _youtubeDurationByVideoId = new(StringComparer.OrdinalIgnoreCase);
+    private string? _youtubeDurationInflightVideoId;
+    private int _nowPlayingUiGeneration;
     private int _lyricsResolveRequestId;
     private CancellationTokenSource? _lyricsResolveCts;
     private string? _lyricsResolveInFlightVideoId;
+    private CancellationTokenSource? _lyricsPreheatCts;
+    private DispatcherTimer? _lyricsPreheatDebounceTimer;
 
     // Persist playlist window bounds even when it's closed.
     private Rect? _lastPlaylistBounds;
@@ -955,6 +957,7 @@ public partial class MainWindow : Window
         _ytDlp = new YtDlpClient(yInit.EffectiveFileName);
 
         InitializeComponent();
+        _suppressVolumeSliderEvents = true;
 
         // Universal gapless snapping between LyllyPlayer windows.
         try { WindowCoordinator.RegisterSnapping(this); } catch { /* ignore */ }
@@ -1041,7 +1044,6 @@ public partial class MainWindow : Window
         _audioQuality = _startupSettings.AudioQuality ?? "Auto";
         _audioOutputDevice = string.IsNullOrWhiteSpace(_startupSettings.AudioOutputDevice) ? null : _startupSettings.AudioOutputDevice;
         _audioNormalizeEnabled = _startupSettings.AudioNormalize ?? false;
-        _vlcAudioCallbacksEnabled = _startupSettings.VlcAudioCallbacksEnabled ?? false;
         _uiScalePercent = _startupSettings.UiScalePercent is >= 50 and <= 200 ? _startupSettings.UiScalePercent.Value : 100;
         _windowBorderMode = NormalizeWindowBorderMode(_startupSettings.WindowBorderMode);
         _windowBorderCustomPx = Math.Clamp(_startupSettings.WindowBorderCustomPx ?? 2, 1, 24);
@@ -1086,7 +1088,6 @@ public partial class MainWindow : Window
         try { _engine.NotifyYoutubeAudioQualityChanged(); } catch { /* ignore */ }
         try { _engine.SetAudioOutputDevice(ResolveAudioDeviceNumber(_audioOutputDevice)); } catch { /* ignore */ }
         try { _engine.SetAudioNormalizeEnabled(_audioNormalizeEnabled); } catch { /* ignore */ }
-        try { _engine.SetVlcAudioCallbacksEnabled(_vlcAudioCallbacksEnabled); } catch { /* ignore */ }
         try
         {
             _engine.SetCacheMaxBytes(Math.Max(0, (long)_cacheMaxMb) * 1024L * 1024L);
@@ -1109,27 +1110,40 @@ public partial class MainWindow : Window
                 _engine.OverrideCurrentDurationSeconds(ds);
         }
         catch { /* ignore */ }
+        _engine.CurrentDurationSecondsChanged += (_, seconds) =>
+            RunOnUi(DispatcherPriority.Background, () =>
+            {
+                try { UpdateDurationUi(seconds); } catch { /* ignore */ }
+            });
         _engine.NowPlayingChanged += (_, entry) =>
         {
             try { AppLog.Warn($"NowPlayingChanged: enter videoId={(entry?.VideoId ?? "(null)")}"); } catch { /* ignore */ }
+            var uiGen = Interlocked.Increment(ref _nowPlayingUiGeneration);
             try
             {
-                // Async UI update: avoid synchronous Dispatcher.Invoke from the playback thread (hard-crash prone on some systems).
+                // Coalesce rapid skips: only the latest NowPlaying update applies heavy UI work.
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    if (uiGen != Volatile.Read(ref _nowPlayingUiGeneration))
+                        return;
                     try
                     {
                         if (_playlistWindow is { ShouldDeferPlaylistMutations: true })
                         {
                             var captured = entry;
-                            _playlistWindow.RunOrDeferForContextMenu(() => ApplyNowPlayingChangedUi(captured));
+                            _playlistWindow.RunOrDeferForContextMenu(() =>
+                            {
+                                ApplyNowPlayingChangedUi(captured);
+                                ResetVuDisplayMeters();
+                            });
                             return;
                         }
                     }
                     catch { /* ignore */ }
 
                     ApplyNowPlayingChangedUi(entry);
-                }), DispatcherPriority.Render);
+                    ResetVuDisplayMeters();
+                }), DispatcherPriority.Background);
             }
             catch { /* ignore */ }
 
@@ -1137,14 +1151,17 @@ public partial class MainWindow : Window
             _ = EnrichYoutubeDurationNowPlayingAsync(entry);
             _ = TryResolveLyricsAsync();
 
-            // Pre-heat lyrics for the next track (runs during current track's full duration)
-            PreheatNextLyricsAsync();
+            // Pre-heat lyrics for the next track (debounced; at most one inflight preheat).
+            SchedulePreheatNextLyricsDebounced();
         };
         _engine.PlaybackStateChanged += (_, isPlaying) =>
-            Dispatcher.Invoke(() =>
+            RunOnUi(DispatcherPriority.Background, () =>
             {
                 PlayPauseButton.Content = isPlaying ? "||" : ">";
-                _nowPlayingStatus = isPlaying ? "BUFFERING" : (_engine.CanResume ? "PAUSED" : "STOPPED");
+                if (!isPlaying)
+                    _nowPlayingStatus = _engine.CanResume ? "PAUSED" : "STOPPED";
+                else if (_nowPlayingStatus is "STOPPED" or "PAUSED" or "ERROR" or "")
+                    _nowPlayingStatus = "BUFFERING";
                 UpdateNowPlayingText();
                 UpdatePlaylistTitleDisplayForNowPlaying();
 
@@ -1164,119 +1181,40 @@ public partial class MainWindow : Window
                 try { SyncSystemMediaTransportSession(); } catch { /* ignore */ }
             });
         _engine.PlaybackFailed += (_, payload) =>
-            Dispatcher.Invoke(() => HandlePlaybackFailed(payload.entry, payload.message));
+            RunOnUi(() => HandlePlaybackFailed(payload.entry, payload.message));
         _engine.PrefetchTagged += (_, tag) =>
-            Dispatcher.Invoke(() => HandlePrefetchTagged(tag));
+            RunOnUi(() => HandlePrefetchTagged(tag));
         _engine.YoutubeDiskCacheReady += (_, _) =>
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 try { UpdateExportMp3ControlsEnabled(); } catch { /* ignore */ }
+                try { UpdateSeekBufferedVisuals(); } catch { /* ignore */ }
             }), DispatcherPriority.Render);
         _engine.StatusChanged += (_, payload) =>
-            Dispatcher.Invoke(() =>
+            RunOnUi(DispatcherPriority.Background, () =>
             {
                 // Only show fine-grained loading state for the currently selected/playing entry.
                 if (_nowPlayingEntry is null || !string.Equals(_nowPlayingEntry.VideoId, payload.entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                    return;
+                if (string.Equals(_nowPlayingStatus, payload.status, StringComparison.OrdinalIgnoreCase) &&
+                    string.IsNullOrWhiteSpace(payload.detail))
                     return;
                 _nowPlayingStatus = payload.status;
                 UpdateNowPlayingText(extraDetail: payload.detail);
                 UpdatePlaylistTitleDisplayForNowPlaying();
             });
-        _engine.Error += (_, msg) => Dispatcher.Invoke(() =>
-        {
-            if (!LooksLikeCancelled(msg))
+        _engine.Error += (_, msg) =>
+            RunOnUi(() =>
             {
-                _nowPlayingStatus = "ERROR";
-                UpdateNowPlayingText(extraDetail: msg);
-                UpdatePlaylistTitleDisplayForNowPlaying();
-            }
-        });
-        _engine.TrackEnded += (_, payload) => Dispatcher.Invoke(async () =>
-        {
-            // 1. Consume the ended track from queue (if it was a queued track)
-            if (_nowPlayingEntry is not null && _queuedNext.Count > 0)
-            {
-                // CONSUME the exact queued instance that ended (duplicates allowed).
-                var removeId = _playingQueuedInstanceId;
-                var idx = -1;
-                if (removeId is Guid rid)
+                if (!LooksLikeCancelled(msg))
                 {
-                    for (var i = 0; i < _queuedNext.Count; i++)
-                    {
-                        if (_queuedNext[i].Id == rid)
-                        {
-                            idx = i;
-                            break;
-                        }
-                    }
+                    _nowPlayingStatus = "ERROR";
+                    UpdateNowPlayingText(extraDetail: msg);
+                    UpdatePlaylistTitleDisplayForNowPlaying();
                 }
-
-                // Fallback: if we don't know the instance id, only consume if the head matches.
-                if (idx < 0 &&
-                    string.Equals(_queuedNext[0].Entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
-                    idx = 0;
-
-                if (idx >= 0 && idx < _queuedNext.Count)
-                {
-                    var removed = _queuedNext[idx];
-                    _queuedNext.RemoveAt(idx);
-
-                    try
-                    {
-                        for (var i = 0; i < _queueItems.Count; i++)
-                        {
-                            if (_queueItems[i].IsQueued && _queueItems[i].QueueInstanceId == removed.Id)
-                            {
-                                _queueItems.RemoveAt(i);
-                                break;
-                            }
-                        }
-                    }
-                    catch { /* ignore */ }
-
-                    UpdateQueueOrdinals();
-                    _playlistWindow?.RefreshQueueView();
-                    RequestPersistSnapshot();
-                    if (_queuedNext.Count == 0)
-                        try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
-                }
-            }
-
-            // After a natural end, the ended queued instance is no longer "playing".
-            // The next queued instance (if any) will be marked as playing when NowPlayingChanged fires.
-            _playingQueuedInstanceId = null;
-
-                // 2. Repeat:Single
-            if (_repeatMode == RepeatMode.Single)
-            {
-                    _ = Task.Run(async () =>
-                    {
-                        try { await _engine.PlayCurrentAsync().ConfigureAwait(false); }
-                        catch (Exception ex) { try { AppLog.Exception(ex, "Repeat single PlayCurrentAsync failed"); } catch { /* ignore */ } }
-                    });
-                return;
-            }
-
-            // 3. End of play order checks
-            if (_engine.PlayOrder.Count == 0)
-                return;
-            if (_engine.CurrentIndex >= _engine.PlayOrder.Count - 1)
-            {
-                if (_repeatMode == RepeatMode.Playlist)
-                {
-                    _engine.SetQueue(_engine.PlayOrder, startIndex: 0, raiseNowPlayingChanged: true);
-                        _ = Task.Run(async () =>
-                        {
-                            try { await _engine.PlayCurrentAsync().ConfigureAwait(false); }
-                            catch (Exception ex) { try { AppLog.Exception(ex, "Repeat playlist PlayCurrentAsync failed"); } catch { /* ignore */ } }
-                        });
-                }
-                return;
-            }
-
-            // 4. Advance to next track
-            await _engine.NextAsync();
-        });
+            });
+        _engine.TrackEnded += (_, payload) =>
+            RunOnUi(() => _ = HandleTrackEndedAsync(payload));
 
         _shuffleEnabled = _startupSettings.ShuffleEnabled ?? false;
         _suppressShuffleToggle = true;
@@ -1310,6 +1248,11 @@ public partial class MainWindow : Window
             if ((++_uiTimerTickCounter % 32) == 0)
             {
                 try { ApplyMainWindowShellIntegration(); } catch { /* ignore */ }
+            }
+
+            if ((_uiTimerTickCounter % 48) == 0)
+            {
+                try { UpdateExportMp3ControlsEnabled(); } catch { /* ignore */ }
             }
         };
 
@@ -1440,6 +1383,19 @@ public partial class MainWindow : Window
                 _lastAppliedShowTray = null;
                 try { ApplyAppIconVisibilityFromSettings(); } catch { /* ignore */ }
             }
+
+            try
+            {
+                var m = SettingsStore.NormalizeAppIconVisibility(_appIconVisibility);
+                if (m is "TaskbarOnly" or "TaskbarAndTray")
+                {
+                    var hwnd = new WindowInteropHelper(this).Handle;
+                    ApplyTaskbarVisibilityFromSettings(showTaskbar: true, hwnd);
+                    if (hwnd != IntPtr.Zero)
+                        ShellWindowStyle.EnsureAppearsAsForegroundApp(hwnd);
+                }
+            }
+            catch { /* ignore */ }
             // After first render, apply any deferred tray visibility.
             if (_pendingShowTrayAfterRender)
             {
@@ -1527,6 +1483,7 @@ public partial class MainWindow : Window
             try { if (_optionsWindow is not null) _optionsWindow.Topmost = false; } catch { /* ignore */ }
             DetachMainWindowShellStyleHook();
             _isShuttingDown = true;
+            try { EnsurePlaybackShutdownBestEffort(); } catch { /* ignore */ }
             try { _persistTimer.Stop(); } catch { /* ignore */ }
             try { _refreshTimer?.Stop(); } catch { /* ignore */ }
             try { _mediaHotkeys?.Dispose(); } catch { /* ignore */ }
@@ -1576,6 +1533,127 @@ public partial class MainWindow : Window
         };
 
     }
+
+    private void RunOnUi(Action action, DispatcherPriority priority = DispatcherPriority.Normal)
+    {
+        try { Dispatcher.BeginInvoke(action, priority); }
+        catch { /* ignore */ }
+    }
+
+    private void RunOnUi(DispatcherPriority priority, Action action)
+        => RunOnUi(action, priority);
+
+    private bool _playbackShutdownDone;
+
+    /// <summary>Stops LibVLC/yt-dlp and releases playback resources (safe to call more than once).</summary>
+    public void EnsurePlaybackShutdownBestEffort()
+    {
+        if (_playbackShutdownDone)
+            return;
+        _playbackShutdownDone = true;
+        try { CancelLyricsPreheatBestEffort(); } catch { /* ignore */ }
+        try { _engine.Stop(); } catch { /* ignore */ }
+        try { _engine.Dispose(); } catch { /* ignore */ }
+        try { VlcDispatcherHost.ShutdownBestEffort(); } catch { /* ignore */ }
+    }
+
+    private async Task HandleTrackEndedAsync((PlaylistEntry entry, bool endedEarly) payload)
+    {
+        try
+        {
+            // LibVLC often fires EndReached during seek/teardown or when a stream URL dies — do not skip tracks.
+            if (payload.endedEarly)
+                return;
+            // 1. Consume the ended track from queue (if it was a queued track)
+            if (_nowPlayingEntry is not null && _queuedNext.Count > 0)
+            {
+                // CONSUME the exact queued instance that ended (duplicates allowed).
+                var removeId = _playingQueuedInstanceId;
+                var idx = -1;
+                if (removeId is Guid rid)
+                {
+                    for (var i = 0; i < _queuedNext.Count; i++)
+                    {
+                        if (_queuedNext[i].Id == rid)
+                        {
+                            idx = i;
+                            break;
+                        }
+                    }
+                }
+
+                // Fallback: if we don't know the instance id, only consume if the head matches.
+                if (idx < 0 &&
+                    string.Equals(_queuedNext[0].Entry.VideoId, _nowPlayingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
+                    idx = 0;
+
+                if (idx >= 0 && idx < _queuedNext.Count)
+                {
+                    var removed = _queuedNext[idx];
+                    _queuedNext.RemoveAt(idx);
+
+                    try
+                    {
+                        for (var i = 0; i < _queueItems.Count; i++)
+                        {
+                            if (_queueItems[i].IsQueued && _queueItems[i].QueueInstanceId == removed.Id)
+                            {
+                                _queueItems.RemoveAt(i);
+                                break;
+                            }
+                        }
+                    }
+                    catch { /* ignore */ }
+
+                    UpdateQueueOrdinals();
+                    _playlistWindow?.RefreshQueueView();
+                    RequestPersistSnapshot();
+                    if (_queuedNext.Count == 0)
+                        try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
+                }
+            }
+
+            // After a natural end, the ended queued instance is no longer "playing".
+            // The next queued instance (if any) will be marked as playing when NowPlayingChanged fires.
+            _playingQueuedInstanceId = null;
+
+            // 2. Repeat:Single
+            if (_repeatMode == RepeatMode.Single)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await _engine.PlayCurrentAsync().ConfigureAwait(false); }
+                    catch (Exception ex) { try { AppLog.Exception(ex, "Repeat single PlayCurrentAsync failed"); } catch { /* ignore */ } }
+                });
+                return;
+            }
+
+            // 3. End of play order checks
+            if (_engine.PlayOrder.Count == 0)
+                return;
+            if (_engine.CurrentIndex >= _engine.PlayOrder.Count - 1)
+            {
+                if (_repeatMode == RepeatMode.Playlist)
+                {
+                    _engine.SetQueue(_engine.PlayOrder, startIndex: 0, raiseNowPlayingChanged: true);
+                    _ = Task.Run(async () =>
+                    {
+                        try { await _engine.PlayCurrentAsync().ConfigureAwait(false); }
+                        catch (Exception ex) { try { AppLog.Exception(ex, "Repeat playlist PlayCurrentAsync failed"); } catch { /* ignore */ } }
+                    });
+                }
+                return;
+            }
+
+            // 4. Advance to next track
+            await _engine.NextAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            try { AppLog.Exception(ex, "HandleTrackEndedAsync failed"); } catch { /* ignore */ }
+        }
+    }
+
     private async Task EnrichLocalNowPlayingAsync(PlaylistEntry? entry)
     {
         try
@@ -1599,12 +1677,11 @@ public partial class MainWindow : Window
             var dur = info.DurationSeconds is > 0 ? info.DurationSeconds : null;
 
             // Make metadata "stick" by updating the underlying entries + queue item.
-            Dispatcher.Invoke(() =>
+            RunOnUi(() =>
             {
                 ApplyMetadataToEntries(entry.VideoId, title, artist, dur);
                 UpdateDurationUi(dur ?? _engine.CurrentDurationSeconds);
                 UpdateNowPlayingText();
-
             });
         }
         catch
@@ -1630,6 +1707,7 @@ public partial class MainWindow : Window
 
     private async Task EnrichYoutubeDurationNowPlayingAsync(PlaylistEntry? entry)
     {
+        string? videoId = null;
         try
         {
             if (entry is null)
@@ -1639,6 +1717,8 @@ public partial class MainWindow : Window
             if (entry.VideoId.StartsWith("stream:", StringComparison.OrdinalIgnoreCase))
                 return;
 
+            videoId = entry.VideoId;
+
             // If we already have duration, nothing to do.
             if (entry.DurationSeconds is int d0 && d0 > 0)
                 return;
@@ -1647,28 +1727,38 @@ public partial class MainWindow : Window
             {
                 ApplyMetadataToEntries(entry.VideoId, title: null, artist: null, durationSeconds: cached);
                 try { _engine.OverrideCurrentDurationSeconds(cached); } catch { /* ignore */ }
-                Dispatcher.Invoke(() =>
+                RunOnUi(() =>
                 {
                     try { UpdateDurationUi(cached); } catch { /* ignore */ }
                 });
                 return;
             }
 
-            var req = Interlocked.Increment(ref _youtubeDurationRequestId);
+            if (string.Equals(_youtubeDurationInflightVideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _youtubeDurationInflightVideoId = entry.VideoId;
+            var sessionAtStart = _engine.PlaySessionGeneration;
+
+            // Let the active yt-dlp play resolve finish before a second probe (reduces failures after rapid skips).
+            try { await Task.Delay(400).ConfigureAwait(false); } catch { return; }
+
+            if (sessionAtStart != _engine.PlaySessionGeneration)
+                return;
+            if (_engine.GetCurrent() is not PlaylistEntry cur0 ||
+                !string.Equals(cur0.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+                return;
+
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
-            var dur = await _ytDlp.TryGetDurationSecondsAsync(entry.WebpageUrl, cts.Token);
+            var dur = await _ytDlp.TryGetDurationSecondsAsync(entry.WebpageUrl, cts.Token).ConfigureAwait(false);
             if (dur is not int d || d <= 0)
             {
-                // Cache negative result to avoid repeated probing on the same video during this run.
-                _youtubeDurationByVideoId[entry.VideoId] = -1;
-                TrimYoutubeDurationCacheIfNeeded();
                 AppLog.Info($"Duration probe: missing for {entry.VideoId}", AppLogInfoTier.Crucial);
                 return;
             }
 
-            // If now-playing changed while we awaited, drop result.
-            if (req != _youtubeDurationRequestId)
+            if (sessionAtStart != _engine.PlaySessionGeneration)
                 return;
             if (_engine.GetCurrent() is not PlaylistEntry cur || !string.Equals(cur.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
                 return;
@@ -1678,7 +1768,7 @@ public partial class MainWindow : Window
             ApplyMetadataToEntries(entry.VideoId, title: null, artist: null, durationSeconds: d);
             try { _engine.OverrideCurrentDurationSeconds(d); } catch { /* ignore */ }
 
-            Dispatcher.Invoke(() =>
+            RunOnUi(() =>
             {
                 try { UpdateDurationUi(d); } catch { /* ignore */ }
             });
@@ -1686,6 +1776,12 @@ public partial class MainWindow : Window
         catch
         {
             // ignore (best-effort enrichment)
+        }
+        finally
+        {
+            if (videoId is not null &&
+                string.Equals(_youtubeDurationInflightVideoId, videoId, StringComparison.OrdinalIgnoreCase))
+                _youtubeDurationInflightVideoId = null;
         }
     }
 
@@ -3255,9 +3351,9 @@ public partial class MainWindow : Window
                 return;
 
             _mediaHotkeys = new GlobalMediaHotkeys(hwnd);
-            _mediaHotkeys.PlayPausePressed += (_, _) => Dispatcher.Invoke(OnExternalMediaPlayPause);
-            _mediaHotkeys.NextPressed += (_, _) => Dispatcher.Invoke(OnExternalMediaNext);
-            _mediaHotkeys.PrevPressed += (_, _) => Dispatcher.Invoke(OnExternalMediaPrevious);
+            _mediaHotkeys.PlayPausePressed += (_, _) => RunOnUi(OnExternalMediaPlayPause);
+            _mediaHotkeys.NextPressed += (_, _) => RunOnUi(OnExternalMediaNext);
+            _mediaHotkeys.PrevPressed += (_, _) => RunOnUi(OnExternalMediaPrevious);
 
             _mediaHotkeys.TryRegister();
         }
@@ -3351,24 +3447,28 @@ public partial class MainWindow : Window
             var startedPlaying = isPlaying && !_lastEngineIsPlayingForSmtc;
             _lastEngineIsPlayingForSmtc = isPlaying;
 
-            var shouldActivate = hasTrack && (reclaimFocus || startedPlaying);
-            if (shouldActivate)
-            {
-                _mediaTransport ??= new SystemMediaTransportService();
-                if (!_mediaTransportEventsWired)
-                {
-                    _mediaTransport.PlayPausePressed += OnSmtcPlayPause;
-                    _mediaTransport.NextPressed += OnSmtcNext;
-                    _mediaTransport.PrevPressed += OnSmtcPrevious;
-                    _mediaTransportEventsWired = true;
-                }
+            if (!EnsureSystemMediaTransportService() || _mediaTransport is null)
+                return;
 
-                _mediaTransport.ActivateForPlayback(hwnd, hasTrack, isPlaying, cur?.Title, cur?.Channel);
+            if (!hasTrack)
+            {
+                _mediaTransport.UpdateSession(false, false, cur?.Title, cur?.Channel);
                 return;
             }
 
-            if (!EnsureSystemMediaTransportService() || _mediaTransport is null)
+            if (startedPlaying)
+            {
+                _mediaTransport.ActivateForPlayback(
+                    hwnd, hasTrack, isPlaying, cur?.Title, cur?.Channel,
+                    forceRecreate: !_mediaTransport.IsAvailable);
                 return;
+            }
+
+            if (reclaimFocus)
+            {
+                _mediaTransport.RefreshNowPlaying(hasTrack, isPlaying, cur?.Title, cur?.Channel);
+                return;
+            }
 
             _mediaTransport.UpdateSession(hasTrack, isPlaying, cur?.Title, cur?.Channel);
         }
@@ -3970,8 +4070,14 @@ public partial class MainWindow : Window
         UpdateNowPlayingFlag(entry);
         try { _playlistWindow?.RememberNowPlaying(entry); } catch { /* ignore */ }
         if (!ShouldSuppressAutoScroll(entry))
-            SelectAndScrollToNowPlaying(entry);
-        try { FocusPlaylistOnNowPlaying(); } catch { /* ignore */ }
+        {
+            var scrollEntry = entry;
+            Dispatcher.BeginInvoke(
+                () => SelectAndScrollToNowPlaying(scrollEntry),
+                DispatcherPriority.Background);
+        }
+
+        Dispatcher.BeginInvoke(FocusPlaylistOnNowPlaying, DispatcherPriority.Background);
         UpdateDurationUi(entry?.DurationSeconds ?? _engine.CurrentDurationSeconds);
         try { SyncSystemMediaTransportSession(reclaimMediaFocus); } catch { /* ignore */ }
         try { AppLog.Warn("NowPlayingChanged(UI): end"); } catch { /* ignore */ }
@@ -7552,7 +7658,7 @@ public partial class MainWindow : Window
 
     private void VolumeSlider_OnValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_suppressVolumeSliderEvents)
+        if (_suppressVolumeSliderEvents || _engine is null)
             return;
         try { _engine.SetVolume(e.NewValue); } catch { /* ignore */ }
     }
@@ -8989,7 +9095,9 @@ public partial class MainWindow : Window
         {
             if (engine.GetCurrent() is not PlaylistEntry cur)
                 return false;
-            if (!engine.TryGetYoutubeDiskCachePath(cur, out _))
+            if (!PlaybackEngine.IsYoutubeDiskCacheEligibleForExport(cur))
+                return false;
+            if (!engine.HasYoutubeDiskCacheOrInProgress(cur))
                 return false;
             return LameEncoderLocator.TryResolve(lameEncoderPath, out _);
         }
@@ -9303,12 +9411,43 @@ public partial class MainWindow : Window
 
             if (!_engine.TryGetYoutubeDiskCachePath(cur, out var cachePath) || string.IsNullOrWhiteSpace(cachePath))
             {
-                TopmostMessageBox.Show(
-                    "There is no finished on-disk cache for this track yet. Let playback finish caching, then try again.",
-                    GetAppTitleBase(),
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-                return;
+                if (cur.DurationSeconds is int ds && ds > 20 * 60)
+                {
+                    TopmostMessageBox.Show(
+                        "This track is too long to cache for export in the background. Use a shorter video or wait for a future stream-export option.",
+                        GetAppTitleBase(),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
+
+                ShowInfoToast("Preparing cache for export…", ms: 2500);
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(45));
+                    await _engine.PrepareYoutubeDiskCacheForExportAsync(cur, cts.Token).ConfigureAwait(true);
+                }
+                catch (Exception ex)
+                {
+                    TopmostMessageBox.Show(
+                        string.IsNullOrWhiteSpace(ex.Message)
+                            ? "Caching failed. Try again after playback has run for a while."
+                            : ex.Message,
+                        GetAppTitleBase(),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+
+                if (!_engine.TryGetYoutubeDiskCachePath(cur, out cachePath) || string.IsNullOrWhiteSpace(cachePath))
+                {
+                    TopmostMessageBox.Show(
+                        "The on-disk cache is not ready yet. Keep the track playing a little longer, then try again.",
+                        GetAppTitleBase(),
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
             }
 
             if (!LameEncoderLocator.TryResolve(_lameEncoderPath, out _))
@@ -9715,7 +9854,7 @@ public partial class MainWindow : Window
         try
         {
             var now = Environment.TickCount64;
-            if (now - _lastSeekBufRefreshMs >= 450)
+            if (now - _lastSeekBufRefreshMs >= 120)
             {
                 _lastSeekBufRefreshMs = now;
                 try { _engine.RefreshSeekableBufferedFromCache(); } catch { /* ignore */ }
@@ -9780,33 +9919,131 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (SeekCacheTrackBorder is null || SeekCacheFillBorder is null)
-                return;
-
             var dur = _engine.CurrentDurationSeconds;
-            var buf = _engine.SeekableBufferedSeconds;
-            if (dur is not int dd || dd <= 0 || buf <= 0.05)
-            {
+            var limited = _engine.UsesLimitedSeekWindow;
+            var buf = _engine.SeekBarBufferedSeconds;
+
+            if (SeekCacheTrackBorder is not null)
                 SeekCacheTrackBorder.Visibility = Visibility.Collapsed;
+
+            if (SeekSlider is null)
+                return;
+
+            if (!SeekSlider.IsLoaded)
+            {
+                try
+                {
+                    void OnLoaded(object? s, RoutedEventArgs e)
+                    {
+                        try { SeekSlider.Loaded -= OnLoaded; } catch { /* ignore */ }
+                        try { UpdateSeekBufferedVisuals(); } catch { /* ignore */ }
+                    }
+
+                    SeekSlider.Loaded += OnLoaded;
+                }
+                catch { /* ignore */ }
+            }
+
+            if (dur is not int durSec || durSec <= 0 || !SeekSlider.IsEnabled)
+            {
+                HideSeekTrackVisuals();
                 return;
             }
 
-            // Only show when buffered extent is meaningfully short of full duration (typical: cookie-pipe + growing cache).
-            if (buf + 0.35 >= dd)
+            if (!TryGetSeekSliderTrackParts(out var fullTrack, out var bufferedTrack))
             {
-                SeekCacheTrackBorder.Visibility = Visibility.Collapsed;
+                HideSeekTrackVisuals();
                 return;
             }
 
-            SeekCacheTrackBorder.Visibility = Visibility.Visible;
-            var tw = SeekCacheTrackBorder.ActualWidth;
-            if (tw > 1)
-                SeekCacheFillBorder.Width = tw * Math.Max(0, Math.Min(1, buf / dd));
+            var tw = SeekSlider.ActualWidth;
+            if (tw <= 1 && SeekSliderHostGrid is not null)
+                tw = SeekSliderHostGrid.ActualWidth;
+            if (tw <= 1)
+            {
+                try
+                {
+                    Dispatcher.BeginInvoke(
+                        new Action(() => { try { UpdateSeekBufferedVisuals(); } catch { /* ignore */ } }),
+                        DispatcherPriority.Loaded);
+                }
+                catch { /* ignore */ }
+                return;
+            }
+
+            if (!limited)
+            {
+                if (fullTrack is not null)
+                    fullTrack.Visibility = Visibility.Visible;
+                if (bufferedTrack is not null)
+                {
+                    bufferedTrack.Visibility = Visibility.Collapsed;
+                    bufferedTrack.Width = 0;
+                }
+
+                return;
+            }
+
+            if (fullTrack is not null)
+                fullTrack.Visibility = Visibility.Collapsed;
+
+            if (bufferedTrack is null)
+                return;
+
+            const double trackMargin = 8.0;
+            var innerW = Math.Max(0, tw - trackMargin);
+            var bufferedFrac = Math.Max(0, Math.Min(1, buf / durSec));
+            bufferedTrack.Visibility = Visibility.Visible;
+            bufferedTrack.Width = Math.Max(2.0, innerW * bufferedFrac);
         }
         catch
         {
             // ignore
         }
+    }
+
+    private bool TryGetSeekSliderTrackParts(
+        out System.Windows.Shapes.Rectangle? fullTrack,
+        out System.Windows.Shapes.Rectangle? bufferedTrack)
+    {
+        fullTrack = null;
+        bufferedTrack = null;
+        if (SeekSlider is null)
+            return false;
+
+        try
+        {
+            if (SeekSlider.Template is null)
+                SeekSlider.ApplyTemplate();
+        }
+        catch { /* ignore */ }
+
+        try
+        {
+            fullTrack = SeekSlider.Template?.FindName("PART_FullTrack", SeekSlider) as System.Windows.Shapes.Rectangle;
+            bufferedTrack = SeekSlider.Template?.FindName("PART_BufferedTrack", SeekSlider) as System.Windows.Shapes.Rectangle;
+        }
+        catch { /* ignore */ }
+
+        return fullTrack is not null || bufferedTrack is not null;
+    }
+
+    private void HideSeekTrackVisuals()
+    {
+        try
+        {
+            if (!TryGetSeekSliderTrackParts(out var fullTrack, out var bufferedTrack))
+                return;
+
+            if (fullTrack is not null)
+                fullTrack.Visibility = Visibility.Collapsed;
+            if (bufferedTrack is not null)
+            {
+                bufferedTrack.Visibility = Visibility.Collapsed;
+                bufferedTrack.Width = 0;
+            }
+        }
+        catch { /* ignore */ }
     }
 
     private void ClampSeekSliderToBufferedCap()
@@ -9843,7 +10080,7 @@ public partial class MainWindow : Window
         if (!ultra || durationSeconds is not int dur || dur <= 0)
         {
             UltraSeekOverlayCanvas.Visibility = Visibility.Collapsed;
-            try { if (UltraSeekCacheRect is not null) UltraSeekCacheRect.Visibility = Visibility.Collapsed; } catch { /* ignore */ }
+            try { if (UltraSeekBufferedTrackRect is not null) UltraSeekBufferedTrackRect.Visibility = Visibility.Collapsed; } catch { /* ignore */ }
             return;
         }
 
@@ -9851,7 +10088,7 @@ public partial class MainWindow : Window
         if (VisualizerHostGrid.ActualWidth <= 1)
         {
             UltraSeekOverlayCanvas.Visibility = Visibility.Collapsed;
-            try { if (UltraSeekCacheRect is not null) UltraSeekCacheRect.Visibility = Visibility.Collapsed; } catch { /* ignore */ }
+            try { if (UltraSeekBufferedTrackRect is not null) UltraSeekBufferedTrackRect.Visibility = Visibility.Collapsed; } catch { /* ignore */ }
             try
             {
                 Dispatcher.BeginInvoke(
@@ -9865,28 +10102,41 @@ public partial class MainWindow : Window
         UltraSeekOverlayCanvas.Visibility = Visibility.Visible;
 
         var w = VisualizerHostGrid.ActualWidth;
+        var trackH = UltraSeekFillRect.Height > 0 ? UltraSeekFillRect.Height : 26;
         try
         {
-            var buf = _engine.SeekableBufferedSeconds;
-            if (UltraSeekCacheRect is not null && buf > 0.05 && buf + 0.35 < dur)
+            var buf = _engine.SeekBarBufferedSeconds;
+            var limitedUltra = _engine.UsesLimitedSeekWindow;
+            var bufferedFrac = Math.Max(0, Math.Min(1, buf / dur));
+            if (UltraSeekBufferedTrackRect is not null)
             {
-                UltraSeekCacheRect.Visibility = Visibility.Visible;
-                var cacheW = Math.Max(0.0, Math.Min(w, w * (buf / dur)));
-                UltraSeekCacheRect.Width = cacheW;
-                UltraSeekCacheRect.Height = UltraSeekFillRect.Height > 0 ? UltraSeekFillRect.Height : 26;
+                if (!limitedUltra)
+                {
+                    Canvas.SetLeft(UltraSeekBufferedTrackRect, 0);
+                    UltraSeekBufferedTrackRect.Visibility = Visibility.Visible;
+                    UltraSeekBufferedTrackRect.Width = w;
+                    UltraSeekBufferedTrackRect.Height = trackH;
+                }
+                else
+                {
+                    var bufferedW = Math.Max(2.0, w * bufferedFrac);
+                    Canvas.SetLeft(UltraSeekBufferedTrackRect, 0);
+                    UltraSeekBufferedTrackRect.Visibility = Visibility.Visible;
+                    UltraSeekBufferedTrackRect.Width = bufferedW;
+                    UltraSeekBufferedTrackRect.Height = trackH;
+                }
             }
-            else if (UltraSeekCacheRect is not null)
-                UltraSeekCacheRect.Visibility = Visibility.Collapsed;
         }
         catch
         {
-            try { if (UltraSeekCacheRect is not null) UltraSeekCacheRect.Visibility = Visibility.Collapsed; } catch { /* ignore */ }
+            try { if (UltraSeekBufferedTrackRect is not null) UltraSeekBufferedTrackRect.Visibility = Visibility.Collapsed; } catch { /* ignore */ }
         }
 
         var ratio = Math.Max(0.0, Math.Min(1.0, posSeconds / dur));
         var fillW = Math.Max(0.0, Math.Min(w, w * ratio));
 
         UltraSeekFillRect.Width = fillW;
+        UltraSeekFillRect.Height = trackH;
 
         // Thumb sits at the right edge of the fill.
         var thumbW = UltraSeekThumbRect.Width > 0 ? UltraSeekThumbRect.Width : 2.0;
@@ -9907,7 +10157,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            Dispatcher.Invoke(() =>
+            RunOnUi(() =>
             {
                 try { _isSeeking = false; } catch { /* ignore */ }
 
@@ -9997,7 +10247,41 @@ public partial class MainWindow : Window
             return;
 
         ClampSeekSliderToBufferedCap();
-        await _engine.SeekAsync(SeekSlider.Value);
+        var requested = SeekSlider.Value;
+        var ok = await _engine.SeekAsync(requested);
+        SyncSeekBarToEnginePosition();
+        if (!ok && Math.Abs(SeekSlider.Value - requested) > 0.5)
+        {
+            try { AppLog.Warn($"Seek to {requested:0.###}s did not apply; syncing thumb to engine position."); } catch { /* ignore */ }
+        }
+    }
+
+    private void SyncSeekBarToEnginePosition()
+    {
+        try
+        {
+            var live = Math.Max(0, _engine.CurrentPositionSeconds);
+            var applied = Math.Max(0, _engine.LastAppliedSeekSeconds);
+            var pos = live;
+            if (applied > 0.01 && Math.Abs(live - applied) < 4.0)
+                pos = applied;
+            ElapsedTextBlock.Text = FormatTime(pos);
+
+            if (_engine.CurrentDurationSeconds is not int dur || dur <= 0)
+                return;
+
+            var cap = _engine.MaxSeekSecondsForUi;
+            var thumb = cap > 0.05 ? Math.Min(pos, cap) : pos;
+            thumb = Math.Max(0, Math.Min(thumb, dur));
+
+            _ignoreSeekBar = true;
+            try { SeekSlider.Value = thumb; }
+            finally { _ignoreSeekBar = false; }
+
+            try { UpdateUltraSeekOverlay(thumb, dur); } catch { /* ignore */ }
+            try { UpdateSeekBufferedVisuals(); } catch { /* ignore */ }
+        }
+        catch { /* ignore */ }
     }
 
     private void SeekSlider_OnValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -11470,6 +11754,7 @@ public partial class MainWindow : Window
             _lyricsWindow?.Refresh();
 
             // Cancel any prior in-flight resolve (track changed / user triggered re-resolve).
+            CancelLyricsPreheatBestEffort();
             try { _lyricsResolveCts?.Cancel(); } catch { /* ignore */ }
             try { _lyricsResolveCts?.Dispose(); } catch { /* ignore */ }
             _lyricsResolveCts = new CancellationTokenSource();
@@ -11574,7 +11859,7 @@ public partial class MainWindow : Window
                                 LogLyricsVerbose($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
                             }
                             _lyricsService.Manager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
-                            Dispatcher.Invoke(() =>
+                            RunOnUi(() =>
                             {
                                 try { UpdateNowPlayingText(); } catch { /* ignore */ }
                                 try { UpdatePlaylistTitleDisplayForNowPlaying(); } catch { /* ignore */ }
@@ -11652,7 +11937,7 @@ public partial class MainWindow : Window
                             var ytTitle = metadata?.Title ?? entry.Title;
                             LogLyricsVerbose($"TryResolveLyricsAsync: fetched lyrics for {requestedVideoId}, length={lrc.Length}, lines={LrcParser.Parse(lrc, CancellationToken.None).Count}, artist={ytArtist ?? "(none)"}, title={ytTitle ?? "(none)"}");
                             _lyricsService.Manager.Parse(lrc, artist: ytArtist, title: ytTitle);
-                            Dispatcher.Invoke(() =>
+                            RunOnUi(() =>
                             {
                                 try { UpdateNowPlayingText(); } catch { /* ignore */ }
                                 try { UpdatePlaylistTitleDisplayForNowPlaying(); } catch { /* ignore */ }
@@ -11700,7 +11985,7 @@ public partial class MainWindow : Window
                                         LogLyricsVerbose($"TryResolveLyricsAsync: LRCLIB returned lyrics for {entry.VideoId} ({title}), length={lrcLrclib.Length}, lines={LrcParser.Parse(lrcLrclib, CancellationToken.None).Count}, no duration for offset calc, artist={lrclibArtist ?? "(none)"}, name={lrclibName ?? "(none)"}");
                                     }
                                     _lyricsService.Manager.Parse(lrcLrclib, syncOffset, artist: lrclibArtist, title: lrclibName, isPlainLyrics: isPlainLyrics);
-                                    Dispatcher.Invoke(() =>
+                                    RunOnUi(() =>
                                     {
                                         try { UpdateNowPlayingText(); } catch { /* ignore */ }
                                         try { UpdatePlaylistTitleDisplayForNowPlaying(); } catch { /* ignore */ }
@@ -11787,12 +12072,46 @@ public partial class MainWindow : Window
         AppLog.Info($"Shuffle buffer populated: {_shuffleNextBuffer.Count} items ready");
     }
 
+    private void CancelLyricsPreheatBestEffort()
+    {
+        try { _lyricsPreheatCts?.Cancel(); } catch { /* ignore */ }
+        try { _lyricsPreheatCts?.Dispose(); } catch { /* ignore */ }
+        _lyricsPreheatCts = null;
+        try
+        {
+            _lyricsPreheatDebounceTimer?.Stop();
+            _lyricsPreheatDebounceTimer = null;
+        }
+        catch { /* ignore */ }
+    }
+
     /// <summary>
-    /// Computes the next track based on the current engine state and preheats its lyrics.
-    /// Called from NowPlayingChanged so preheat runs during the current track's full duration,
-    /// ensuring lyrics are cached before the user navigates to the next track.
+    /// Debounced preheat for the next track's lyrics (single inflight yt-dlp/LRCLIB job).
     /// </summary>
-    private void PreheatNextLyricsAsync()
+    private void SchedulePreheatNextLyricsDebounced()
+    {
+        if (!_lyricsEnabled)
+            return;
+
+        try
+        {
+            _lyricsPreheatDebounceTimer?.Stop();
+            _lyricsPreheatDebounceTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(450),
+            };
+            _lyricsPreheatDebounceTimer.Tick += (_, _) =>
+            {
+                try { _lyricsPreheatDebounceTimer?.Stop(); } catch { /* ignore */ }
+                _lyricsPreheatDebounceTimer = null;
+                try { PreheatNextLyricsCore(); } catch { /* ignore */ }
+            };
+            _lyricsPreheatDebounceTimer.Start();
+        }
+        catch { /* ignore */ }
+    }
+
+    private void PreheatNextLyricsCore()
     {
         if (!_lyricsEnabled)
             return;
@@ -11800,19 +12119,27 @@ public partial class MainWindow : Window
         var currentEntry = _engine.GetCurrent();
         if (currentEntry is null)
             return;
+
         var nextEntry = PeekNextTrackForPreheatOrPrefetch();
-        if (nextEntry is not null)
-            _ = PreheatLyricsAsync(nextEntry);
+        if (nextEntry is null)
+            return;
+
+        CancelLyricsPreheatBestEffort();
+        _lyricsPreheatCts = new CancellationTokenSource();
+        var ct = _lyricsPreheatCts.Token;
+        _ = PreheatLyricsAsync(nextEntry, ct);
     }
 
     /// <summary>
     /// Pre-fetches and caches lyrics for a track without updating the UI.
-    /// Called from PreheatNextLyricsAsync (via NowPlayingChanged) to preheat lyrics for the next track.
     /// </summary>
-    private async Task PreheatLyricsAsync(PlaylistEntry entry)
+    private async Task PreheatLyricsAsync(PlaylistEntry entry, CancellationToken ct)
     {
+        var ownedCts = _lyricsPreheatCts;
         try
         {
+            ct.ThrowIfCancellationRequested();
+
             if (!_lyricsEnabled || string.IsNullOrWhiteSpace(entry.VideoId))
                 return;
 
@@ -11850,7 +12177,7 @@ public partial class MainWindow : Window
                 var duration = syncDuration ?? entry.DurationSeconds;
 
                 var (lrcLrclib, _, _, _, _, isDefinitiveMiss) =
-                    await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, duration, CancellationToken.None);
+                    await LyricsResolver.FetchLyricsFromLrclibAsync(title, artist, duration, ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(lrcLrclib))
                 {
                     LyricsCache.Set(cacheKey, lrcLrclib);
@@ -11866,7 +12193,7 @@ public partial class MainWindow : Window
             {
                 // YouTube: fetch from yt-dlp, fallback to LRCLIB
                 var resolvedYtDlp = ToolPathResolver.Resolve(_savedYtDlpPath, "yt-dlp");
-                var lrc = await LyricsResolver.FetchLyricsForYouTubeAsync(resolvedYtDlp.EffectiveFileName, entry.VideoId, CancellationToken.None);
+                var lrc = await LyricsResolver.FetchLyricsForYouTubeAsync(resolvedYtDlp.EffectiveFileName, entry.VideoId, ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(lrc))
                 {
                     LyricsCache.Set(cacheKey, lrc);
@@ -11877,7 +12204,7 @@ public partial class MainWindow : Window
                     // Fallback to LRCLIB
                     var title = entry.Title ?? "";
                     var (lrcLrclib, _, _, _, _, isDefinitiveMiss) =
-                        await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.Channel, entry.DurationSeconds, CancellationToken.None);
+                        await LyricsResolver.FetchLyricsFromLrclibAsync(title, entry.Channel, entry.DurationSeconds, ct).ConfigureAwait(false);
                     if (!string.IsNullOrWhiteSpace(lrcLrclib))
                     {
                         LyricsCache.Set(cacheKey, lrcLrclib);
@@ -11891,9 +12218,21 @@ public partial class MainWindow : Window
                 }
             }
         }
+        catch (OperationCanceledException)
+        {
+            // ignore
+        }
         catch
         {
             // ignore pre-fetch failures
+        }
+        finally
+        {
+            if (ReferenceEquals(ownedCts, _lyricsPreheatCts))
+            {
+                try { ownedCts?.Dispose(); } catch { /* ignore */ }
+                _lyricsPreheatCts = null;
+            }
         }
     }
 
@@ -12047,18 +12386,9 @@ public partial class MainWindow : Window
 
             try { CleanupLegacyNativeTrayIconsBestEffort(); } catch { /* ignore */ }
 
-            // On first apply, detect the current taskbar visibility from native styles so we don't
-            // rebuild the taskbar button unnecessarily at startup (which is the remaining gap repro).
-            if (_lastAppliedShowInTaskbar is null)
-            {
-                try
-                {
-                    var ex0 = (uint)GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
-                    var nativeShowsTaskbar = (ex0 & WS_EX_TOOLWINDOW) == 0;
-                    _lastAppliedShowInTaskbar = nativeShowsTaskbar;
-                }
-                catch { /* ignore */ }
-            }
+            // Taskbar / Task Manager "Apps" integration first. Never skip this when deferring the tray icon
+            // (borderless WPF can leave WS_EX_TOOLWINDOW set until we clear it — unrelated to SMTC / media keys).
+            ApplyTaskbarVisibilityFromSettings(showTaskbar, hwnd);
 
             // Tray icon + context menu via Hardcodet.Wpf.NotifyIcon (previously best-behaving in this app).
             try
@@ -12068,10 +12398,7 @@ public partial class MainWindow : Window
                     // Startup workaround: only create/show the tray icon after the user manually focuses/interacts
                     // with the main window (click or key). Toggle in Options happens after interaction, so it works.
                     if (showTray && !_userActivatedTrayAllowed)
-                    {
-                        // Do not add the tray icon yet.
                         return;
-                    }
 
                     EnsureHardcodetTrayIconCreated();
                     if (_hardcodetTrayIcon is not null)
@@ -12088,18 +12415,28 @@ public partial class MainWindow : Window
                 }
             }
             catch { /* ignore */ }
+        }
+        catch { /* ignore */ }
+    }
 
-            // Avoid constantly "jolting" Explorer with style rebuilds when the mode hasn't changed.
-            // Rebuilding the taskbar button can cause a temporary right-edge gap in the notification area
-            // on some Win10 configurations until the window is activated again.
+    private void ApplyTaskbarVisibilityFromSettings(bool showTaskbar, IntPtr hwnd)
+    {
+        try
+        {
             if (_lastAppliedShowInTaskbar != showTaskbar)
             {
                 ApplyTaskbarVisibilityNative(showTaskbar);
                 _lastAppliedShowInTaskbar = showTaskbar;
+                return;
             }
-            // ShowInTaskbar is set inside ApplyTaskbarVisibilityNative (which also uses ITaskbarList).
-            // Taskbar rebuilds can leave a cosmetic tray gap on some Win10 builds until the user interacts
-            // with the tray — do not steal/restore foreground to "fix" it (breaks focus for all apps).
+
+            if (!showTaskbar || hwnd == IntPtr.Zero)
+                return;
+
+            // WPF borderless chrome can flip WS_EX_TOOLWINDOW without changing our cached mode.
+            var ex = unchecked((uint)GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64());
+            if ((ex & WS_EX_TOOLWINDOW) != 0 || (ex & WS_EX_APPWINDOW) == 0)
+                ApplyTaskbarVisibilityNative(true);
         }
         catch { /* ignore */ }
     }
@@ -14162,6 +14499,12 @@ public partial class MainWindow : Window
         ApplySpectrumCurveFill();
         System.Windows.Controls.Panel.SetZIndex(_spectrumCurvePath, 1);
         SpectrumCanvas.Children.Add(_spectrumCurvePath);
+    }
+
+    private void ResetVuDisplayMeters()
+    {
+        try { VuLeftBar.Value = 0; } catch { /* ignore */ }
+        try { VuRightBar.Value = 0; } catch { /* ignore */ }
     }
 
     private void UpdateVisualizerUi()

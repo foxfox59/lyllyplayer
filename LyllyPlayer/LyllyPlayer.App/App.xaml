@@ -1186,14 +1186,31 @@
                     Padding="{TemplateBinding Padding}"
                     HorizontalAlignment="Stretch">
                 <Grid SnapsToDevicePixels="True" HorizontalAlignment="Stretch">
-                    <Rectangle Height="4"
+                    <!-- Local / full seek: entire bar visible. -->
+                    <Rectangle x:Name="PART_FullTrack"
+                               Height="4"
                                RadiusX="2"
                                RadiusY="2"
                                Fill="{DynamicResource App.Theme.ForegroundSubtle}"
                                Opacity="0.45"
                                VerticalAlignment="Center"
                                HorizontalAlignment="Stretch"
-                               Margin="4,0"/>
+                               Margin="4,0"
+                               Visibility="Collapsed"
+                               IsHitTestVisible="False"/>
+                    <!-- Stream / limited seek: buffered extent only; right side stays transparent. -->
+                    <Rectangle x:Name="PART_BufferedTrack"
+                               Height="4"
+                               RadiusX="2"
+                               RadiusY="2"
+                               Fill="{DynamicResource App.Theme.ForegroundSubtle}"
+                               Opacity="0.45"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Left"
+                               Margin="4,0"
+                               Width="0"
+                               Visibility="Collapsed"
+                               IsHitTestVisible="False"/>
                     <Track x:Name="PART_Track"
                            VerticalAlignment="Center"
                            HorizontalAlignment="Stretch"

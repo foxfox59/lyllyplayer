@@ -9,16 +9,12 @@ internal static class MediaSessionFocusHelper
 {
     public const string LyllyPlayerAppUserModelId = "LyllyPlayer.LyllyPlayer.Foreground.1";
 
-    public static string? TryGetCurrentSessionAppId()
+    public static async Task<string?> TryGetCurrentSessionAppIdAsync()
     {
         try
         {
-            var manager = GlobalSystemMediaTransportControlsSessionManager
-                .RequestAsync()
-                .AsTask()
-                .ConfigureAwait(false)
-                .GetAwaiter()
-                .GetResult();
+            var manager = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync().AsTask()
+                .ConfigureAwait(false);
             return manager.GetCurrentSession()?.SourceAppUserModelId;
         }
         catch
@@ -27,9 +23,9 @@ internal static class MediaSessionFocusHelper
         }
     }
 
-    public static bool IsLyllyPlayerCurrent()
+    public static async Task<bool> IsLyllyPlayerCurrentAsync()
     {
-        var id = TryGetCurrentSessionAppId();
+        var id = await TryGetCurrentSessionAppIdAsync().ConfigureAwait(false);
         if (string.IsNullOrEmpty(id))
             return false;
         return id.Contains("LyllyPlayer", StringComparison.OrdinalIgnoreCase);

@@ -15,9 +15,10 @@ public sealed class AudioAnalyzer
     /// <summary>Upper edge of the top band (Hz). <b>22050</b> = 44100/2 (CD Nyquist); aligns with common “full spectrum” labeling.</summary>
     public const double SpectrumFreqMaxHz = 22050.0;
 
-    private readonly object _gate = new();
+    private readonly object _vuGate = new();
+    private readonly object _spectrumGate = new();
 
-    // VU (0..1)
+    // VU (0..1) — never block on spectrum FFT.
     private float _vuL;
     private float _vuR;
 
@@ -26,23 +27,25 @@ public sealed class AudioAnalyzer
     private int _ringWrite;
     private int _ringCount;
     private readonly float[] _bands = new float[SpectrumBands];
-    private int _samplesSinceFft;
     private float _specScale = 1f;
+    private long _lastSpectrumComputeTick;
 
     public void Reset()
     {
-        lock (_gate)
+        lock (_vuGate)
         {
             _vuL = 0;
             _vuR = 0;
+        }
+
+        lock (_spectrumGate)
+        {
             Array.Clear(_ring);
             _ringWrite = 0;
             _ringCount = 0;
             Array.Clear(_bands);
-            _samplesSinceFft = 0;
-            // Start at 0 so the first computed frame immediately establishes an appropriate scale.
-            // If this is initialized too high, the spectrum appears to "rise gradually" after seeks/resets.
             _specScale = 0f;
+            _lastSpectrumComputeTick = 0;
         }
     }
 
@@ -53,55 +56,61 @@ public sealed class AudioAnalyzer
         if (end <= offset)
             return;
 
-        var peakL = 0f;
-        var peakR = 0f;
-
-        lock (_gate)
+        for (var i = offset; i < end; i += 8)
         {
-            for (var i = offset; i < end; i += 8)
+            var fl = BitConverter.ToSingle(buffer, i);
+            var fr = BitConverter.ToSingle(buffer, i + 4);
+            var afl = Math.Abs(fl);
+            var afr = Math.Abs(fr);
+
+            lock (_vuGate)
             {
-                var fl = BitConverter.ToSingle(buffer, i);
-                var fr = BitConverter.ToSingle(buffer, i + 4);
-                var afl = Math.Abs(fl);
-                var afr = Math.Abs(fr);
-
-                if (afl > peakL) peakL = afl;
-                if (afr > peakR) peakR = afr;
-
-                // Mono mix for spectrum
-                var mono = (fl + fr) * 0.5f;
-                WriteRing(mono);
-                _samplesSinceFft++;
+                _vuL = SmoothLevel(_vuL, afl);
+                _vuR = SmoothLevel(_vuR, afr);
             }
 
-            // Simple smoothing (fast attack, slower release)
-            _vuL = SmoothLevel(_vuL, peakL);
-            _vuR = SmoothLevel(_vuR, peakR);
-
-            // Recompute spectrum ~90fps (approx) for snappier UI.
-            if (_ringCount >= FftSize && _samplesSinceFft >= SampleRate / 90)
-            {
-                _samplesSinceFft = 0;
-                ComputeSpectrum();
-            }
+            lock (_spectrumGate)
+                WriteRing((fl + fr) * 0.5f);
         }
     }
 
     public (float vuL, float vuR, float[] bands) GetSnapshot()
     {
-        lock (_gate)
+        MaybeUpdateSpectrumThrottled();
+
+        float vuL;
+        float vuR;
+        lock (_vuGate)
         {
-            var copy = new float[SpectrumBands];
+            vuL = _vuL;
+            vuR = _vuR;
+        }
+
+        var copy = new float[SpectrumBands];
+        lock (_spectrumGate)
             Array.Copy(_bands, copy, SpectrumBands);
-            return (_vuL, _vuR, copy);
+        return (vuL, vuR, copy);
+    }
+
+    private void MaybeUpdateSpectrumThrottled()
+    {
+        var now = Environment.TickCount64;
+        if (now - _lastSpectrumComputeTick < 33)
+            return;
+
+        lock (_spectrumGate)
+        {
+            if (_ringCount < FftSize)
+                return;
+            _lastSpectrumComputeTick = now;
+            ComputeSpectrum();
         }
     }
 
     private static float SmoothLevel(float current, float target)
     {
-        // Attack faster than release
-        var attack = 0.55f;
-        var release = 0.08f;
+        const float attack = 0.88f;
+        const float release = 0.48f;
         var k = target > current ? attack : release;
         return current + (target - current) * k;
     }
@@ -196,18 +205,13 @@ public sealed class AudioAnalyzer
                 sumSq += m * m;
             }
 
-            // RMS of bin magnitudes (>= mean; helps peaky bass that only hits one or two bins).
             var rms = (float)Math.Sqrt(sumSq / Math.Max(1, n));
 
-            // Low log bands cover few Hz → few bins; mean/RMS still under-read vs wider bands for the same
-            // physical level. Compensate by sqrt(bin width / band width), capped (only boosts, never cuts).
             var bandHz = (float)Math.Max(f1 - f0, 1e-3);
             var narrowBoost = MathF.Sqrt(binDfHz / MathF.Max(bandHz, 0.45f * binDfHz));
             if (narrowBoost < 1f) narrowBoost = 1f;
             if (narrowBoost > 3.4f) narrowBoost = 3.4f;
 
-            // Scale + compress dynamic range for a nicer looking bar height.
-            // Keep this as an unbounded "raw" value; we'll auto-scale after.
             var boosted = rms * narrowBoost * 220f;
             var v = (float)Math.Sqrt(boosted);
 
@@ -215,7 +219,6 @@ public sealed class AudioAnalyzer
             if (v > frameMax) frameMax = v;
         }
 
-        // AGC: cap scale with a high percentile so one spikey bin doesn’t flatten everything, without bass-biasing the floor.
         var maxR = frameMax;
         var sorted = new float[SpectrumBands];
         Array.Copy(raw, sorted, SpectrumBands);
@@ -224,11 +227,7 @@ public sealed class AudioAnalyzer
         var frameRef = MathF.Min(maxR, MathF.Max(p82 * 1.12f, maxR * 0.88f));
         frameRef = MathF.Max(frameRef, 1e-6f);
 
-        // Auto-scaling (simple AGC):
-        // - If the current frame is louder than our current scale, jump up immediately.
-        // - Otherwise, decay slowly so the spectrum can "open up" on quieter parts.
-        // Scale floor tracks the current frame peak so quiet / bass-light material does not get a fixed high noise floor.
-        const float decay = 0.96f; // closer to 1 = slower decay
+        const float decay = 0.96f;
         const float minScaleRelativeToPeak = 0.02f;
         const float absScaleFloor = 1e-6f;
         _specScale = Math.Max(frameRef, _specScale * decay);
@@ -243,5 +242,3 @@ public sealed class AudioAnalyzer
         }
     }
 }
-
-

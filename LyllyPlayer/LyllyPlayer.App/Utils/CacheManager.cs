@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace LyllyPlayer.Utils;
@@ -49,6 +50,60 @@ public sealed class CacheManager
             if (!File.Exists(e.Path))
                 return null;
             return e.Path;
+        }
+    }
+
+    public bool IsDownloading(string videoId)
+    {
+        if (string.IsNullOrWhiteSpace(videoId))
+            return false;
+
+        lock (_byId)
+            return _downloading.Contains(videoId);
+    }
+
+    /// <summary>Largest on-disk yt-dlp cache file for <paramref name="storeKey"/> (may be in-progress).</summary>
+    public bool TryGetLargestPartialCacheFile(string storeKey, out string? path)
+    {
+        path = null;
+        if (string.IsNullOrWhiteSpace(storeKey))
+            return false;
+
+        try
+        {
+            var safeKey = string.Concat(storeKey.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_'));
+            var prefix = $"vp-cache-{safeKey}.";
+            if (!Directory.Exists(_cacheDir))
+                return false;
+
+            long bestLen = 0;
+            string? bestPath = null;
+            foreach (var candidate in Directory.EnumerateFiles(_cacheDir))
+            {
+                var name = Path.GetFileName(candidate);
+                if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                try
+                {
+                    var len = new FileInfo(candidate).Length;
+                    if (len > bestLen)
+                    {
+                        bestLen = len;
+                        bestPath = candidate;
+                    }
+                }
+                catch { /* ignore */ }
+            }
+
+            if (bestPath is null)
+                return false;
+
+            path = bestPath;
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 

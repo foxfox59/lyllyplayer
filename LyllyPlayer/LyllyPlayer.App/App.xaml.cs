@@ -144,9 +144,19 @@ public partial class App : System.Windows.Application
         try { _openIpcCts?.Dispose(); } catch { /* ignore */ }
         _openIpcCts = null;
 
+        try
+        {
+            if (Current?.MainWindow is MainWindow mw)
+            {
+                try { mw.EnsurePlaybackShutdownBestEffort(); } catch { /* ignore */ }
+            }
+        }
+        catch { /* ignore */ }
+
         try { _singleInstanceMutex?.ReleaseMutex(); } catch { /* ignore */ }
         try { _singleInstanceMutex?.Dispose(); } catch { /* ignore */ }
         _singleInstanceMutex = null;
+        try { Player.VlcDispatcherHost.ShutdownBestEffort(); } catch { /* ignore */ }
         base.OnExit(e);
     }
 

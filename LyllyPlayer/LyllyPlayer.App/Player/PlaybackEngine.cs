@@ -32,8 +32,15 @@ public sealed partial class PlaybackEngine : IDisposable
     private AudioOut? _audio;
     private readonly WaveFormat _format;
     private int _audioDeviceNumber = -1; // -1 = WAVE_MAPPER (default)
+    private bool _waveOutSinkNormalizeEnabled;
+    private int _waveOutSinkDeviceNumber = int.MinValue;
 
     private CancellationTokenSource? _playCts;
+    /// <summary>Incremented on every new play/skip so an older <see cref="PlayEntryAsync"/> can bail out after the mutex.</summary>
+    private int _playGeneration;
+
+    /// <summary>Matches the active <see cref="PlayEntryAsync"/> generation (for UI enrichment guards).</summary>
+    public int PlaySessionGeneration { get; private set; }
     /// <summary>Only one <see cref="PlayEntryAsync"/> may run at a time (slow yt-dlp resolve + seek must not overlap).</summary>
     private readonly SemaphoreSlim _playExclusive = new(1, 1);
     /// <summary>
@@ -74,8 +81,10 @@ public sealed partial class PlaybackEngine : IDisposable
     private string? _prefetchNextStreamUrlVideoId;
     private YoutubeStreamInput? _prefetchedStreamInput;
     private Task? _prefetchNextStreamUrlTask;
-    /// <summary>Cancels superseded next-track disk + URL + PCM warmup when the user skips ahead quickly.</summary>
+    /// <summary>Cancels superseded next-track disk + URL warmup when the user skips ahead quickly.</summary>
     private CancellationTokenSource? _nextTrackWarmCts;
+    /// <summary>At most one background yt-dlp job (prefetch URL / disk cache) at a time.</summary>
+    private readonly SemaphoreSlim _trackBackgroundGate = new(1, 1);
 
     /// <summary>Completes when the first PCM chunk is fed for the active play session (same moment the position clock starts).</summary>
     private TaskCompletionSource<bool>? _firstAudioForCurrentPlayTcs;
@@ -109,11 +118,6 @@ public sealed partial class PlaybackEngine : IDisposable
         {
             try { YoutubeDiskCacheReady?.Invoke(this, EventArgs.Empty); } catch { /* ignore */ }
         };
-    }
-
-    public void SetVlcAudioCallbacksEnabled(bool enabled)
-    {
-        _enableVlcAudioCallbacks = enabled;
     }
 
     /// <summary>Called before any yt-dlp resolve/download so the shell can prompt or download internal yt-dlp.</summary>
@@ -155,6 +159,7 @@ public sealed partial class PlaybackEngine : IDisposable
     public (float vuL, float vuR, float[] bands) GetAudioAnalysisSnapshot() => _analyzer.GetSnapshot();
 
     public event EventHandler<PlaylistEntry?>? NowPlayingChanged;
+    public event EventHandler<int>? CurrentDurationSecondsChanged;
     public event EventHandler<bool>? PlaybackStateChanged;
     public event EventHandler<(PlaylistEntry entry, string message)>? PlaybackFailed;
     public event EventHandler<(PlaylistEntry entry, string status, string? detail)>? StatusChanged;
@@ -183,18 +188,28 @@ public sealed partial class PlaybackEngine : IDisposable
     public void SetVolume(double volume01)
     {
         _volume = (float)Math.Clamp(volume01, 0, 1);
+        ApplyPlaybackVolume();
+    }
+
+    /// <summary>
+    /// Reapplies user volume to the active output path. LibVLC must stay at 100 when PCM is routed through
+    /// <see cref="AudioOut"/> so volume is not applied twice.
+    /// </summary>
+    private void ApplyPlaybackVolume()
+    {
         if (_audio is not null)
             _audio.Volume = _volume;
+
         try
         {
-            if (_vlcMp is not null)
+            if (_vlcMp is null)
+                return;
+
+            lock (_vlcGate)
             {
-                lock (_vlcGate)
-                {
-                    // When LibVLC audio callbacks are enabled, LibVLC is not the audible output device.
-                    // Apply volume only on our WaveOut sink to avoid double-scaling / non-linear behavior.
-                    _vlcMp.Volume = _enableVlcAudioCallbacks ? 100 : (int)Math.Clamp(_volume * 100.0, 0, 100);
-                }
+                // When LibVLC audio callbacks are enabled, LibVLC is not the audible output device.
+                // Apply volume only on our WaveOut sink to avoid double-scaling / non-linear behavior.
+                _vlcMp.Volume = _playbackUsesWaveOutSink ? 100 : (int)Math.Clamp(_volume * 100.0, 0, 100);
             }
         }
         catch { /* ignore */ }
@@ -216,6 +231,54 @@ public sealed partial class PlaybackEngine : IDisposable
     private string YoutubeDiskCacheStoreKey(string videoId)
         => $"{videoId}|aq={_ytDlp.AudioQualityProfileKey}";
 
+    private bool TryGetSeekableDiskPathForSeek(PlaylistEntry entry, double targetSeconds, out string path)
+    {
+        path = "";
+        if (!IsYoutubeDiskCacheEligible(entry))
+            return false;
+
+        var storeKey = YoutubeDiskCacheStoreKey(entry.VideoId);
+        var complete = _cache.TryGetCachedPath(storeKey);
+        if (!string.IsNullOrWhiteSpace(complete) && File.Exists(complete))
+        {
+            path = complete;
+            if (entry.DurationSeconds is int d && d > 0)
+                return targetSeconds <= d + 0.5;
+            return true;
+        }
+
+        return TryResolvePartialCacheForSeek(entry, targetSeconds, out path);
+    }
+
+    private bool TryResolvePartialCacheForSeek(PlaylistEntry entry, double targetSeconds, out string path)
+    {
+        path = "";
+        if (!IsYoutubeDiskCacheEligible(entry))
+            return false;
+
+        var storeKey = YoutubeDiskCacheStoreKey(entry.VideoId);
+        if (!_cache.TryGetLargestPartialCacheFile(storeKey, out var partialPath) ||
+            string.IsNullOrWhiteSpace(partialPath) ||
+            !File.Exists(partialPath))
+            return false;
+
+        var bytes = _cache.TryGetPartialCacheBytes(storeKey);
+        const double nominalKbps = 160.0;
+        var bytesNeeded = (long)Math.Ceiling(targetSeconds * nominalKbps * 1000.0 / 8.0 * 1.2);
+        if (bytes < Math.Max(256 * 1024, bytesNeeded))
+            return false;
+
+        var estSeconds = bytes * 8.0 / (nominalKbps * 1000.0);
+        if (entry.DurationSeconds is int d && d > 0)
+            estSeconds = Math.Min(d, estSeconds);
+
+        if (targetSeconds > estSeconds + 1.0)
+            return false;
+
+        path = partialPath;
+        return true;
+    }
+
     /// <summary>Sets WaveOut device (-1 = default). Hot-swaps only when <paramref name="deviceNumber"/> changes while playing.</summary>
     public void SetAudioOutputDevice(int deviceNumber)
     {
@@ -230,7 +293,13 @@ public sealed partial class PlaybackEngine : IDisposable
 
         try
         {
-            var next = new AudioOut(_format, deviceNumber, onSamplesRead: _analyzer.ProcessPcmF32LeStereo, normalize: _audioNormalizeEnabled);
+            var next = new AudioOut(
+                _format,
+                deviceNumber,
+                onSamplesRead: _playbackUsesWaveOutSink ? _analyzer.ProcessPcmF32LeStereo : null,
+                normalize: _audioNormalizeEnabled,
+                analyzeOnRead: _playbackUsesWaveOutSink,
+                lowLatencyDeviceBuffer: _playbackUsesWaveOutSink);
             next.Volume = _volume;
             if (!next.TryPlay())
             {
@@ -239,6 +308,8 @@ public sealed partial class PlaybackEngine : IDisposable
             }
 
             _audio = next;
+            _waveOutSinkNormalizeEnabled = _audioNormalizeEnabled;
+            _waveOutSinkDeviceNumber = deviceNumber;
             try { current.Stop(); } catch { /* ignore */ }
             try { current.Dispose(); } catch { /* ignore */ }
         }
@@ -250,6 +321,26 @@ public sealed partial class PlaybackEngine : IDisposable
         if (durationSeconds is not int d || d <= 0)
             return;
         _currentDurationSeconds = d;
+    }
+
+    private void TryApplyResolvedDurationSeconds(PlaylistEntry entry, YoutubeStreamInput resolvedInput, int playGeneration)
+    {
+        if (playGeneration != Volatile.Read(ref _playGeneration))
+            return;
+        if (GetCurrent() is not PlaylistEntry cur ||
+            !string.Equals(cur.VideoId, entry.VideoId, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var d = entry.DurationSeconds is > 0 ? entry.DurationSeconds : resolvedInput.ResolvedDurationSeconds;
+        if (d is not > 0)
+            return;
+
+        OverrideCurrentDurationSeconds(d);
+        RaiseOnUi(DispatcherPriority.Background, () =>
+        {
+            try { CurrentDurationSecondsChanged?.Invoke(this, d.Value); }
+            catch { /* ignore */ }
+        });
     }
 
     public void SetQueue(IReadOnlyList<PlaylistEntry> order, int startIndex = 0, bool raiseNowPlayingChanged = false)
@@ -328,7 +419,10 @@ public sealed partial class PlaybackEngine : IDisposable
 
     public async Task<bool> SeekAsync(double seconds)
     {
-        await _queueNavLock.WaitAsync().ConfigureAwait(false);
+        if (_disposed)
+            return false;
+
+        await WaitQueueNavLockAsync().ConfigureAwait(false);
         PlaylistEntry? current;
         try
         {
@@ -336,54 +430,127 @@ public sealed partial class PlaybackEngine : IDisposable
         }
         finally
         {
-            try { _queueNavLock.Release(); } catch (SemaphoreFullException) { /* ignore */ }
+            ReleaseQueueNavLockSafe();
         }
 
         if (current is null)
             return false;
 
-        // If there was already an audio pipeline (e.g. user paused mid-track), remember — do not confuse
-        // with cold start (no _audio yet) where PlayEntryAsync must be allowed to stay playing.
-        var hadAudioBeforeSeek = _audio is not null;
-        var wasPlaying = IsPlaying;
-        if (double.IsNaN(seconds) || double.IsInfinity(seconds))
-            seconds = 0;
-        var target = Math.Max(0, seconds);
-        // Without duration, clamp to a sane upper bound so resume/settings can't seek past the end and break decode.
-        if (current.DurationSeconds is int dur)
-            target = Math.Min(target, Math.Max(0, dur - 1));
-        else
-            target = Math.Min(target, 48 * 3600.0);
+        try
+        {
+            await _playExclusive.WaitAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
 
         try
         {
-            RefreshSeekableBufferedFromCache();
-            if (_lastResolvedForWarmup?.DecodeViaYtdlpStdoutPipe == true)
-                target = Math.Min(target, Math.Max(0, MaxSeekSecondsForUi));
-        }
-        catch { /* ignore */ }
+            // If there was already an audio pipeline (e.g. user paused mid-track), remember — do not confuse
+            // with cold start (no _audio yet) where PlayEntryAsync must be allowed to stay playing.
+            var hadAudioBeforeSeek = _audio is not null;
+            var wasPlaying = IsPlaying;
+            if (double.IsNaN(seconds) || double.IsInfinity(seconds))
+                seconds = 0;
+            var target = Math.Max(0, seconds);
+            // Without duration, clamp to a sane upper bound so resume/settings can't seek past the end and break decode.
+            if (current.DurationSeconds is int dur)
+                target = Math.Min(target, Math.Max(0, dur - 1));
+            else
+                target = Math.Min(target, 48 * 3600.0);
 
-        // Seeking should not be treated as a "track change" (avoid UI auto-centering).
-        var ok = await PlayEntryAsync(current, startSeconds: target, raiseNowPlayingChanged: false).ConfigureAwait(false);
-        if (!ok)
-            return false;
-
-        // If the user was paused *with audio already loaded*, stay paused after seeking.
-        // Cold start (hadAudioBeforeSeek false, wasPlaying false) must NOT pause — e.g. startup resume
-        // from settings calls SeekAsync with a saved position.
-        if (!wasPlaying && hadAudioBeforeSeek)
-        {
             try
             {
-                _pauseGate.Reset();
-                _audio?.Pause();
-                _positionSw.Stop();
-                RaisePlaybackStateChanged(false);
+                RefreshSeekableBufferedFromCache();
+                target = ClampSeekTargetSeconds(current, target);
             }
             catch { /* ignore */ }
-        }
 
-        return true;
+            if (await TrySeekInPlaceAsync(current, target, wasPlaying, CancellationToken.None).ConfigureAwait(false))
+            {
+                LastAppliedSeekSeconds = _startOffsetSeconds;
+                RestartTimelineClock();
+                if (!wasPlaying && hadAudioBeforeSeek)
+                {
+                    try
+                    {
+                        _pauseGate.Reset();
+                        _audio?.Pause();
+                        _positionSw.Stop();
+                        RaisePlaybackStateChanged(false);
+                    }
+                    catch { /* ignore */ }
+                }
+
+                return true;
+            }
+
+            if (_lastResolvedForWarmup is { } warmup && IsLimitedSeekInput(warmup, current))
+            {
+                if (TryGetSeekableDiskPathForSeek(current, target, out _))
+                {
+                    var resumeSeconds = Math.Max(0, CurrentPositionSeconds);
+                    ClearResolvedInputCache();
+                    var ok = await PlayEntryAsync(current, startSeconds: target, raiseNowPlayingChanged: false, playExclusiveAlreadyHeld: true)
+                        .ConfigureAwait(false);
+                    if (!ok)
+                    {
+                        try { AppLog.Warn($"SeekAsync: disk seek to {target:0.###}s failed; resuming at {resumeSeconds:0.###}s"); } catch { /* ignore */ }
+                        ClearResolvedInputCache();
+                        ok = await PlayEntryAsync(current, startSeconds: resumeSeconds, raiseNowPlayingChanged: false, playExclusiveAlreadyHeld: true)
+                            .ConfigureAwait(false);
+                    }
+
+                    LastAppliedSeekSeconds = _startOffsetSeconds;
+                    if (!ok)
+                        return false;
+
+                    if (!wasPlaying && hadAudioBeforeSeek)
+                    {
+                        try
+                        {
+                            _pauseGate.Reset();
+                            _audio?.Pause();
+                            _positionSw.Stop();
+                            RaisePlaybackStateChanged(false);
+                        }
+                        catch { /* ignore */ }
+                    }
+
+                    return true;
+                }
+
+                return false;
+            }
+
+            // Local / unlimited: full restart (never reuse a short-lived stream URL from the previous play/seek).
+            ClearResolvedInputCache();
+
+            var okLocal = await PlayEntryAsync(current, startSeconds: target, raiseNowPlayingChanged: false, playExclusiveAlreadyHeld: true)
+                .ConfigureAwait(false);
+            LastAppliedSeekSeconds = _startOffsetSeconds;
+            if (!okLocal)
+                return false;
+
+            if (!wasPlaying && hadAudioBeforeSeek)
+            {
+                try
+                {
+                    _pauseGate.Reset();
+                    _audio?.Pause();
+                    _positionSw.Stop();
+                    RaisePlaybackStateChanged(false);
+                }
+                catch { /* ignore */ }
+            }
+
+            return true;
+        }
+        finally
+        {
+            ReleasePlayExclusiveSafe();
+        }
     }
 
     public async Task NextAsync()
@@ -500,8 +667,23 @@ public sealed partial class PlaybackEngine : IDisposable
         {
             try
             {
-                var a = new AudioOut(_format, deviceNumber, onSamplesRead: _analyzer.ProcessPcmF32LeStereo, normalize: _audioNormalizeEnabled);
+                var a = new AudioOut(
+                    _format,
+                    deviceNumber,
+                    onSamplesRead: _playbackUsesWaveOutSink ? _analyzer.ProcessPcmF32LeStereo : null,
+                    normalize: _audioNormalizeEnabled,
+                    analyzeOnRead: _playbackUsesWaveOutSink,
+                    lowLatencyDeviceBuffer: _playbackUsesWaveOutSink);
                 a.Volume = _volume;
+                if (_playbackUsesWaveOutSink)
+                {
+                    Volatile.Write(ref _deferWaveOutStart, 1);
+                    _audio = a;
+                    _waveOutSinkNormalizeEnabled = _audioNormalizeEnabled;
+                    _waveOutSinkDeviceNumber = deviceNumber;
+                    return true;
+                }
+
                 if (!a.TryPlay())
                 {
                     try { a.Dispose(); } catch { /* ignore */ }
@@ -523,19 +705,19 @@ public sealed partial class PlaybackEngine : IDisposable
         if (_audioDeviceNumber != -1 && TryOpen(-1))
         {
             _audioDeviceNumber = -1;
-            Error?.Invoke(this,
+            RaiseError(
                 "The selected audio output is no longer available. Switched to the default device. You can pick another device in Options → Advanced.");
             return true;
         }
 
-        Error?.Invoke(this,
+        RaiseError(
             "No audio output device is available. Connect speakers or headphones and try Play again.");
 
         if (leaveStoppedSinkOnTotalFailure)
         {
             try
             {
-                var a = new AudioOut(_format, -1, onSamplesRead: _analyzer.ProcessPcmF32LeStereo, normalize: _audioNormalizeEnabled);
+                var a = new AudioOut(_format, -1, onSamplesRead: null, normalize: _audioNormalizeEnabled);
                 a.Volume = _volume;
                 _audio = a;
             }
@@ -555,7 +737,11 @@ public sealed partial class PlaybackEngine : IDisposable
         try { AppLog.Error($"Playback VideoId={entry.VideoId}{title}. {detail}"); } catch { /* ignore */ }
     }
 
-    private async Task<bool> PlayEntryAsync(PlaylistEntry entry, double startSeconds, bool raiseNowPlayingChanged)
+    private async Task<bool> PlayEntryAsync(
+        PlaylistEntry entry,
+        double startSeconds,
+        bool raiseNowPlayingChanged,
+        bool playExclusiveAlreadyHeld = false)
     {
         try { AppLog.Warn($"PlayEntryAsync: begin videoId={entry.VideoId} start={startSeconds:0.###} nowPlayingEvent={raiseNowPlayingChanged}"); } catch { /* ignore */ }
 
@@ -566,23 +752,48 @@ public sealed partial class PlaybackEngine : IDisposable
         // semaphore, and our WaitAsync to succeed within a few hundred ms.
         // Note: _playCts is written inside the mutex but read/cancelled here without holding it.
         // That is intentional and safe — CancellationTokenSource.Cancel() is thread-safe.
-        try { _playCts?.Cancel(); } catch { /* ignore */ }
+        if (_disposed)
+            return false;
 
-        await _playExclusive.WaitAsync().ConfigureAwait(false);
+        var myGeneration = Interlocked.Increment(ref _playGeneration);
+        try { _playCts?.Cancel(); } catch { /* ignore */ }
+        try { CancelNextTrackWarmBestEffort(); } catch { /* ignore */ }
+
+        if (!playExclusiveAlreadyHeld)
+        {
+            try
+            {
+                await _playExclusive.WaitAsync().ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+        }
+
         try
         {
+            if (myGeneration != Volatile.Read(ref _playGeneration))
+                return false;
+
+            PlaySessionGeneration = myGeneration;
+
             var playbackTiming = new PlaybackTimingMark(entry.VideoId);
             playbackTiming.Step("play_mutex_acquired");
 
+            var isSeekRestart = !raiseNowPlayingChanged;
+
             // Internal restart for track change/seek: don't signal a full "stopped" state to UI.
-            StopInternal(signalPlaybackStopped: false);
+            StopInternal(signalPlaybackStopped: false, preserveMetering: isSeekRestart);
 
             try
             {
-                TeardownVlcBestEffort();
-                await Task.Delay(60, CancellationToken.None).ConfigureAwait(false);
+                await TeardownVlcBestEffortAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch { /* ignore */ }
+
+            if (myGeneration != Volatile.Read(ref _playGeneration))
+                return false;
 
             playbackTiming.Step("after_previous_reader_barrier");
 
@@ -593,11 +804,17 @@ public sealed partial class PlaybackEngine : IDisposable
             _currentDurationSeconds = entry.DurationSeconds;
             if (double.IsNaN(startSeconds) || double.IsInfinity(startSeconds))
                 startSeconds = 0;
-            _startOffsetSeconds = Math.Max(0, startSeconds);
+            var requestedStart = Math.Max(0, startSeconds);
             if (_currentDurationSeconds is int dlim && dlim > 0)
-                _startOffsetSeconds = Math.Min(_startOffsetSeconds, Math.Max(0, dlim - 1));
+                requestedStart = Math.Min(requestedStart, Math.Max(0, dlim - 1));
+
+            _startOffsetSeconds = 0;
+            Volatile.Write(ref _awaitingVlcSeekSettle, 0);
+            Volatile.Write(ref _pendingSeekSinkFlush, 0);
+
             _positionSw.Reset();
-            _analyzer.Reset();
+            if (!isSeekRestart)
+                _analyzer.Reset();
 
             try { AppLog.Warn($"PlayEntryAsync: timeline_reset_done videoId={entry.VideoId} startOffset={_startOffsetSeconds:0.###} dur={_currentDurationSeconds?.ToString() ?? "(null)"}"); } catch { /* ignore */ }
 
@@ -628,19 +845,43 @@ public sealed partial class PlaybackEngine : IDisposable
             {
                 playbackTiming.Step("before_resolve_best_input");
                 try { AppLog.Warn($"PlayEntryAsync: before_resolve videoId={entry.VideoId}"); } catch { /* ignore */ }
-                var resolvedInput = await ResolveBestInputAsync(entry, ct, playbackTiming, publishResolveStatus: raiseNowPlayingChanged).ConfigureAwait(false);
-                playbackTiming.Step("after_resolve_best_input");
-
-                if (resolvedInput.DecodeViaYtdlpStdoutPipe)
+                YoutubeStreamInput resolvedInput;
+                if (requestedStart > 0.5 &&
+                    TryGetSeekableDiskPathForSeek(entry, requestedStart, out var diskSeekPath))
                 {
-                    UpdateSeekableBuffered(entry, resolvedInput);
-                    if (entry.DurationSeconds is int durClamp && durClamp > 0 &&
-                        _startOffsetSeconds > SeekableBufferedSeconds + 0.25 &&
-                        SeekableBufferedSeconds > 0.25)
-                    {
-                        _startOffsetSeconds = Math.Min(_startOffsetSeconds, Math.Max(0, Math.Min(durClamp - 1, SeekableBufferedSeconds)));
-                    }
+                    resolvedInput = RememberResolvedInput(entry, diskSeekPath);
+                    playbackTiming.Step("resolve_disk_cache_for_seek");
                 }
+                else
+                {
+                    resolvedInput = await ResolveBestInputAsync(entry, ct, playbackTiming, publishResolveStatus: raiseNowPlayingChanged).ConfigureAwait(false);
+                    playbackTiming.Step("after_resolve_best_input");
+                }
+
+                if (myGeneration != Volatile.Read(ref _playGeneration))
+                    return false;
+
+                TryApplyResolvedDurationSeconds(entry, resolvedInput, myGeneration);
+
+                if (requestedStart > 0.5 &&
+                    IsRemoteHttpStreamInput(resolvedInput) &&
+                    TryGetSeekableDiskPathForSeek(entry, requestedStart, out var diskPathForHttpOffset))
+                {
+                    resolvedInput = RememberResolvedInput(entry, diskPathForHttpOffset);
+                    playbackTiming.Step("resolve_disk_cache_for_http_offset");
+                }
+
+                _startOffsetSeconds = ClampRestartStartOffset(entry, resolvedInput, requestedStart);
+
+                if (_startOffsetSeconds > 0.01)
+                {
+                    Volatile.Write(ref _pendingSeekSinkFlush, 1);
+                    Volatile.Write(ref _awaitingVlcSeekSettle, 1);
+                }
+                else
+                    Volatile.Write(ref _awaitingVlcSeekSettle, 0);
+
+                RestartTimelineClock();
 
                 if (!await PlayResolvedWithLibVlcAsync(entry, resolvedInput, playbackTiming, ct, playbackSessionCts, raiseNowPlayingChanged).ConfigureAwait(false))
                     return false;
@@ -668,16 +909,16 @@ public sealed partial class PlaybackEngine : IDisposable
 
                 var diag = string.IsNullOrWhiteSpace(stderrTail) ? msg : $"{msg}\n{stderrTail}".Trim();
                 LogPlaybackError(entry, msg);
-                Error?.Invoke(this, msg);
+                RaiseError(msg);
                 if (PlaybackFailureKindFromDiagnostics(diag, out var failMsg))
                 {
                     TryMarkPrefetchSkipFromFailureMessage(entry.VideoId, failMsg);
-                    PlaybackFailed?.Invoke(this, (entry, failMsg));
+                    RaisePlaybackFailed(entry, failMsg);
                 }
                 else if (LooksLikeUnavailable(msg) || LooksLikeAgeRestricted(msg) || LooksLikeYoutubeDrmOrProtected(msg) || LooksLikePremiumRequired(msg))
                 {
                     TryMarkPrefetchSkipFromFailureMessage(entry.VideoId, msg);
-                    PlaybackFailed?.Invoke(this, (entry, msg));
+                    RaisePlaybackFailed(entry, msg);
                 }
                 AbortPlaybackPipelineAfterFailure();
                 return false;
@@ -685,14 +926,8 @@ public sealed partial class PlaybackEngine : IDisposable
         }
         finally
         {
-            try
-            {
-                _playExclusive.Release();
-            }
-            catch (SemaphoreFullException)
-            {
-                // Should never happen; avoids wedging the semaphore if release logic drifts.
-            }
+            if (!playExclusiveAlreadyHeld)
+                ReleasePlayExclusiveSafe();
         }
     }
 
@@ -720,49 +955,86 @@ public sealed partial class PlaybackEngine : IDisposable
     }
 
     private void RaisePlaybackStateChanged(bool isPlaying)
-    {
-        try
+        => RaiseOnUi(DispatcherPriority.Background, () =>
         {
-            var disp = System.Windows.Application.Current?.Dispatcher;
-            if (disp is not null && !disp.CheckAccess())
+            try { PlaybackStateChanged?.Invoke(this, isPlaying); }
+            catch (Exception ex)
             {
-                disp.BeginInvoke(new Action(() =>
-                {
-                    try { PlaybackStateChanged?.Invoke(this, isPlaying); }
-                    catch (Exception ex)
-                    {
-                        try { AppLog.Exception(ex, "PlaybackStateChanged(UI) handler failed"); } catch { /* ignore */ }
-                    }
-                }), DispatcherPriority.Render);
-                return;
+                try { AppLog.Exception(ex, "PlaybackStateChanged(UI) handler failed"); } catch { /* ignore */ }
             }
-        }
-        catch { /* ignore */ }
-
-        PlaybackStateChanged?.Invoke(this, isPlaying);
-    }
+        });
 
     private void RaiseStatusChanged(PlaylistEntry entry, string status, string? detail)
+        => RaiseOnUi(DispatcherPriority.Background, () =>
+        {
+            try { StatusChanged?.Invoke(this, (entry, status, detail)); }
+            catch (Exception ex)
+            {
+                try { AppLog.Exception(ex, "StatusChanged(UI) handler failed"); } catch { /* ignore */ }
+            }
+        });
+
+    private void RaiseError(string message)
+        => RaiseOnUi(() =>
+        {
+            try { Error?.Invoke(this, message); }
+            catch (Exception ex)
+            {
+                try { AppLog.Exception(ex, "Error(UI) handler failed"); } catch { /* ignore */ }
+            }
+        });
+
+    private void RaisePlaybackFailed(PlaylistEntry entry, string message)
+        => RaiseOnUi(() =>
+        {
+            try { PlaybackFailed?.Invoke(this, (entry, message)); }
+            catch (Exception ex)
+            {
+                try { AppLog.Exception(ex, "PlaybackFailed(UI) handler failed"); } catch { /* ignore */ }
+            }
+        });
+
+    private void RaiseTrackEnded(PlaylistEntry entry, bool endedEarly)
+        => RaiseOnUi(() =>
+        {
+            try { TrackEnded?.Invoke(this, (entry, endedEarly)); }
+            catch (Exception ex)
+            {
+                try { AppLog.Exception(ex, "TrackEnded(UI) handler failed"); } catch { /* ignore */ }
+            }
+        });
+
+    private void RaisePrefetchTagged(PlaybackPrefetchTag tag)
+        => RaiseOnUi(() =>
+        {
+            try { PrefetchTagged?.Invoke(this, tag); }
+            catch (Exception ex)
+            {
+                try { AppLog.Exception(ex, "PrefetchTagged(UI) handler failed"); } catch { /* ignore */ }
+            }
+        });
+
+    /// <summary>Always queue UI handlers — never block a worker thread on <see cref="System.Windows.Threading.Dispatcher.Invoke"/>.</summary>
+    private static void RaiseOnUi(Action action)
+        => RaiseOnUi(System.Windows.Threading.DispatcherPriority.Normal, action);
+
+    private static void RaiseOnUi(System.Windows.Threading.DispatcherPriority priority, Action action)
     {
         try
         {
             var disp = System.Windows.Application.Current?.Dispatcher;
-            if (disp is not null && !disp.CheckAccess())
+            if (disp is null)
             {
-                disp.BeginInvoke(new Action(() =>
-                {
-                    try { StatusChanged?.Invoke(this, (entry, status, detail)); }
-                    catch (Exception ex)
-                    {
-                        try { AppLog.Exception(ex, "StatusChanged(UI) handler failed"); } catch { /* ignore */ }
-                    }
-                }), DispatcherPriority.Render);
+                action();
                 return;
             }
-        }
-        catch { /* ignore */ }
 
-        StatusChanged?.Invoke(this, (entry, status, detail));
+            disp.BeginInvoke(action, priority);
+        }
+        catch
+        {
+            // ignore
+        }
     }
 
     /// <summary>Redacts client IP from googlevideo query strings and truncates huge URLs for safer log pastes.</summary>
@@ -873,7 +1145,7 @@ public sealed partial class PlaybackEngine : IDisposable
 
         try
         {
-            PrefetchTagged?.Invoke(this, new PlaybackPrefetchTag(videoId, category, message));
+            RaisePrefetchTagged(new PlaybackPrefetchTag(videoId, category, message));
         }
         catch
         {
@@ -954,17 +1226,10 @@ public sealed partial class PlaybackEngine : IDisposable
         return GetNextPlayableEntryAfterCurrent();
     }
 
-    /// <summary>After a definitive prefetch/cache skip, warm the next playable YouTube track (if any).</summary>
+    /// <summary>After a definitive prefetch/cache skip, drop stale warm work (next first-audio will reschedule).</summary>
     private void TryBeginPrefetchForNextPlayableAfterMarkedSkip()
     {
-        var anchor = GetCurrent();
-        if (anchor is null)
-        {
-            CancelNextTrackWarmBestEffort();
-            return;
-        }
-
-        _ = StartNextTrackWarmAfterAnchorFirstAudioAsync(anchor);
+        try { CancelNextTrackWarmBestEffort(); } catch { /* ignore */ }
     }
 
     /// <summary>
@@ -982,7 +1247,7 @@ public sealed partial class PlaybackEngine : IDisposable
             {
                 // Use COOKIE status so the UI can surface a helpful "requires cookies" hint.
                 var cookieDetail = "Login-gated video — streaming via browser cookies (slow start)…";
-                StatusChanged?.Invoke(this, (entry, "COOKIE", cookieDetail));
+                RaiseStatusChanged(entry, "COOKIE", cookieDetail);
             }
             return Task.FromResult(new YoutubeStreamInput(entry.WebpageUrl.Trim(), null, DecodeViaYtdlpStdoutPipe: true));
         }
@@ -1004,7 +1269,7 @@ public sealed partial class PlaybackEngine : IDisposable
             try { AppLog.Warn($"YouTube: no-cookie resolve failed; retrying with cookies. {ex.Message}".Trim()); } catch { /* ignore */ }
             if (publishStatus)
             {
-                StatusChanged?.Invoke(this, (entry, "COOKIE", "Retrying with browser cookies…"));
+                RaiseStatusChanged(entry, "COOKIE", "Retrying with browser cookies…");
             }
             return new YoutubeStreamInput(entry.WebpageUrl.Trim(), null, DecodeViaYtdlpStdoutPipe: true);
         }
@@ -1024,7 +1289,7 @@ public sealed partial class PlaybackEngine : IDisposable
     private async Task<YoutubeStreamInput> ResolveYoutubeStreamInputWithFallbackAsync(PlaylistEntry entry, CancellationToken ct, bool publishStatus = true, PlaybackTimingMark? mark = null)
     {
         Action<string, string?>? statusCb = publishStatus
-            ? (s, d) => StatusChanged?.Invoke(this, (entry, s, d))
+            ? (s, d) => RaiseStatusChanged(entry, s, d)
             : null;
 
         try
@@ -1106,7 +1371,7 @@ public sealed partial class PlaybackEngine : IDisposable
                     }
 
                     if (publishResolveStatus)
-                        StatusChanged?.Invoke(this, (entry, "FETCHING", "Starting stream (very long video)…"));
+                        RaiseStatusChanged(entry, "FETCHING", "Starting stream (very long video)…");
                     mark?.Step("resolve_before_youtube_stream_very_long_video");
                     var veryLong = await ResolveYoutubeStreamForPlaybackAsync(entry, ct, publishStatus: publishResolveStatus, mark: mark).ConfigureAwait(false);
                     mark?.Step("resolve_after_youtube_stream_very_long_video");
@@ -1120,24 +1385,7 @@ public sealed partial class PlaybackEngine : IDisposable
 
             // Background download not yet complete — use prefetched stream URL if available so the
             // transition is instant rather than blocking on a fresh yt-dlp call or full download.
-            // If the prefetch task is still in-flight (yt-dlp hasn't returned yet), wait for it —
-            // it started when the current track began playing so it has had the whole track duration
-            // to complete; the wait is typically < 1 s for tracks already playing for > a few seconds.
-            var prefetchTask = _prefetchNextStreamUrlTask;
-            if (prefetchTask is { IsCompleted: false } &&
-                string.Equals(_prefetchNextStreamUrlVideoId, entry.VideoId, StringComparison.Ordinal))
-            {
-                try
-                {
-                    mark?.Step("resolve_before_await_prefetch_next_url_task");
-                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    linked.CancelAfter(TimeSpan.FromSeconds(12));
-                    await prefetchTask.WaitAsync(linked.Token).ConfigureAwait(false);
-                    mark?.Step("resolve_after_await_prefetch_next_url_task");
-                }
-                catch { /* ignore — timeout, cancellation, or yt-dlp failure; fall through */ }
-            }
-
+            // Only use a prefetched URL when it is already complete — never block playback on yt-dlp during skip.
             if (TryConsumePrefetchedStreamUrl(entry, out var prefetchedStream))
             {
                 mark?.Step("resolve_return_prefetched_next_track_url");
@@ -1162,7 +1410,7 @@ public sealed partial class PlaybackEngine : IDisposable
                 }
 
                 if (publishResolveStatus)
-                    StatusChanged?.Invoke(this, (entry, "FETCHING", "Starting stream (long video)…"));
+                    RaiseStatusChanged(entry, "FETCHING", "Starting stream (long video)…");
                 mark?.Step("resolve_before_youtube_stream_long_video");
                 var longVid = await ResolveYoutubeStreamForPlaybackAsync(entry, ct, publishStatus: publishResolveStatus, mark: mark).ConfigureAwait(false);
                 mark?.Step("resolve_after_youtube_stream_long_video");
@@ -1182,7 +1430,7 @@ public sealed partial class PlaybackEngine : IDisposable
                 }
 
                 if (publishResolveStatus)
-                    StatusChanged?.Invoke(this, (entry, "FETCHING", "Starting stream…"));
+                    RaiseStatusChanged(entry, "FETCHING", "Starting stream…");
                 mark?.Step("resolve_before_youtube_stream_unknown_duration");
                 var unknownDurStream = await ResolveYoutubeStreamForPlaybackAsync(entry, ct, publishStatus: publishResolveStatus, mark: mark).ConfigureAwait(false);
                 mark?.Step("resolve_after_youtube_stream_unknown_duration");
@@ -1194,7 +1442,7 @@ public sealed partial class PlaybackEngine : IDisposable
             // entire file existed). Stream immediately; optional background cache for faster revisits / scrub.
             try { AppLog.Info($"Cache miss (YouTube): streaming first ({entry.VideoId})", AppLogInfoTier.Crucial); } catch { /* ignore */ }
             if (publishResolveStatus)
-                StatusChanged?.Invoke(this, (entry, "FETCHING", "Starting stream…"));
+                RaiseStatusChanged(entry, "FETCHING", "Starting stream…");
             try
             {
                 mark?.Step("resolve_before_youtube_stream_cache_miss");
@@ -1214,7 +1462,7 @@ public sealed partial class PlaybackEngine : IDisposable
                 var fallbackUrl = await _ytDlp.ResolveBestAudioUrlAsync(
                     entry.WebpageUrl,
                     ct,
-                    status: publishResolveStatus ? (s, d) => StatusChanged?.Invoke(this, (entry, s, d)) : null).ConfigureAwait(false);
+                    status: publishResolveStatus ? (s, d) => RaiseStatusChanged(entry, s, d) : null).ConfigureAwait(false);
                 mark?.Step("resolve_after_format_fallback_audio_url");
                 RequestDiskWarmForCurrentAfterPlaying(entry);
                 return RememberResolvedInput(entry, new YoutubeStreamInput(fallbackUrl, null));
@@ -1226,7 +1474,7 @@ public sealed partial class PlaybackEngine : IDisposable
         var remoteUrl = await _ytDlp.ResolveBestAudioUrlAsync(
             entry.WebpageUrl,
             ct,
-            status: publishResolveStatus ? (s, d) => StatusChanged?.Invoke(this, (entry, s, d)) : null).ConfigureAwait(false);
+            status: publishResolveStatus ? (s, d) => RaiseStatusChanged(entry, s, d) : null).ConfigureAwait(false);
         mark?.Step("resolve_after_remote_resolve_best_audio_url");
         return RememberResolvedInput(entry, new YoutubeStreamInput(remoteUrl, null));
     }
@@ -1272,6 +1520,10 @@ public sealed partial class PlaybackEngine : IDisposable
         if (c.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             c.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
+            // Always re-resolve when restarting with a non-zero offset (seek) — cached googlevideo URLs die quickly.
+            if (_startOffsetSeconds > 0.01)
+                return false;
+
             // In-memory URL is often a short-lived googlevideo / manifest link. After a full play it may be dead
             // (Repeat Single) while a completed disk cache file exists — prefer the disk path in ResolveBestInputAsync.
             if (!_resolvedInputDecodeViaYtdlpPipe &&
@@ -1357,13 +1609,9 @@ public sealed partial class PlaybackEngine : IDisposable
     /// </summary>
     public void NotifyPlayOrderChanged()
     {
+        // Cancel only — restarting here during rapid skip stacks duplicate warm jobs.
+        // <see cref="RunDeferredWarmupsAfterFirstAudio"/> schedules one warm pass per track.
         try { CancelNextTrackWarmBestEffort(); } catch { /* ignore */ }
-        try
-        {
-            if (GetCurrent() is { } cur)
-                _ = StartNextTrackWarmAfterAnchorFirstAudioAsync(cur);
-        }
-        catch { /* ignore */ }
     }
 
     private void ClearDeferredWarmState()
@@ -1378,33 +1626,22 @@ public sealed partial class PlaybackEngine : IDisposable
 
     private void RunDeferredWarmupsAfterFirstAudio(PlaylistEntry playingEntry, YoutubeStreamInput? resolvedInputForProtect, bool raiseNowPlayingChanged)
     {
+        _ = raiseNowPlayingChanged;
         try
         {
             if (GetCurrent() is not { } cur || !string.Equals(cur.VideoId, playingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
                 return;
 
-            var pending = _pendingCurrentDiskWarmEntry;
-            if (pending is not null && string.Equals(pending.VideoId, playingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
-            {
-                TryKickYoutubeBackgroundDiskCache(pending);
-                _pendingCurrentDiskWarmEntry = null;
-            }
-
-            // if (!raiseNowPlayingChanged)
-            //     return;
-
             var next = GetNextEntryForWarmPrefetch();
-            if (next is null)
+            if (next is null && _pendingCurrentDiskWarmEntry is null)
                 return;
 
-            // Avoid redundant restart if prefetch is already in progress for the same next track.
-            if (_prefetchNextStreamUrlVideoId is not null &&
-                string.Equals(_prefetchNextStreamUrlVideoId, next.VideoId, StringComparison.Ordinal))
+            if (next is not null &&
+                _prefetchNextStreamUrlVideoId is not null &&
+                string.Equals(_prefetchNextStreamUrlVideoId, next.VideoId, StringComparison.Ordinal) &&
+                _prefetchedStreamInput is not null)
                 return;
 
-            CancelNextTrackWarmBestEffort();
-            _nextTrackWarmCts = new CancellationTokenSource();
-            var warmCt = _nextTrackWarmCts.Token;
             string[]? protect = null;
             try
             {
@@ -1413,18 +1650,11 @@ public sealed partial class PlaybackEngine : IDisposable
                     protect = new[] { u };
                 protect ??= BuildProtectPathsForNextWarmFromResolvedInputCache(cur);
             }
-            catch
-            {
-                // ignore
-            }
+            catch { /* ignore */ }
 
-            _ = EnsureCachedBestEffortAsync(next, warmCt, protectedPaths: protect);
-            _prefetchNextStreamUrlTask = PrefetchNextYoutubeStreamUrlBestEffortAsync(next, warmCt);
+            ScheduleTrackBackgroundWarm(playingEntry, next, protect);
         }
-        catch
-        {
-            // ignore
-        }
+        catch { /* ignore */ }
     }
 
     private string[]? BuildProtectPathsForNextWarmFromResolvedInputCache(PlaylistEntry cur)
@@ -1444,46 +1674,63 @@ public sealed partial class PlaybackEngine : IDisposable
         return null;
     }
 
-    private async Task StartNextTrackWarmAfterAnchorFirstAudioAsync(PlaylistEntry anchor)
+    private void ScheduleTrackBackgroundWarm(PlaylistEntry playingEntry, PlaylistEntry? next, string[]? protectPaths)
     {
+        CancelNextTrackWarmBestEffort();
+        _nextTrackWarmCts = new CancellationTokenSource();
+        var warmCt = _nextTrackWarmCts.Token;
+
+        PlaylistEntry? pendingDisk = null;
+        if (_pendingCurrentDiskWarmEntry is not null &&
+            string.Equals(_pendingCurrentDiskWarmEntry.VideoId, playingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
+        {
+            pendingDisk = _pendingCurrentDiskWarmEntry;
+            _pendingCurrentDiskWarmEntry = null;
+        }
+
+        _prefetchNextStreamUrlTask = RunTrackBackgroundWorkExclusiveAsync(playingEntry, next, pendingDisk, protectPaths, warmCt);
+    }
+
+    /// <summary>Single-flight background track work: resolve next URL, then optional disk cache (never parallel yt-dlp).</summary>
+    private async Task RunTrackBackgroundWorkExclusiveAsync(
+        PlaylistEntry playingEntry,
+        PlaylistEntry? next,
+        PlaylistEntry? pendingDiskForCurrent,
+        string[]? protectPathsForNext,
+        CancellationToken ct)
+    {
+        await _trackBackgroundGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var tcs = _firstAudioForCurrentPlayTcs;
-            if (tcs is not null)
-                await tcs.Task.ConfigureAwait(false);
-        }
-        catch
-        {
-            return;
-        }
-
-        try
-        {
-            if (GetCurrent() is not { } cur || !string.Equals(cur.VideoId, anchor.VideoId, StringComparison.OrdinalIgnoreCase))
+            if (GetCurrent() is not { } cur ||
+                !string.Equals(cur.VideoId, playingEntry.VideoId, StringComparison.OrdinalIgnoreCase))
                 return;
 
-            var next = GetNextEntryForWarmPrefetch();
-            if (next is null || !IsYoutubeDiskCacheEligible(next))
-            {
-                CancelNextTrackWarmBestEffort();
-                return;
-            }
+            if (pendingDiskForCurrent is not null && IsYoutubeDiskCacheEligible(pendingDiskForCurrent))
+                await EnsureCachedBestEffortAsync(pendingDiskForCurrent, ct, protectedPaths: null).ConfigureAwait(false);
 
-             // Avoid redundant restart if prefetch is already in progress for the same next track.
-            if (_prefetchNextStreamUrlVideoId is not null &&
-                string.Equals(_prefetchNextStreamUrlVideoId, next.VideoId, StringComparison.Ordinal))
+            if (ct.IsCancellationRequested)
                 return;
 
-            CancelNextTrackWarmBestEffort();
-            _nextTrackWarmCts = new CancellationTokenSource();
-            var warmCt = _nextTrackWarmCts.Token;
-            var protect = BuildProtectPathsForNextWarmFromResolvedInputCache(cur);
-            _ = EnsureCachedBestEffortAsync(next, warmCt, protectedPaths: protect);
-            _prefetchNextStreamUrlTask = PrefetchNextYoutubeStreamUrlBestEffortAsync(next, warmCt);
+            if (next is not null && IsYoutubeDiskCacheEligible(next))
+                await PrefetchNextYoutubeStreamUrlBestEffortAsync(next, ct).ConfigureAwait(false);
+
+            if (ct.IsCancellationRequested || next is null || !IsYoutubeDiskCacheEligible(next))
+                return;
+
+            await EnsureCachedBestEffortAsync(next, ct, protectedPaths: protectPathsForNext).ConfigureAwait(false);
         }
-        catch
+        catch (OperationCanceledException)
         {
             // ignore
+        }
+        catch (Exception ex)
+        {
+            try { AppLog.Warn($"Track background warm failed: {ex.Message}"); } catch { /* ignore */ }
+        }
+        finally
+        {
+            try { _trackBackgroundGate.Release(); } catch { /* ignore */ }
         }
     }
 
@@ -1637,16 +1884,10 @@ public sealed partial class PlaybackEngine : IDisposable
     /// </summary>
     private void TryKickYoutubeBackgroundDiskCache(PlaylistEntry entry)
     {
+        // Deferred until <see cref="RunTrackBackgroundWorkExclusiveAsync"/> (same single-flight slot).
         if (!IsYoutubeDiskCacheEligible(entry))
             return;
-        try
-        {
-            _ = EnsureCachedBestEffortAsync(entry, CancellationToken.None, protectedPaths: null);
-        }
-        catch
-        {
-            // ignore
-        }
+        _pendingCurrentDiskWarmEntry = entry;
     }
 
     private Task EnsureCachedBestEffortAsync(PlaylistEntry entry, CancellationToken ct, IEnumerable<string>? protectedPaths)
@@ -1723,6 +1964,25 @@ public sealed partial class PlaybackEngine : IDisposable
         return false;
     }
 
+    public static bool IsYoutubeDiskCacheEligibleForExport(PlaylistEntry entry)
+        => IsYoutubeDiskCacheEligible(entry);
+
+    /// <summary>True when export can run now or a background cache download is already in progress.</summary>
+    public bool HasYoutubeDiskCacheOrInProgress(PlaylistEntry entry)
+    {
+        if (!IsYoutubeDiskCacheEligible(entry))
+            return false;
+        var key = YoutubeDiskCacheStoreKey(entry.VideoId);
+        if (!string.IsNullOrWhiteSpace(_cache.TryGetCachedPath(key)))
+            return true;
+        if (_cache.IsDownloading(key))
+            return true;
+        return _cache.TryGetPartialCacheBytes(key) > 256 * 1024;
+    }
+
+    public Task PrepareYoutubeDiskCacheForExportAsync(PlaylistEntry entry, CancellationToken ct)
+        => EnsureCachedBestEffortAsync(entry, ct, protectedPaths: null);
+
     /// <summary>Returns the completed on-disk cache file for a YouTube entry (same key as playback), or null when missing or ineligible.</summary>
     public bool TryGetYoutubeDiskCachePath(PlaylistEntry entry, out string? path)
     {
@@ -1754,7 +2014,7 @@ public sealed partial class PlaybackEngine : IDisposable
         CancelNextTrackWarmBestEffort();
     }
 
-    private void StopInternal(bool signalPlaybackStopped)
+    private void StopInternal(bool signalPlaybackStopped, bool preserveMetering = false)
     {
         try { _playCts?.Cancel(); } catch { /* ignore */ }
         _playCts = null;
@@ -1766,15 +2026,26 @@ public sealed partial class PlaybackEngine : IDisposable
 
         try { _positionSw.Stop(); } catch { /* ignore */ }
         try { _positionSw.Reset(); } catch { /* ignore */ }
-        _startOffsetSeconds = 0;
-        try { _visualizerTap.Stop(); } catch { /* ignore */ }
-        try { _vlcVisualizerTap.Stop(); } catch { /* ignore */ }
-        try { _analyzer.Reset(); } catch { /* ignore */ }
+        // Keep timeline during in-track seek restarts (PlayEntryAsync sets a new offset immediately after).
+        if (signalPlaybackStopped)
+            _startOffsetSeconds = 0;
+
+        if (!preserveMetering)
+        {
+            try { _visualizerTap.Stop(); } catch { /* ignore */ }
+            try { LibVlcHost.RunOnUiThread(_vlcVisualizerTap.Stop, TimeSpan.FromSeconds(1)); } catch { /* ignore */ }
+            try { _analyzer.Reset(); } catch { /* ignore */ }
+        }
+
+        try { _audio?.Clear(); } catch { /* ignore */ }
 
         _pauseGate.Set();
 
         try { TeardownVlcBestEffort(); } catch { /* ignore */ }
-        try { _audio?.Stop(); } catch { /* ignore */ }
+
+        if (!preserveMetering)
+            try { _audio?.Stop(); } catch { /* ignore */ }
+
         if (signalPlaybackStopped)
         {
             RaisePlaybackStateChanged(false);
@@ -1783,19 +2054,90 @@ public sealed partial class PlaybackEngine : IDisposable
         }
     }
 
+    /// <summary>Timeline position actually applied by the last <see cref="SeekAsync"/> (for UI sync).</summary>
+    public double LastAppliedSeekSeconds { get; private set; }
+
+    private bool _disposed;
+
+    private async Task WaitQueueNavLockAsync()
+    {
+        if (_disposed)
+            return;
+        try
+        {
+            await _queueNavLock.WaitAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // shutting down
+        }
+    }
+
+    private void ReleaseQueueNavLockSafe()
+    {
+        if (_disposed)
+            return;
+        try { _queueNavLock.Release(); }
+        catch (ObjectDisposedException) { /* ignore */ }
+        catch (SemaphoreFullException) { /* ignore */ }
+    }
+
+    private void ReleasePlayExclusiveSafe()
+    {
+        if (_disposed)
+            return;
+        try { _playExclusive.Release(); }
+        catch (ObjectDisposedException) { /* ignore */ }
+        catch (SemaphoreFullException) { /* ignore */ }
+    }
+
+    private void WaitForPlayExclusiveDrainBestEffort()
+    {
+        for (var i = 0; i < 80; i++)
+        {
+            if (_disposed)
+                return;
+            try
+            {
+                if (_playExclusive.Wait(0))
+                {
+                    _playExclusive.Release();
+                    return;
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            Thread.Sleep(50);
+        }
+    }
+
     public void Dispose()
     {
+        if (_disposed)
+            return;
+        _disposed = true;
+
+        try { Interlocked.Increment(ref _playGeneration); } catch { /* ignore */ }
+        try { _playCts?.Cancel(); } catch { /* ignore */ }
+
         StopInternal(signalPlaybackStopped: true);
         CancelNextTrackWarmBestEffort();
-        _pauseGate.Dispose();
-        _playExclusive.Dispose();
-        _queueNavLock.Dispose();
         try { TeardownVlcBestEffort(); } catch { /* ignore */ }
+        WaitForPlayExclusiveDrainBestEffort();
         try { _vlcMp?.Dispose(); } catch { /* ignore */ }
         _vlcMp = null;
-        _audio?.Dispose();
+        try { _audio?.Dispose(); } catch { /* ignore */ }
+        _audio = null;
+        _waveOutSinkDeviceNumber = int.MinValue;
         try { _visualizerTap.Dispose(); } catch { /* ignore */ }
         try { _vlcVisualizerTap.Dispose(); } catch { /* ignore */ }
+        try { _pauseGate.Dispose(); } catch { /* ignore */ }
+        try { _playExclusive.Dispose(); } catch { /* ignore */ }
+        try { _queueNavLock.Dispose(); } catch { /* ignore */ }
+        try { _trackBackgroundGate.Dispose(); } catch { /* ignore */ }
     }
 
     /// <summary>Optional buffering timeline; emits <c>[PlaybackTiming]</c> lines at diagnostic log level.</summary>

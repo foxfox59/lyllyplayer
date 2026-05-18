@@ -62,6 +62,9 @@ public sealed class AudioOut : IDisposable
             if (rms > 1e-6f)
             {
                 var desired = Math.Clamp(TargetRms / rms, MinGain, MaxGain);
+                // Limit upward steps so post-seek buffer drains do not spike perceived loudness.
+                if (desired > _gain)
+                    desired = Math.Min(desired, _gain * 1.35f);
                 var attack = 0.25f;  // faster when reducing gain
                 var release = 0.04f; // slower when increasing gain
                 var a = desired < _gain ? attack : release;
@@ -91,24 +94,25 @@ public sealed class AudioOut : IDisposable
         int deviceNumber = -1,
         Action<byte[], int, int>? onSamplesRead = null,
         bool normalize = false,
-        bool analyzeOnRead = false)
+        bool analyzeOnRead = false,
+        bool lowLatencyDeviceBuffer = false)
     {
         _format = format;
         _onSamplesAdded = onSamplesRead;
         _analyzeOnRead = analyzeOnRead;
-        // Larger buffer than default 1 s: network decode is bursty; too small + aggressive WaveOut latency causes
-        // constant underruns. Keep in sync with PlaybackEngine reader throttle (must stay below this duration).
+        // Absorb bursty network/pipe decode. Never discard *played* samples (causes crackle/skip); drop newest overflow instead.
         _buffer = new BufferedWaveProvider(format)
         {
-            BufferDuration = TimeSpan.FromSeconds(3),
-            DiscardOnBufferOverflow = true,
+            BufferDuration = TimeSpan.FromSeconds(3.0),
+            DiscardOnBufferOverflow = false,
         };
 
         _output = new WaveOutEvent
         {
             DeviceNumber = deviceNumber,
-            DesiredLatency = 120,
-            NumberOfBuffers = 3,
+            // Balance VU sync vs underruns: moderate driver buffers when tapping on read.
+            DesiredLatency = lowLatencyDeviceBuffer ? 100 : 150,
+            NumberOfBuffers = lowLatencyDeviceBuffer ? 3 : 4,
         };
 
         IWaveProvider source = _buffer;
@@ -132,6 +136,16 @@ public sealed class AudioOut : IDisposable
     public void Clear()
     {
         _buffer.ClearBuffer();
+    }
+
+    /// <summary>Start WaveOut once enough PCM is queued (avoids initial underrun crackle).</summary>
+    public bool TryEnsurePlaybackStarted(double minBufferedSeconds = 0.12)
+    {
+        if (IsPlaying)
+            return true;
+        if (BufferedSeconds + 1e-6 < minBufferedSeconds)
+            return false;
+        return TryPlay();
     }
 
     public void AddSamples(byte[] buffer, int offset, int count)

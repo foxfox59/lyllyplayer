@@ -1,5 +1,11 @@
 ### What's new, pussycat?
 
+- 2.8.0:
+  - Fixed an UI thread deadlock that would occasionally cause the app to freeze
+  - Fixed VU meters being laggy and out of sync on some occasions
+  - Fixed a track seeking issue
+  - Fixed a bug in SMTC session query
+  - Seek bar visibly indicates when track has finished buffering
 - 2.7.1:
   - Fixed a play state change when loading playlist 
 - 2.7.0:
