@@ -626,6 +626,8 @@ public partial class MainWindow : Window
     /// <summary>Optional explicit node.exe path; Advanced features need a resolved Node.</summary>
     private string? _savedNodePath;
     private bool _internalYtDlpUpdateCheckEnabled;
+    private bool _appUpdateCheckEnabled;
+    private DateTime _lastAppUpdateCheckUtc = DateTime.MinValue;
     private string _ytdlpEjsComponentSource = "github";
     private bool _youtubeCookiesFromBrowserEnabled;
     private string _youtubeCookiesFromBrowser = "";
@@ -1076,6 +1078,15 @@ public partial class MainWindow : Window
         _savedFfmpegPath = NormalizeToolSave(_startupSettings.FfmpegPath);
         _savedNodePath = NormalizeToolSave(_startupSettings.NodeJsPath);
         _internalYtDlpUpdateCheckEnabled = _startupSettings.InternalYtDlpUpdateCheckEnabled ?? false;
+        _appUpdateCheckEnabled = _startupSettings.AppUpdateCheckEnabled ?? false;
+        if (!string.IsNullOrWhiteSpace(_startupSettings.LastAppUpdateCheckUtc)
+            && DateTime.TryParse(_startupSettings.LastAppUpdateCheckUtc, null,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var lastCheck))
+        {
+            _lastAppUpdateCheckUtc = lastCheck.Kind == DateTimeKind.Utc
+                ? lastCheck
+                : lastCheck.ToUniversalTime();
+        }
         _ytdlpEjsComponentSource = string.IsNullOrWhiteSpace(_startupSettings.YtdlpEjsComponentSource)
             ? "github"
             : _startupSettings.YtdlpEjsComponentSource.Trim();
@@ -1553,6 +1564,7 @@ public partial class MainWindow : Window
                     SyncSystemMediaTransportSession(reclaimFocus: true);
             }
             catch { /* ignore */ }
+            try { MaybeCheckAppUpdateOnStartup(); } catch { /* ignore */ }
             // (Startup tray gap workaround runs in ContentRendered.)
         };
         ContentRendered += (_, _) =>

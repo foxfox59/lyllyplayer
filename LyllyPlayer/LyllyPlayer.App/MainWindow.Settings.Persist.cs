@@ -154,6 +154,10 @@ public partial class MainWindow
         _settingsService.Save(new AppSettings(
             YtDlpPath: _savedYtDlpPath,
             InternalYtDlpUpdateCheckEnabled: _internalYtDlpUpdateCheckEnabled,
+            AppUpdateCheckEnabled: _appUpdateCheckEnabled,
+            LastAppUpdateCheckUtc: _lastAppUpdateCheckUtc <= DateTime.MinValue
+                ? null
+                : _lastAppUpdateCheckUtc.ToString("o"),
             FfmpegPath: _savedFfmpegPath,
             LastPlaylistUrl: string.IsNullOrEmpty(lastYtUrlMem) ? null : lastYtUrlMem,
             LastPlaylistSourceType: _lastPlaylistSourceType.ToString(),

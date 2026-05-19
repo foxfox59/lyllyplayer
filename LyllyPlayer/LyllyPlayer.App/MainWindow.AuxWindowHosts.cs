@@ -6,6 +6,7 @@ using LyllyPlayer.Models;
 using LyllyPlayer.Services;
 using LyllyPlayer.Settings;
 using LyllyPlayer.ShellServices;
+using LyllyPlayer.Updates;
 using LyllyPlayer.Utils;
 using LyllyPlayer.Windows;
 
@@ -664,6 +665,23 @@ public partial class MainWindow
             },
             checkInternalYtDlpNowAsync: async () => await CheckInternalYtDlpNowAsync().ConfigureAwait(true),
             downloadInternalYtDlpAsync: async (ct) => await DownloadInternalYtDlpAsync(ct).ConfigureAwait(true),
+            getAppUpdateCheckEnabled: () => _appUpdateCheckEnabled,
+            setAppUpdateCheckEnabled: (v) =>
+            {
+                _appUpdateCheckEnabled = v;
+                RequestPersistSnapshot();
+            },
+            getAppUpdateStatus: () =>
+            {
+                var dir = AppUpdateService.GetInstallDirectory();
+                var supported = AppUpdateService.IsPortableUpdateSupported();
+                return $"Installed: {AppVersion.Current} ({AppUpdateService.DescribeRuntime()})\n" +
+                       $"Folder: {dir}\n" +
+                       (supported
+                           ? "In-app updates: available"
+                           : $"In-app updates: unavailable (need {AppUpdateConstants.UpdaterExeName} next to LyllyPlayer.exe; dev builds update manually)");
+            },
+            checkAppUpdateNowAsync: async () => await CheckAppUpdateNowAsync(offerInstall: true).ConfigureAwait(true),
             getLyricsEnabled: () => _lyricsEnabled,
             setLyricsEnabled: (v) =>
             {

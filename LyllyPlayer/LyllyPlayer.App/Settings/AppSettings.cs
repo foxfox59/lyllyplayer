@@ -3,6 +3,10 @@ namespace LyllyPlayer.Settings;
 public sealed record AppSettings(
     string? YtDlpPath,
     bool? InternalYtDlpUpdateCheckEnabled,
+    /// <summary>When true, check GitHub for a newer portable release about once per week.</summary>
+    bool? AppUpdateCheckEnabled,
+    /// <summary>UTC timestamp (ISO 8601) of the last GitHub app update check.</summary>
+    string? LastAppUpdateCheckUtc,
     string? FfmpegPath,
     string? LastPlaylistUrl,
     string? LastPlaylistSourceType,

@@ -271,6 +271,8 @@ public static class SettingsStore
         {
             YtDlpPath = loaded.YtDlpPath ?? GetString(nameof(AppSettings.YtDlpPath)),
             InternalYtDlpUpdateCheckEnabled = loaded.InternalYtDlpUpdateCheckEnabled ?? GetBool(nameof(AppSettings.InternalYtDlpUpdateCheckEnabled)),
+            AppUpdateCheckEnabled = loaded.AppUpdateCheckEnabled ?? GetBool(nameof(AppSettings.AppUpdateCheckEnabled)),
+            LastAppUpdateCheckUtc = loaded.LastAppUpdateCheckUtc ?? GetString(nameof(AppSettings.LastAppUpdateCheckUtc)),
             FfmpegPath = loaded.FfmpegPath ?? GetString(nameof(AppSettings.FfmpegPath)),
             LastPlaylistUrl = loaded.LastPlaylistUrl ?? GetString(nameof(AppSettings.LastPlaylistUrl)),
             LastPlaylistSourceType = loaded.LastPlaylistSourceType ?? GetString(nameof(AppSettings.LastPlaylistSourceType)),
@@ -438,6 +440,8 @@ public static class SettingsStore
         var s = AllNullSettings();
         TakeString(nameof(AppSettings.YtDlpPath), ref s, (c, v) => c with { YtDlpPath = v });
         TakeBool(nameof(AppSettings.InternalYtDlpUpdateCheckEnabled), ref s, (c, v) => c with { InternalYtDlpUpdateCheckEnabled = v });
+        TakeBool(nameof(AppSettings.AppUpdateCheckEnabled), ref s, (c, v) => c with { AppUpdateCheckEnabled = v });
+        TakeString(nameof(AppSettings.LastAppUpdateCheckUtc), ref s, (c, v) => c with { LastAppUpdateCheckUtc = v });
         TakeString(nameof(AppSettings.FfmpegPath), ref s, (c, v) => c with { FfmpegPath = v });
         TakeString(nameof(AppSettings.LastPlaylistUrl), ref s, (c, v) => c with { LastPlaylistUrl = v });
         TakeString(nameof(AppSettings.LastLocalPlaylistPath), ref s, (c, v) => c with { LastLocalPlaylistPath = v });
@@ -523,6 +527,8 @@ public static class SettingsStore
     private static readonly AppSettings AllNullSettingsInstance = new(
         YtDlpPath: null,
         InternalYtDlpUpdateCheckEnabled: null,
+        AppUpdateCheckEnabled: null,
+        LastAppUpdateCheckUtc: null,
         FfmpegPath: null,
         LastPlaylistUrl: null,
         LastPlaylistSourceType: null,
@@ -653,6 +659,8 @@ public static class SettingsStore
         => new(
             YtDlpPath: null,
             InternalYtDlpUpdateCheckEnabled: false,
+            AppUpdateCheckEnabled: false,
+            LastAppUpdateCheckUtc: null,
             FfmpegPath: null,
             LastPlaylistUrl: null,
             LastPlaylistSourceType: DefaultLastPlaylistSourceType,

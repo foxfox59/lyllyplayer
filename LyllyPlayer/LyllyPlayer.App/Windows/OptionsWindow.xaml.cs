@@ -36,6 +36,10 @@ public partial class OptionsWindow : Window
     private readonly Action<string> _setYtDlpPath;
     private readonly Func<bool> _getInternalYtDlpUpdateCheckEnabled;
     private readonly Action<bool> _setInternalYtDlpUpdateCheckEnabled;
+    private readonly Func<bool> _getAppUpdateCheckEnabled;
+    private readonly Action<bool> _setAppUpdateCheckEnabled;
+    private readonly Func<string>? _getAppUpdateStatus;
+    private readonly Func<Task>? _checkAppUpdateNowAsync;
     private readonly Func<Task>? _checkInternalYtDlpNowAsync;
     private readonly Func<CancellationToken, Task<bool>>? _downloadInternalYtDlpAsync;
     private readonly Func<string> _getFfmpegPath;
@@ -165,6 +169,10 @@ public partial class OptionsWindow : Window
         Action<string> setYtDlpPath,
         Func<bool> getInternalYtDlpUpdateCheckEnabled,
         Action<bool> setInternalYtDlpUpdateCheckEnabled,
+        Func<bool> getAppUpdateCheckEnabled,
+        Action<bool> setAppUpdateCheckEnabled,
+        Func<string> getAppUpdateStatus,
+        Func<Task>? checkAppUpdateNowAsync,
         Func<Task>? checkInternalYtDlpNowAsync,
         Func<CancellationToken, Task<bool>>? downloadInternalYtDlpAsync,
         Func<string> getFfmpegPath,
@@ -290,6 +298,10 @@ public partial class OptionsWindow : Window
         _setYtDlpPath = setYtDlpPath;
         _getInternalYtDlpUpdateCheckEnabled = getInternalYtDlpUpdateCheckEnabled;
         _setInternalYtDlpUpdateCheckEnabled = setInternalYtDlpUpdateCheckEnabled;
+        _getAppUpdateCheckEnabled = getAppUpdateCheckEnabled;
+        _setAppUpdateCheckEnabled = setAppUpdateCheckEnabled;
+        _getAppUpdateStatus = getAppUpdateStatus;
+        _checkAppUpdateNowAsync = checkAppUpdateNowAsync;
         _checkInternalYtDlpNowAsync = checkInternalYtDlpNowAsync;
         _downloadInternalYtDlpAsync = downloadInternalYtDlpAsync;
         _getFfmpegPath = getFfmpegPath;
@@ -485,6 +497,7 @@ public partial class OptionsWindow : Window
         _draft = OptionsDraftLoader.LoadFromCurrent(
             _getYtDlpPath,
             _getInternalYtDlpUpdateCheckEnabled,
+            _getAppUpdateCheckEnabled,
             _getFfmpegPath,
             _getNodeJsPath,
             _getYtdlpEjsComponentSource,
@@ -572,6 +585,8 @@ public partial class OptionsWindow : Window
         CacheMaxMbTextBox.Text = Math.Clamp(_draft.CacheMaxMb, 16, 102400).ToString();
         try { GlobalMediaKeysCheckBox.IsChecked = _draft.GlobalMediaKeysEnabled; } catch { /* ignore */ }
         try { InternalYtDlpUpdateCheckCheckBox.IsChecked = _draft.InternalYtDlpUpdateCheckEnabled; } catch { /* ignore */ }
+        try { AppUpdateCheckCheckBox.IsChecked = _draft.AppUpdateCheckEnabled; } catch { /* ignore */ }
+        try { RefreshAppUpdateStatus(); } catch { /* ignore */ }
         try
         {
             PlaylistAutoRefreshComboBox.ClearValue(UIElement.IsEnabledProperty);
@@ -1252,6 +1267,44 @@ public partial class OptionsWindow : Window
             if (_checkInternalYtDlpNowAsync is null)
                 return;
             await _checkInternalYtDlpNowAsync().ConfigureAwait(true);
+        }
+        catch { /* ignore */ }
+    }
+
+    private void RefreshAppUpdateStatus()
+    {
+        try
+        {
+            AppUpdateStatusTextBlock.Text = _getAppUpdateStatus?.Invoke() ?? "(unavailable)";
+        }
+        catch
+        {
+            try { AppUpdateStatusTextBlock.Text = "(status unavailable)"; } catch { /* ignore */ }
+        }
+    }
+
+    private void AppUpdateCheckCheckBox_OnChecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.AppUpdateCheckEnabled = true;
+    }
+
+    private void AppUpdateCheckCheckBox_OnUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_suppressBackgroundUiEvents)
+            return;
+        _draft.AppUpdateCheckEnabled = false;
+    }
+
+    private async void AppUpdateCheckNowButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_checkAppUpdateNowAsync is null)
+                return;
+            await _checkAppUpdateNowAsync().ConfigureAwait(true);
+            try { RefreshAppUpdateStatus(); } catch { /* ignore */ }
         }
         catch { /* ignore */ }
     }
@@ -2529,6 +2582,7 @@ public partial class OptionsWindow : Window
 
         try { _setYtDlpPath(_draft.YtDlpPath ?? ""); } catch { /* ignore */ }
         try { _setInternalYtDlpUpdateCheckEnabled(_draft.InternalYtDlpUpdateCheckEnabled); } catch { /* ignore */ }
+        try { _setAppUpdateCheckEnabled(_draft.AppUpdateCheckEnabled); } catch { /* ignore */ }
         try { _setFfmpegPath(_draft.FfmpegPath ?? ""); } catch { /* ignore */ }
         try { _setNodeJsPath(_draft.NodeJsPath ?? ""); } catch { /* ignore */ }
         try { _setYtdlpEjsComponentSource(_draft.YtdlpEjsComponentSource ?? "github"); } catch { /* ignore */ }

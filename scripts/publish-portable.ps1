@@ -16,12 +16,14 @@ param(
     [string] $Runtime = 'win-x64',
     [string] $Configuration = 'Release',
     [string] $Project = (Join-Path $PSScriptRoot '..\LyllyPlayer\LyllyPlayer.App\LyllyPlayer.App.csproj'),
+    [string] $UpdaterProject = (Join-Path $PSScriptRoot '..\LyllyPlayer\LyllyPlayer.Updater\LyllyPlayer.Updater.csproj'),
     # Base folder for publish\<rid>\ and ZIPs. Relative paths are under the repo root (default: artifacts).
     [string] $ArtifactRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $Project = (Resolve-Path $Project).Path
+$UpdaterProject = (Resolve-Path $UpdaterProject).Path
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
@@ -56,6 +58,17 @@ dotnet publish $Project `
     --self-contained true `
     -p:PublishReadyToRun=true `
     -p:IncludeNativeLibrariesForSelfExtract=true `
+    -o $outDir
+
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Framework-dependent: reuses the .NET runtime already shipped beside LyllyPlayer.exe (~200 KB vs ~60+ MB self-contained).
+Write-Host "Publishing updater (framework-dependent $Runtime) into $outDir ..." -ForegroundColor Cyan
+dotnet publish $UpdaterProject `
+    -c $Configuration `
+    -r $Runtime `
+    --self-contained false `
+    -p:UseAppHost=true `
     -o $outDir
 
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

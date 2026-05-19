@@ -1,5 +1,7 @@
 ### What's new, pussycat?
 
+- 2.9.1:
+  - Added update check feature
 - 2.9.0:
   - Fixed opening associated audio files not being added to playlist properly
   - Fixed a bug where opening the app via an associated audio file did not focus the file correctly in playlist 

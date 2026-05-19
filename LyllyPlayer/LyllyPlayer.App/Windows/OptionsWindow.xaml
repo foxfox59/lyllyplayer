@@ -554,7 +554,35 @@
                                            FontSize="11"
                                            Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
                                            Text="(status)"
-                                           Margin="0,0,0,0"/>
+                                           Margin="0,0,0,16"/>
+
+                                <TextBlock Text="Application updates"
+                                           FontWeight="SemiBold"
+                                           Margin="0,0,0,6"
+                                           Foreground="{DynamicResource App.Theme.Foreground}"/>
+                                <TextBlock TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="Checks GitHub for a newer portable ZIP for this PC (win-x64 / win-x86 / win-arm64). When you install an update, LyllyPlayer closes and LyllyPlayer.Updater.exe replaces files in this folder. A backup folder (LyllyPlayer.backup) is kept next to this install."/>
+                                <TextBlock x:Name="AppUpdateStatusTextBlock"
+                                           TextWrapping="Wrap"
+                                           FontSize="11"
+                                           Margin="0,0,0,8"
+                                           Foreground="{DynamicResource App.Theme.ForegroundSubtle}"
+                                           Text="(status)"/>
+                                <CheckBox x:Name="AppUpdateCheckCheckBox"
+                                          Content="Check for LyllyPlayer updates (weekly)"
+                                          Margin="0,0,0,8"
+                                          Foreground="{DynamicResource App.Theme.Foreground}"
+                                          Checked="AppUpdateCheckCheckBox_OnChecked"
+                                          Unchecked="AppUpdateCheckCheckBox_OnUnchecked"/>
+                                <Button x:Name="AppUpdateCheckNowButton"
+                                        Content="Check now"
+                                        MinWidth="96"
+                                        Height="28"
+                                        HorizontalAlignment="Left"
+                                        Click="AppUpdateCheckNowButton_OnClick"/>
                             </StackPanel>
                         </ScrollViewer>
                     </TabItem>

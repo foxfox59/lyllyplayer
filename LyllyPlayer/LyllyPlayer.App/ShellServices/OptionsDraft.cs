@@ -8,6 +8,7 @@ public sealed class OptionsDraft
 {
     public string YtDlpPath = "";
     public bool InternalYtDlpUpdateCheckEnabled;
+    public bool AppUpdateCheckEnabled;
     public string FfmpegPath = "";
     public string NodeJsPath = "";
     public string YtdlpEjsComponentSource = "github";
