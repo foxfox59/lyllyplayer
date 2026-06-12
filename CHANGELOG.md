@@ -1,5 +1,7 @@
 ### What's new, pussycat?
 
+- 2.9.3:
+  - Target a minimal .NET framework for the updater to avoid missing core issue 
 - 2.9.2:
   - Fixed an issue with new yt-dlp
 - 2.9.1:

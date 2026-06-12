@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+
 namespace LyllyPlayer.Updater;
 
 internal sealed class CliOptions

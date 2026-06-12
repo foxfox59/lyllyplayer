@@ -1,12 +1,19 @@
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO.Compression;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
 using System.Net.Http.Headers;
-using LyllyPlayer.Updates;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace LyllyPlayer.Updater;
 
 internal sealed class UpdateRunner
 {
+    private const string UpdaterExeName = "LyllyPlayer.Updater.exe";
+
     private static readonly HttpClient Http = CreateHttp();
 
     private static HttpClient CreateHttp()
@@ -61,9 +68,10 @@ internal sealed class UpdateRunner
 
             UpdateLog.Write("Extracting…");
             Directory.CreateDirectory(stagingDir);
-            ZipFile.ExtractToDirectory(downloadPath, stagingDir, overwriteFiles: true);
+            var extractedFiles = ZipExtract.ExtractToDirectory(downloadPath, stagingDir);
             var payloadDir = ResolvePayloadRoot(stagingDir);
-            UpdateLog.Write($"Payload root: {payloadDir}");
+            var payloadFiles = DirectorySync.CountFiles(payloadDir);
+            UpdateLog.Write($"Extracted {extractedFiles} zip entries; payload root: {payloadDir} ({payloadFiles} files)");
 
             if (!File.Exists(Path.Combine(payloadDir, "LyllyPlayer.exe")))
             {
@@ -80,25 +88,39 @@ internal sealed class UpdateRunner
             UpdateLog.Write($"Backing up install folder to {backupDir}");
             DirectorySync.CopyDirectory(installDir, backupDir);
 
+            var keepUpdater = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                UpdaterExeName,
+            };
+
             try
             {
                 UpdateLog.Write("Applying update…");
-                var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                DirectorySync.ClearDirectory(installDir, keepUpdater);
+                var copied = DirectorySync.CopyDirectory(payloadDir, installDir, keepUpdater);
+
+                var destUpdater = Path.Combine(installDir, UpdaterExeName);
+                var pendingUpdater = Path.Combine(installDir, UpdaterSelfReplace.PendingFileName);
+                var stageUpdater = UpdaterSelfReplace.TryStagePending(payloadDir, installDir, UpdaterExeName);
+                if (stageUpdater)
                 {
-                    AppUpdateConstants.UpdaterExeName,
-                };
-                DirectorySync.ClearDirectory(installDir, keep);
-                DirectorySync.CopyDirectory(payloadDir, installDir);
-                UpdateLog.Write("Update applied.");
+                    UpdateLog.Write($"Staged {UpdaterSelfReplace.PendingFileName} for replace after exit.");
+                    UpdaterSelfReplace.Schedule(Process.GetCurrentProcess().Id, pendingUpdater, destUpdater);
+                }
+
+                UpdateLog.Write(stageUpdater
+                    ? $"Update applied ({copied} files; {UpdaterExeName} will be replaced after this process exits)."
+                    : $"Update applied ({copied} files copied; {UpdaterExeName} left in place — it is running).");
             }
             catch (Exception ex)
             {
                 UpdateLog.Exception(ex, "Apply failed; restoring backup");
+                UpdaterSelfReplace.TryDeletePending(installDir);
                 try
                 {
-                    DirectorySync.ClearDirectory(installDir);
-                    DirectorySync.CopyDirectory(backupDir, installDir);
-                    UpdateLog.Write("Backup restored.");
+                    DirectorySync.ClearDirectory(installDir, keepUpdater);
+                    var restored = DirectorySync.CopyDirectory(backupDir, installDir, keepUpdater);
+                    UpdateLog.Write($"Backup restored ({restored} files; {UpdaterExeName} left in place).");
                 }
                 catch (Exception restoreEx)
                 {
@@ -129,17 +151,25 @@ internal sealed class UpdateRunner
 
     private static string ResolvePayloadRoot(string stagingDir)
     {
-        var direct = Path.Combine(stagingDir, "LyllyPlayer.exe");
-        if (File.Exists(direct))
+        if (File.Exists(Path.Combine(stagingDir, "LyllyPlayer.exe")))
             return stagingDir;
 
-        foreach (var sub in Directory.EnumerateDirectories(stagingDir))
+        string? shallowMatch = null;
+        foreach (var exe in Directory.EnumerateFiles(stagingDir, "LyllyPlayer.exe", SearchOption.AllDirectories))
         {
-            if (File.Exists(Path.Combine(sub, "LyllyPlayer.exe")))
-                return sub;
+            var dir = Path.GetDirectoryName(exe);
+            if (string.IsNullOrEmpty(dir))
+                continue;
+
+            var relDepth = dir.Substring(stagingDir.Length).Trim(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var depth = string.IsNullOrEmpty(relDepth) ? 0 : relDepth.Split(Path.DirectorySeparatorChar).Length;
+            if (depth <= 1)
+                return dir;
+
+            shallowMatch ??= dir;
         }
 
-        return stagingDir;
+        return shallowMatch ?? stagingDir;
     }
 
     private static async Task DownloadFileAsync(string url, string destPath, CancellationToken cancellationToken)
@@ -148,12 +178,16 @@ internal sealed class UpdateRunner
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        using var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
-        resp.EnsureSuccessStatusCode();
-        await using var input = await resp.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        await using var output = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        await input.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
+        using (var resp = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                   .ConfigureAwait(false))
+        {
+            resp.EnsureSuccessStatusCode();
+            using (var input = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false))
+            using (var output = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                await input.CopyToAsync(output).ConfigureAwait(false);
+            }
+        }
     }
 
     private static async Task WaitForAppExitAsync(string installDir, int parentPid, CancellationToken cancellationToken)
@@ -165,8 +199,8 @@ internal sealed class UpdateRunner
         {
             try
             {
-                var parent = Process.GetProcessById(parentPid);
-                await parent.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                using var parent = Process.GetProcessById(parentPid);
+                await Task.Run(() => parent.WaitForExit(), cancellationToken).ConfigureAwait(false);
             }
             catch (ArgumentException)
             {

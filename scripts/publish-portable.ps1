@@ -62,18 +62,25 @@ dotnet publish $Project `
 
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# Framework-dependent: reuses the .NET runtime already shipped beside LyllyPlayer.exe (~200 KB vs ~60+ MB self-contained).
-Write-Host "Publishing updater (framework-dependent $Runtime) into $outDir ..." -ForegroundColor Cyan
+# net48 framework-dependent: uses .NET Framework 4.8 in-box on Windows 10+ (not .NET 8 — that is not preinstalled).
+Write-Host "Publishing updater (net48, framework-dependent) into $outDir ..." -ForegroundColor Cyan
 dotnet publish $UpdaterProject `
     -c $Configuration `
-    -r $Runtime `
-    --self-contained false `
-    -p:UseAppHost=true `
+    -f net48 `
     -o $outDir
 
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+# tar -a writes ZIP with forward-slash entry paths (Compress-Archive uses backslashes and breaks .NET Framework extraction).
 Write-Host "Zipping -> $zipPath" -ForegroundColor Cyan
-Compress-Archive -Path (Join-Path $outDir '*') -DestinationPath $zipPath -Force
+if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+Push-Location -LiteralPath $outDir
+try {
+    & tar.exe -a -cf $zipPath *
+    if ($LASTEXITCODE -ne 0) { throw "tar.exe failed with exit code $LASTEXITCODE" }
+}
+finally {
+    Pop-Location
+}
 
 Write-Host "Done. Run: $outDir\LyllyPlayer.exe" -ForegroundColor Green

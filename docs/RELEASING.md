@@ -55,12 +55,12 @@ powershell -File .\scripts\publish-portable.ps1 -Runtime win-x86
 
 ## In-app updates (portable)
 
-Portable ZIPs include `LyllyPlayer.Updater.exe` next to `LyllyPlayer.exe` (framework-dependent — it reuses the same .NET runtime files as the main app, so the updater adds only a small exe/dll pair, not a second runtime). The main app checks GitHub Releases for `LyllyPlayer-portable-{version}-{rid}.zip`, then hands off to the updater, which:
+Portable ZIPs include `LyllyPlayer.Updater.exe` next to `LyllyPlayer.exe` (**.NET Framework 4.8**, framework-dependent — in-box on Windows 10 1903+ / 11; small exe, no .NET 8 runtime required). The main app checks GitHub Releases for `LyllyPlayer-portable-{version}-{rid}.zip`, then hands off to the updater, which:
 
 1. Waits for LyllyPlayer to exit
 2. Downloads and extracts the release ZIP
 3. Backs up the install folder to `LyllyPlayer.backup` (sibling of the install directory)
-4. Replaces files in place and restarts the app (restores the backup if apply fails)
+4. Replaces files in place and restarts the app (restores the backup if apply fails). If the ZIP contains a newer `LyllyPlayer.Updater.exe`, it is written as `LyllyPlayer.Updater.exe.pending` and swapped in after the running updater exits.
 
 Updater logs: `%LOCALAPPDATA%\LyllyPlayer\updates\updater-*.log`
 
