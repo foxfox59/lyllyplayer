@@ -696,6 +696,7 @@ public sealed partial class PlaybackEngine
         }
 
         var media = new Media(lib, pathOrUrl, FromType.FromLocation);
+        var hasReferer = false;
         if (resolved.HttpHeaders is not null)
         {
             foreach (var kv in resolved.HttpHeaders)
@@ -709,13 +710,19 @@ public sealed partial class PlaybackEngine
                     media.AddOption(":http-user-agent=" + v);
                 else if (string.Equals(k, "Referer", StringComparison.OrdinalIgnoreCase) ||
                          string.Equals(k, "Referrer", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasReferer = true;
                     media.AddOption(":http-referrer=" + v);
+                }
                 else if (string.Equals(k, "Cookie", StringComparison.OrdinalIgnoreCase))
                     media.AddOption(":http-cookie=" + v);
                 else
                     media.AddOption($":http-header={k}: {v}");
             }
         }
+
+        if (!hasReferer && pathOrUrl.Contains("googlevideo.", StringComparison.OrdinalIgnoreCase))
+            media.AddOption(":http-referrer=https://www.youtube.com/");
 
         return media;
     }

@@ -1,5 +1,7 @@
 ### What's new, pussycat?
 
+- 2.9.2:
+  - Fixed an issue with new yt-dlp
 - 2.9.1:
   - Added update check feature
 - 2.9.0:

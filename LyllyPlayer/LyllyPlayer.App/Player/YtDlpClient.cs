@@ -25,19 +25,24 @@ public sealed class YtDlpClient
 
     /// <summary>
     /// <c>android</c> first for JSON without cookies: WEB progressive <c>googlevideo</c> URLs often 403 in FFmpeg with headers-only.
-    /// <c>tv</c> last: DRM experiment issues (#12563). With cookies-from-browser, use <see cref="YoutubeStrategyClients"/> instead (android is skipped by yt-dlp).
+    /// <c>tv</c> last: DRM experiment issues (#12563). Cookie-auth passes use web-family clients (android is skipped by yt-dlp when cookies are sent).
     /// </summary>
     private static readonly string[] YoutubePlayerClientOrder = ["android", "mweb", "web", "tv"];
 
-    /// <summary>Per-<c>player_client</c> yt-dlp retries. Omits android when cookies-from-browser is on to avoid noisy failed runs.</summary>
-    private IEnumerable<string> YoutubeStrategyClients()
+    /// <summary>
+    /// Per-<c>player_client</c> yt-dlp retries.
+    /// Public playback resolve tries <paramref name="useBrowserCookies"/> = false first so <c>android</c> is not skipped
+    /// (yt-dlp drops android when <c>--cookies-from-browser</c> is set). Cookie-auth retries use web-family clients.
+    /// </summary>
+    private IEnumerable<string> YoutubeStrategyClients(bool useBrowserCookies)
     {
-        if (UsesCookiesFromBrowser)
+        if (useBrowserCookies && UsesCookiesFromBrowser)
         {
-            yield return "web_embedded";
+            // web before web_embedded — embedded client is flaky on n-challenge / EJS in subprocess pipes.
+            yield return "web";
             yield return "mweb";
             yield return "web_safari";
-            yield return "web";
+            yield return "web_embedded";
             yield return "tv";
         }
         else
@@ -45,6 +50,14 @@ public sealed class YtDlpClient
             foreach (var c in YoutubePlayerClientOrder)
                 yield return c;
         }
+    }
+
+    /// <summary>No-cookie resolve first (android works for format 18); cookie pass for age/region-gated videos.</summary>
+    private IEnumerable<bool> ResolveBrowserCookiePasses()
+    {
+        yield return false;
+        if (UsesCookiesFromBrowser)
+            yield return true;
     }
 
     private string _ytDlpPath;
@@ -124,12 +137,14 @@ public sealed class YtDlpClient
     /// Adds the same global yt-dlp flags as <see cref="RunAsync"/> (cookies-from-browser, <c>--remote-components ejs:github</c> when enabled, <c>--js-runtimes</c>).
     /// Used by seek-slice and any other secondary yt-dlp process that must match Options → Advanced.
     /// </summary>
-    public void ApplyLaunchPrefixTo(ProcessStartInfo psi)
+    public void ApplyLaunchPrefixTo(ProcessStartInfo psi, bool includeBrowserCookies = true)
     {
         // Avoid self-update checks / stale-version warnings on every invocation (yt-dlp recommends --no-update for apps).
         psi.ArgumentList.Add("--no-update");
 
-        if (_cookiesFromBrowserEnabled && !string.IsNullOrWhiteSpace(_cookiesFromBrowserValue))
+        if (includeBrowserCookies &&
+            _cookiesFromBrowserEnabled &&
+            !string.IsNullOrWhiteSpace(_cookiesFromBrowserValue))
         {
             psi.ArgumentList.Add("--cookies-from-browser");
             psi.ArgumentList.Add(_cookiesFromBrowserValue!);
@@ -664,38 +679,41 @@ public sealed class YtDlpClient
     {
         // -g prints the direct media URL.
         // We try a couple of format strategies because some videos expose no "bestaudio".
-        var strategies = BuildAudioUrlStrategies(videoUrl, _audioQualityFormat).ToArray();
-
         Exception? last = null;
-        var sawAgeGate = false;
-        foreach (var s in strategies)
+        foreach (var useCookies in ResolveBrowserCookiePasses())
         {
-            try
+            var strategies = BuildAudioUrlStrategies(videoUrl, _audioQualityFormat, useCookies).ToArray();
+            var sawAgeGate = false;
+            foreach (var s in strategies)
             {
-                var st = s.isWorkaround ? (sawAgeGate ? "AGE" : "FETCHING") : "FETCHING";
-                status?.Invoke(st, s.detail);
-                var hint = $"resolving stream URL ({s.detail ?? "default"})";
-                var (exitCode, stdout, stderr) = await RunAsync(s.args, cancellationToken, longRunningLogHint: hint);
-                if (exitCode != 0)
-                    ThrowYtDlpFailed(exitCode, stderr);
+                try
+                {
+                    var st = s.isWorkaround ? (sawAgeGate ? "AGE" : "FETCHING") : "FETCHING";
+                    status?.Invoke(st, s.detail);
+                    var hint = $"resolving stream URL ({s.detail ?? "default"})";
+                    var (exitCode, stdout, stderr) = await RunAsync(
+                        s.args, cancellationToken, longRunningLogHint: hint, includeBrowserCookies: useCookies);
+                    if (exitCode != 0)
+                        ThrowYtDlpFailed(exitCode, stderr);
 
-                var url = stdout
-                    .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .FirstOrDefault();
+                    var url = stdout
+                        .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .FirstOrDefault();
 
-                if (string.IsNullOrWhiteSpace(url))
-                    throw new InvalidOperationException("yt-dlp did not return a media URL.");
+                    if (string.IsNullOrWhiteSpace(url))
+                        throw new InvalidOperationException("yt-dlp did not return a media URL.");
 
-                return url;
-            }
-            catch (Exception ex)
-            {
-                last = ex;
-                if (LooksLikeAgeRestricted(ex.Message ?? ""))
-                    sawAgeGate = true;
-                if (ShouldTryNextStrategy(ex))
-                    continue;
-                break;
+                    return url;
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    if (LooksLikeAgeRestricted(ex.Message ?? ""))
+                        sawAgeGate = true;
+                    if (ShouldTryNextStrategy(ex))
+                        continue;
+                    break;
+                }
             }
         }
 
@@ -709,70 +727,73 @@ public sealed class YtDlpClient
     /// </summary>
     public async Task<YoutubeStreamInput> ResolveBestYoutubePlaybackAsync(string videoUrl, CancellationToken cancellationToken, Action<string, string?>? status = null)
     {
-        var strategies = BuildYoutubePlaybackJsonStrategies(videoUrl, _audioQualityFormat).ToArray();
-
         Exception? last = null;
-        var sawAgeGate = false;
-        foreach (var s in strategies)
+        foreach (var useCookies in ResolveBrowserCookiePasses())
         {
-            try
+            var strategies = BuildYoutubePlaybackJsonStrategies(videoUrl, _audioQualityFormat, useCookies).ToArray();
+            var sawAgeGate = false;
+            foreach (var s in strategies)
             {
-                var st = s.isWorkaround ? (sawAgeGate ? "AGE" : "FETCHING") : "FETCHING";
-                status?.Invoke(st, s.detail);
-                var hint = $"resolving playback URL ({s.detail ?? "default"})";
-                var (exitCode, stdout, stderr) = await RunAsync(s.args, cancellationToken, longRunningLogHint: hint);
-                if (exitCode != 0)
-                    ThrowYtDlpFailed(exitCode, stderr);
-
-                // Exit 0 but stderr contains a non-recoverable error (Premium, unavailable, age-restricted).   
-                if (LooksLikeNonRecoverableYtDlpError(stderr))
-                    throw new InvalidOperationException(FormatYtDlpProcessFailure(0, stderr, "yt-dlp resolve failed (status 0 with error)"));
-
-                if (string.IsNullOrWhiteSpace(stdout))
-                    throw new InvalidOperationException("yt-dlp returned empty JSON.");
-
-                var resolved = TryExtractYoutubePlaybackFromDumpInternal(stdout);
-
-                if (resolved is null || string.IsNullOrWhiteSpace(resolved.Url))
-                    throw new InvalidOperationException("No manifest or media URL in yt-dlp JSON.");
-
-                // JSON output contains an "error" field (e.g. Premium) — treat as non-recoverable.
-                if (resolved is null && !string.IsNullOrWhiteSpace(stdout))
+                try
                 {
-                    try
+                    var st = s.isWorkaround ? (sawAgeGate ? "AGE" : "FETCHING") : "FETCHING";
+                    status?.Invoke(st, s.detail);
+                    var hint = $"resolving playback URL ({s.detail ?? "default"})";
+                    var (exitCode, stdout, stderr) = await RunAsync(
+                        s.args, cancellationToken, longRunningLogHint: hint, includeBrowserCookies: useCookies);
+                    if (exitCode != 0)
+                        ThrowYtDlpFailed(exitCode, stderr);
+
+                    // Exit 0 but stderr contains a non-recoverable error (Premium, unavailable, age-restricted).   
+                    if (LooksLikeNonRecoverableYtDlpError(stderr))
+                        throw new InvalidOperationException(FormatYtDlpProcessFailure(0, stderr, "yt-dlp resolve failed (status 0 with error)"));
+
+                    if (string.IsNullOrWhiteSpace(stdout))
+                        throw new InvalidOperationException("yt-dlp returned empty JSON.");
+
+                    var resolved = TryExtractYoutubePlaybackFromDumpInternal(stdout);
+
+                    if (resolved is null || string.IsNullOrWhiteSpace(resolved.Url))
+                        throw new InvalidOperationException("No manifest or media URL in yt-dlp JSON.");
+
+                    // JSON output contains an "error" field (e.g. Premium) — treat as non-recoverable.
+                    if (resolved is null && !string.IsNullOrWhiteSpace(stdout))
                     {
-                        using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
-                        if (doc.RootElement.TryGetProperty("error", out var errEl) && errEl.ValueKind == JsonValueKind.String)
+                        try
                         {
-                            var errorMsg = errEl.GetString() ?? "";
-                            if (!string.IsNullOrWhiteSpace(errorMsg))
-                                throw new InvalidOperationException($"yt-dlp JSON error: {errorMsg}");
+                            using var doc = JsonDocument.Parse(stdout, SafeJson.CreateDocumentOptions());
+                            if (doc.RootElement.TryGetProperty("error", out var errEl) && errEl.ValueKind == JsonValueKind.String)
+                            {
+                                var errorMsg = errEl.GetString() ?? "";
+                                if (!string.IsNullOrWhiteSpace(errorMsg))
+                                    throw new InvalidOperationException($"yt-dlp JSON error: {errorMsg}");
+                            }
                         }
+                        catch (JsonException) { /* not JSON — fall through to generic error */ }
+                        throw new InvalidOperationException("No manifest or media URL in yt-dlp JSON.");
                     }
-                    catch (JsonException) { /* not JSON — fall through to generic error */ }
-                    throw new InvalidOperationException("No manifest or media URL in yt-dlp JSON.");
-                }
 
-                if (resolved is not null)
-                {
-                    var dur = TryReadDurationSecondsFromDumpJson(stdout);
-                    if (dur is > 0)
-                        resolved = resolved with { ResolvedDurationSeconds = dur };
-                    return resolved;
+                    if (resolved is not null)
+                    {
+                        var dur = TryReadDurationSecondsFromDumpJson(stdout);
+                        if (dur is > 0)
+                            resolved = resolved with { ResolvedDurationSeconds = dur };
+                        return resolved;
+                    }
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                last = ex;
-                if (LooksLikeAgeRestricted(ex.Message ?? ""))
-                    sawAgeGate = true;
-                if (ShouldTryNextStrategy(ex))
-                    continue;
-                break;
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    if (LooksLikeAgeRestricted(ex.Message ?? ""))
+                        sawAgeGate = true;
+                    if (ShouldTryNextStrategy(ex))
+                        continue;
+                    break;
+                }
             }
         }
 
@@ -868,7 +889,13 @@ public sealed class YtDlpClient
         // Last resort: scan all audio-capable formats. (Previously we always picked the *highest* abr manifest,
         // which undid Low/Medium — and manifests let FFmpeg pick a high variant.)
         if (root.TryGetProperty("formats", out var formats) && formats.ValueKind == JsonValueKind.Array)
-            return SelectYoutubeAudioFromFormatsArray(formats);
+        {
+            var audioOnly = SelectYoutubeAudioFromFormatsArray(formats);
+            if (audioOnly is not null)
+                return audioOnly;
+            // PO-token / SABR era: only progressive itag 18 (video+audio) may be exposed.
+            return SelectYoutubeMergedProgressiveFromFormatsArray(formats);
+        }
 
         return null;
     }
@@ -953,6 +980,44 @@ public sealed class YtDlpClient
         }
     }
 
+    /// <summary>Progressive muxed formats (e.g. itag 18) when YouTube exposes no audio-only streams.</summary>
+    private YoutubeStreamInput? SelectYoutubeMergedProgressiveFromFormatsArray(JsonElement formats)
+    {
+        YoutubeStreamInput? best = null;
+        var bestScore = double.MinValue;
+        foreach (var fmt in formats.EnumerateArray())
+        {
+            var acodec = GetString(fmt, "acodec");
+            var vcodec = GetString(fmt, "vcodec");
+            var hasAudio = !string.IsNullOrEmpty(acodec) && !string.Equals(acodec, "none", StringComparison.OrdinalIgnoreCase);
+            var hasVideo = !string.IsNullOrEmpty(vcodec) && !string.Equals(vcodec, "none", StringComparison.OrdinalIgnoreCase);
+            if (!hasAudio || !hasVideo)
+                continue;
+
+            if (!TryGetHttpUrl(fmt, "url", out var url) || string.IsNullOrWhiteSpace(url))
+                continue;
+
+            var formatId = GetString(fmt, "format_id");
+            var abr = GetDouble(fmt, "abr");
+            var tbr = GetDouble(fmt, "tbr");
+            var score = 0.0;
+            if (string.Equals(formatId, "18", StringComparison.OrdinalIgnoreCase))
+                score += 1000;
+            if (abr is > 0)
+                score += abr.Value;
+            else if (tbr is > 0)
+                score += tbr.Value;
+
+            if (score < bestScore)
+                continue;
+
+            bestScore = score;
+            best = new YoutubeStreamInput(url.Trim(), TryReadHttpHeaders(fmt));
+        }
+
+        return best;
+    }
+
     private static bool IsVideoOnlyFormat(JsonElement fmt)
     {
         var acodec = GetString(fmt, "acodec");
@@ -990,14 +1055,18 @@ public sealed class YtDlpClient
         };
     }
 
-    private IEnumerable<(string[] args, bool isWorkaround, string? detail)> BuildYoutubePlaybackJsonStrategies(string videoUrl, string qualityFormat)
+    private IEnumerable<(string[] args, bool isWorkaround, string? detail)> BuildYoutubePlaybackJsonStrategies(
+        string videoUrl,
+        string qualityFormat,
+        bool useBrowserCookies)
     {
         // Use plain bestaudio/best — chains like bestaudio/best/ba/best confused yt-dlp and yielded "format not available".
-        foreach (var client in YoutubeStrategyClients())
+        foreach (var client in YoutubeStrategyClients(useBrowserCookies))
         {
             yield return (new[] { "--no-playlist", "--extractor-args", $"youtube:player_client={client}", "-f", qualityFormat, "--dump-single-json", videoUrl }, isWorkaround: false, $"JSON ({client})");
         }
 
+        yield return (new[] { "--no-playlist", "-f", "18/b/w/best", "--dump-single-json", videoUrl }, isWorkaround: true, "JSON (progressive 18/b/w)");
         yield return (new[] { "--no-playlist", "-f", qualityFormat, "--dump-single-json", videoUrl }, isWorkaround: true, "JSON (bestaudio, default client)");
         yield return (new[] { "--no-playlist", "-f", "best", "--dump-single-json", videoUrl }, isWorkaround: true, "JSON (best, default client)");
         yield return (new[] { "--no-playlist", "--dump-single-json", videoUrl }, isWorkaround: true, "JSON (any format, default client)");
@@ -1012,35 +1081,43 @@ public sealed class YtDlpClient
         var template = Path.Combine(cacheDir, $"vp-cache-{safeKey}.%(ext)s");
 
         // Download to a local file (no playlist, no partial file). Retry with built-in age gate workarounds.
-        var strategies = BuildDownloadStrategies(videoUrl, template, maxFilesize, _audioQualityFormat).ToArray();
-
         Exception? last = null;
-        var sawAgeGate = false;
-        foreach (var s in strategies)
+        var downloadSucceeded = false;
+        foreach (var useCookies in ResolveBrowserCookiePasses())
         {
-            try
+            var strategies = BuildDownloadStrategies(videoUrl, template, maxFilesize, _audioQualityFormat, useCookies).ToArray();
+            var sawAgeGate = false;
+            foreach (var s in strategies)
             {
-                var st = s.isWorkaround ? (sawAgeGate ? "AGE" : "FETCHING") : "FETCHING";
-                status?.Invoke(st, s.detail);
-                var hint = $"downloading audio to cache ({s.detail ?? "default"})";
-                var (exitCode, _, stderr) = await RunAsync(s.args, cancellationToken, longRunningLogHint: hint);
-                if (exitCode != 0)
-                    throw new InvalidOperationException(FormatYtDlpProcessFailure(exitCode, stderr, "yt-dlp download failed"));
-                // yt-dlp can exit 0 but still report a non-recoverable error in stderr (e.g. Premium).
-                if (LooksLikeNonRecoverableYtDlpError(stderr))
-                    throw new InvalidOperationException(FormatYtDlpProcessFailure(0, stderr, "yt-dlp download failed (status 0 with error)"));
-                last = null;
-                break;
+                try
+                {
+                    var st = s.isWorkaround ? (sawAgeGate ? "AGE" : "FETCHING") : "FETCHING";
+                    status?.Invoke(st, s.detail);
+                    var hint = $"downloading audio to cache ({s.detail ?? "default"})";
+                    var (exitCode, _, stderr) = await RunAsync(
+                        s.args, cancellationToken, longRunningLogHint: hint, includeBrowserCookies: useCookies);
+                    if (exitCode != 0)
+                        throw new InvalidOperationException(FormatYtDlpProcessFailure(exitCode, stderr, "yt-dlp download failed"));
+                    // yt-dlp can exit 0 but still report a non-recoverable error in stderr (e.g. Premium).
+                    if (LooksLikeNonRecoverableYtDlpError(stderr))
+                        throw new InvalidOperationException(FormatYtDlpProcessFailure(0, stderr, "yt-dlp download failed (status 0 with error)"));
+                    downloadSucceeded = true;
+                    last = null;
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    if (LooksLikeAgeRestricted(ex.Message ?? ""))
+                        sawAgeGate = true;
+                    if (ShouldTryNextStrategy(ex))
+                        continue;
+                    break;
+                }
             }
-            catch (Exception ex)
-            {
-                last = ex;
-                if (LooksLikeAgeRestricted(ex.Message ?? ""))
-                    sawAgeGate = true;
-                if (ShouldTryNextStrategy(ex))
-                    continue;
+
+            if (downloadSucceeded)
                 break;
-            }
         }
 
         if (last is not null)
@@ -1071,7 +1148,8 @@ public sealed class YtDlpClient
         string[] args,
         CancellationToken cancellationToken,
         string? longRunningLogHint = null,
-        bool suppressNonZeroExitLog = false)
+        bool suppressNonZeroExitLog = false,
+        bool includeBrowserCookies = true)
     {
         var psi = new ProcessStartInfo
         {
@@ -1088,7 +1166,7 @@ public sealed class YtDlpClient
             psi.ArgumentList.Add(ffmpegLoc);
         }
 
-        ApplyLaunchPrefixTo(psi);
+        ApplyLaunchPrefixTo(psi, includeBrowserCookies);
 
         foreach (var a in args)
             psi.ArgumentList.Add(a);
@@ -1325,15 +1403,20 @@ public sealed class YtDlpClient
         return false;
     }
 
-    private IEnumerable<(string[] args, bool isWorkaround, string? detail)> BuildAudioUrlStrategies(string videoUrl, string qualityFormat)
+    private IEnumerable<(string[] args, bool isWorkaround, string? detail)> BuildAudioUrlStrategies(
+        string videoUrl,
+        string qualityFormat,
+        bool useBrowserCookies)
     {
         if (IsLikelyYoutubeUrl(videoUrl))
         {
-            foreach (var client in YoutubeStrategyClients())
+            foreach (var client in YoutubeStrategyClients(useBrowserCookies))
             {
                 yield return (new[] { "--extractor-args", $"youtube:player_client={client}", "-f", qualityFormat, "-g", videoUrl }, isWorkaround: false, $"audio URL ({client}, bestaudio)");
                 yield return (new[] { "--extractor-args", $"youtube:player_client={client}", "-f", "140/ba[ext=m4a]/bestaudio/best", "-g", videoUrl }, isWorkaround: false, $"audio URL ({client}, m4a)");
             }
+
+            yield return (new[] { "--extractor-args", $"youtube:player_client=web", "-f", "18/b/w/best", "-g", videoUrl }, isWorkaround: true, "audio URL (progressive 18/b/w)");
         }
 
         // itag 128k m4a (AAC) often behaves better with FFmpeg HTTP seeks than DASH opus/webm.
@@ -1347,16 +1430,23 @@ public sealed class YtDlpClient
         yield return (new[] { "-g", videoUrl }, isWorkaround: true, "resolving audio URL (any)");
     }
 
-    private IEnumerable<(string[] args, bool isWorkaround, string? detail)> BuildDownloadStrategies(string videoUrl, string template, string? maxFilesize = null, string qualityFormat = "bestaudio/best")
+    private IEnumerable<(string[] args, bool isWorkaround, string? detail)> BuildDownloadStrategies(
+        string videoUrl,
+        string template,
+        string? maxFilesize,
+        string qualityFormat,
+        bool useBrowserCookies)
     {
         var sizeArg = string.IsNullOrWhiteSpace(maxFilesize) ? Array.Empty<string>() : new[] { "--max-filesize", maxFilesize };
 
         if (IsLikelyYoutubeUrl(videoUrl))
         {
-            foreach (var client in YoutubeStrategyClients())
+            foreach (var client in YoutubeStrategyClients(useBrowserCookies))
             {
                 yield return (sizeArg.Concat(new[] { "--extractor-args", $"youtube:player_client={client}", "--no-playlist", "--no-part", "-f", qualityFormat, "-o", template, videoUrl }).ToArray(), isWorkaround: false, $"downloading audio ({client})");
             }
+
+            yield return (sizeArg.Concat(new[] { "--extractor-args", "youtube:player_client=web", "--no-playlist", "--no-part", "-f", "18/b/w/best", "-o", template, videoUrl }).ToArray(), isWorkaround: true, "downloading audio (progressive 18/b/w)");
         }
 
         yield return (sizeArg.Concat(new[] { "--no-playlist", "--no-part", "-f", qualityFormat, "-o", template, videoUrl }).ToArray(), isWorkaround: true, "downloading audio");

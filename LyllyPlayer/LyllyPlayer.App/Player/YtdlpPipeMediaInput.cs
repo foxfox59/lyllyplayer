@@ -57,13 +57,15 @@ public sealed class YtdlpPipeMediaInput : MediaInput
 
         var ytdlpExe = string.IsNullOrWhiteSpace(ytDlpPath) ? "yt-dlp" : ytDlpPath;
         var android = new[] { "--extractor-args", "youtube:player_client=android" };
+        var mweb = new[] { "--extractor-args", "youtube:player_client=mweb" };
         var web = new[] { "--extractor-args", "youtube:player_client=web" };
         var webEmbedded = new[] { "--extractor-args", "youtube:player_client=web_embedded" };
         var webSafari = new[] { "--extractor-args", "youtube:player_client=web_safari" };
 
+        // web before web_embedded — embedded client is flaky on n-challenge / EJS in subprocess pipes.
         var attempts = ytDlpUsesCookiesFromBrowser
-            ? new[] { webEmbedded, webSafari, web }
-            : new[] { android, web };
+            ? new[] { web, mweb, webSafari, webEmbedded }
+            : new[] { android, mweb, web };
 
         Exception? last = null;
         var scratch = ArrayPool<byte>.Shared.Rent(65536);
