@@ -99,7 +99,7 @@ Ideas for later — **not** commitments and nothing to depend on for now:
 - Improve window snapping (currently occasionally feels jittery)
 - Improve lyrics quality / matching (best-effort)
 - Linux builds — desktop player on Linux (would require significant changes)
-- Android release — mobile variant (requested feature by testers, would require very significant changes)
+- Android — early sibling app under [`android/`](android/) (playlist open, local/stream/YouTube audio, shuffle + next prefetch). Still evolving; see [`android/README.md`](android/README.md)
 - I18N - currently only in English, add support for multiple languages and make sure themes don't break
 - External visualization support (at least MilkDrop)
 - Custom layouts, even wild shapes like old Media Player

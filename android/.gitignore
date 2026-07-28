@@ -1,0 +1,17 @@
+# Built artifacts
+.gradle/
+build/
+**/build/
+local.properties
+gradle-8.9-bin.zip
+dist/
+.tmp-media3/
+*.iml
+.idea/
+.cxx/
+captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+.DS_Store
