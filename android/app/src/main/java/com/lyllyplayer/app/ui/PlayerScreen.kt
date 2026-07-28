@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -46,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,6 +70,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 @Composable
 fun PlayerScreen(
@@ -277,7 +280,7 @@ fun PlayerScreen(
                 state = listState,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(end = 8.dp),
+                    .padding(end = 14.dp),
                 contentPadding = PaddingValues(bottom = 24.dp),
             ) {
                 itemsIndexed(state.entries, key = { index, e -> "${e.id}#$index" }) { _, entry ->
@@ -293,8 +296,7 @@ fun PlayerScreen(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .fillMaxHeight()
-                    .padding(top = 4.dp, bottom = 8.dp, end = 2.dp)
-                    .width(3.dp),
+                    .width(20.dp),
             )
         }
     }
@@ -325,22 +327,55 @@ private fun PlaylistScrollbar(
     val visibleCount = visible.size.coerceAtLeast(1)
     val thumbFraction = (visibleCount.toFloat() / total.toFloat()).coerceIn(0.12f, 1f)
     val maxIndex = (total - visibleCount).coerceAtLeast(1)
-    val scrollFraction = (visible.first().index.toFloat() / maxIndex.toFloat()).coerceIn(0f, 1f)
+    val first = visible.first()
+    // Include partial-item offset so the thumb can sit flush with the top.
+    val scrollFraction = (
+        (first.index.toFloat() - first.offset.toFloat() / first.size.coerceAtLeast(1).toFloat()) /
+            maxIndex.toFloat()
+        ).coerceIn(0f, 1f)
     val thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
     val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+    val scope = rememberCoroutineScope()
 
-    BoxWithConstraints(modifier = modifier) {
+    fun scrollToFraction(fraction: Float) {
+        val target = (maxIndex * fraction.coerceIn(0f, 1f)).roundToInt().coerceIn(0, total - 1)
+        scope.launch {
+            listState.scrollToItem(target)
+        }
+    }
+
+    BoxWithConstraints(
+        modifier = modifier
+            .pointerInput(total, maxIndex) {
+                detectTapGestures { offset ->
+                    val h = size.height.coerceAtLeast(1)
+                    scrollToFraction(offset.y / h.toFloat())
+                }
+            }
+            .pointerInput(total, maxIndex) {
+                detectVerticalDragGestures { change, _ ->
+                    change.consume()
+                    val h = size.height.coerceAtLeast(1)
+                    scrollToFraction(change.position.y / h.toFloat())
+                }
+            },
+    ) {
+        val trackWidth = 3.dp
         val thumbHeight = maxHeight * thumbFraction
         val thumbOffset = (maxHeight - thumbHeight) * scrollFraction
+        // Slim visual track, full height; wide modifier is the tap/drag hit target.
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(trackWidth)
                 .clip(RoundedCornerShape(50))
                 .background(trackColor),
         )
         Box(
             modifier = Modifier
-                .fillMaxWidth()
+                .align(Alignment.TopEnd)
+                .width(trackWidth)
                 .height(thumbHeight)
                 .offset(y = thumbOffset)
                 .clip(RoundedCornerShape(50))
