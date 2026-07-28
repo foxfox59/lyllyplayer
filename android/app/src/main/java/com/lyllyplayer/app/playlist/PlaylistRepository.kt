@@ -121,6 +121,12 @@ class PlaylistRepository(private val context: Context) {
         }
     }
 
+    fun isSpectrumEnabled(): Boolean = prefs.getBoolean(KEY_SPECTRUM_ENABLED, true)
+
+    fun setSpectrumEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_SPECTRUM_ENABLED, enabled) }
+    }
+
     private fun queryDisplayName(uri: Uri): String? {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { c ->
@@ -140,5 +146,6 @@ class PlaylistRepository(private val context: Context) {
         private const val KEY_SHUFFLE = "shuffle_enabled"
         private const val KEY_REPEAT = "repeat_mode"
         private const val KEY_OPEN_APPEND = "playlist_open_append"
+        private const val KEY_SPECTRUM_ENABLED = "spectrum_enabled"
     }
 }

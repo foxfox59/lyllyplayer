@@ -22,6 +22,8 @@ import com.lyllyplayer.app.playlist.PlaylistOpenMode
 fun OptionsDialog(
     openMode: PlaylistOpenMode,
     onOpenModeChange: (PlaylistOpenMode) -> Unit,
+    spectrumEnabled: Boolean,
+    onSpectrumEnabledChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -49,6 +51,23 @@ fun OptionsDialog(
                     label = "Append",
                     selected = openMode == PlaylistOpenMode.Append,
                     onClick = { onOpenModeChange(PlaylistOpenMode.Append) },
+                )
+
+                Text(
+                    text = "Spectrum visualizer",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
+                )
+                OpenModeRow(
+                    label = "On",
+                    selected = spectrumEnabled,
+                    onClick = { onSpectrumEnabledChange(true) },
+                )
+                OpenModeRow(
+                    label = "Off",
+                    selected = !spectrumEnabled,
+                    onClick = { onSpectrumEnabledChange(false) },
                 )
             }
         },

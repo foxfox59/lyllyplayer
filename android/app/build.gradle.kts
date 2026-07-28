@@ -73,6 +73,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("com.google.guava:guava:33.3.1-android")
 
     // NewPipe Extractor (YouTube audio URL resolve) — keep current; YT breaks old tags

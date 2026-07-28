@@ -19,7 +19,11 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.TeeAudioProcessor
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -69,6 +73,22 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
 
         val exo = ExoPlayer.Builder(this)
+            .setRenderersFactory(
+                object : DefaultRenderersFactory(this) {
+                    override fun buildAudioSink(
+                        context: android.content.Context,
+                        enableFloatOutput: Boolean,
+                        enableAudioTrackPlaybackParams: Boolean,
+                    ): AudioSink {
+                        val tee = TeeAudioProcessor(bridge.spectrumSink)
+                        return DefaultAudioSink.Builder(context)
+                            .setEnableFloatOutput(enableFloatOutput)
+                            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                            .setAudioProcessors(arrayOf(tee))
+                            .build()
+                    }
+                },
+            )
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -79,6 +99,8 @@ class PlaybackService : MediaSessionService() {
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
+
+        bridge.spectrumSink.enabled = bridge.ui.value.spectrumEnabled
 
         exo.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -605,6 +627,16 @@ class PlaybackService : MediaSessionService() {
         // NewPipe: Got error UNPLAYABLE: "This video is not available"
         if (text.contains("UNPLAYABLE", ignoreCase = true)) return true
         if (text.contains("Previously failed YouTube id", ignoreCase = true)) return true
+        // Age-restricted without cookies (desktop LooksLikeAgeRestricted + NewPipe wording).
+        if (
+            text.contains("confirm your age", ignoreCase = true) ||
+            text.contains("age-restricted", ignoreCase = true) ||
+            text.contains("age restricted", ignoreCase = true) ||
+            text.contains("age verification", ignoreCase = true) ||
+            text.contains("cannot be watched anonymously", ignoreCase = true)
+        ) {
+            return true
+        }
         // Keep in sync with desktop PlaybackEngine.LooksLikeUnavailable (avoid "format not available").
         return text.contains("Video unavailable", ignoreCase = true) ||
             text.contains("This video is not available", ignoreCase = true) ||

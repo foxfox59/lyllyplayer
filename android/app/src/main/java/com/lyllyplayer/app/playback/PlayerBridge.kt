@@ -7,6 +7,8 @@ import com.lyllyplayer.app.playlist.PlaylistRepository
 import com.lyllyplayer.app.playorder.NextTrackResolver
 import com.lyllyplayer.app.playorder.PlayOrderService
 import com.lyllyplayer.app.playorder.RepeatMode
+import com.lyllyplayer.app.visualizer.AudioAnalyzer
+import com.lyllyplayer.app.visualizer.SpectrumPcmSink
 import com.lyllyplayer.app.youtube.YoutubeStreamResolver
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,8 +30,12 @@ class PlayerBridge(
     val playOrder = PlayOrderService()
     val resolver = NextTrackResolver(playOrder)
     val youtube = YoutubeStreamResolver()
+    val audioAnalyzer = AudioAnalyzer()
+    val spectrumSink = SpectrumPcmSink(audioAnalyzer)
 
-    private val _ui = MutableStateFlow(PlayerUiState())
+    private val _ui = MutableStateFlow(
+        PlayerUiState(spectrumEnabled = repository.isSpectrumEnabled()),
+    )
     val ui: StateFlow<PlayerUiState> = _ui.asStateFlow()
 
     var entries: List<PlaylistEntry>
@@ -101,7 +107,8 @@ class PlayerBridge(
         val p = player ?: return
         // After stop/clearMediaItems the player reports 0 — don't wipe a saved seek.
         if (p.mediaItemCount == 0 || p.playbackState == Player.STATE_IDLE) {
-            _ui.update { it.copy(isPlaying = false) }
+            val cur = _ui.value
+            if (cur.isPlaying) _ui.update { it.copy(isPlaying = false) }
             return
         }
         val rawDuration = p.duration
@@ -121,15 +128,25 @@ class PlayerBridge(
             } else {
                 reported
             }
+        val playing = p.isPlaying
+        val cur = _ui.value
+        // Skip Flow emission when nothing meaningful changed (keeps Compose idle).
+        if (
+            cur.positionMs == positionMs &&
+            cur.durationMs == durationMs &&
+            cur.isPlaying == playing
+        ) {
+            return
+        }
         _ui.update {
             it.copy(
                 positionMs = positionMs,
                 durationMs = durationMs,
-                isPlaying = p.isPlaying,
+                isPlaying = playing,
             )
         }
         // Throttled autosave while playing.
-        if (p.isPlaying) persistSession(force = false)
+        if (playing) persistSession(force = false)
     }
 
     /**
@@ -378,6 +395,13 @@ class PlayerBridge(
         }
     }
 
+    fun setSpectrumEnabled(enabled: Boolean) {
+        repository.setSpectrumEnabled(enabled)
+        spectrumSink.enabled = enabled
+        if (!enabled) audioAnalyzer.reset()
+        _ui.update { it.copy(spectrumEnabled = enabled) }
+    }
+
     fun findEntryById(id: String?): PlaylistEntry? {
         if (id.isNullOrBlank()) return null
         return entries.firstOrNull { it.id.equals(id, ignoreCase = true) }
@@ -393,5 +417,6 @@ data class PlayerUiState(
     val durationMs: Long = 0L,
     val shuffle: Boolean = false,
     val repeat: RepeatMode = RepeatMode.Off,
+    val spectrumEnabled: Boolean = true,
     val error: String? = null,
 )
