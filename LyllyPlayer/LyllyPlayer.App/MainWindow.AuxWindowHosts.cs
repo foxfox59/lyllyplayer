@@ -393,14 +393,13 @@ public partial class MainWindow
 
         try
         {
+            // Restore sort UI only. Do not re-apply sort here — that would mutate catalog order on every
+            // restart (and overwrite last-playlist.json), permanently losing import/load order.
             var sortModeRaw = (latestSettings.PlaylistWindowSortMode ?? "None").Trim();
             var sortDirRaw = (latestSettings.PlaylistWindowSortDirection ?? "Asc").Trim();
             _ = Enum.TryParse<PlaylistSortMode>(sortModeRaw, ignoreCase: true, out var sm);
             _ = Enum.TryParse<PlaylistSortDirection>(sortDirRaw, ignoreCase: true, out var sd);
-            var spec = new PlaylistSortSpec(sm, sd);
-            w.SetSortSpec(spec);
-            if (spec.Mode != PlaylistSortMode.None && _playlistCore.Entries.Count > 1)
-                _ = ApplyPlaylistSortAsync(spec, CancellationToken.None);
+            w.SetSortSpec(new PlaylistSortSpec(sm, sd));
         }
         catch { /* ignore */ }
 
@@ -426,6 +425,12 @@ public partial class MainWindow
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
             if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
             WindowCoordinator.CaptureWindowBounds(w, out _lastPlaylistBounds, out _lastPlaylistWindowState);
+            if (IsDisplayTopologySettling)
+            {
+                // Topology/DPI churn can temporarily separate snapped windows; re-dock instead of clearing snap.
+                try { SyncPlaylistWindowToMain(); } catch { /* ignore */ }
+                return;
+            }
             try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             // Legacy "dock to main" snapping fights the new snap service.
             // Let WM_MOVING-based snapping control interactive positioning.
@@ -436,6 +441,11 @@ public partial class MainWindow
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
             if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
             WindowCoordinator.CaptureWindowBounds(w, out _lastPlaylistBounds, out _lastPlaylistWindowState);
+            if (IsDisplayTopologySettling)
+            {
+                try { SyncPlaylistWindowToMain(); } catch { /* ignore */ }
+                return;
+            }
             try { UpdatePlaylistSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
             RequestPersistSnapshot();
@@ -1134,6 +1144,11 @@ public partial class MainWindow
         if (_syncingWindowMove || _restoringAuxFromMinimize) return;
         if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
         WindowCoordinator.CaptureWindowBounds(w, out _lastOptionsBounds, out _lastOptionsWindowState);
+        if (IsDisplayTopologySettling)
+        {
+            try { SyncOptionsWindowToMain(); } catch { /* ignore */ }
+            return;
+        }
         try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
         // Legacy "dock to main" snapping fights the new snap service.
         RequestPersistSnapshot();
@@ -1143,6 +1158,11 @@ public partial class MainWindow
         if (_syncingWindowMove || _restoringAuxFromMinimize) return;
         if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
         WindowCoordinator.CaptureWindowBounds(w, out _lastOptionsBounds, out _lastOptionsWindowState);
+        if (IsDisplayTopologySettling)
+        {
+            try { SyncOptionsWindowToMain(); } catch { /* ignore */ }
+            return;
+        }
         try { UpdateOptionsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
         // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
         RequestPersistSnapshot();
@@ -1242,6 +1262,11 @@ public partial class MainWindow
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
             if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
             WindowCoordinator.CaptureWindowBounds(w, out var lastLyricsBounds, out var lastLyricsState);
+            if (IsDisplayTopologySettling)
+            {
+                try { SyncLyricsWindowToMain(); } catch { /* ignore */ }
+                return;
+            }
             try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             // Legacy "dock to main" snapping fights the new snap service.
             RequestPersistSnapshot();
@@ -1251,6 +1276,11 @@ public partial class MainWindow
             if (_syncingWindowMove || _restoringAuxFromMinimize) return;
             if (WindowSnapService.ShouldDeferAuxLayoutSideEffects) return;
             WindowCoordinator.CaptureWindowBounds(w, out var lastLyricsBounds, out var lastLyricsState);
+            if (IsDisplayTopologySettling)
+            {
+                try { SyncLyricsWindowToMain(); } catch { /* ignore */ }
+                return;
+            }
             try { UpdateLyricsSnapStateFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
             // Do not enforce legacy snapping on resize; WM_MOVING snapping is interactive-only.
             RequestPersistSnapshot();

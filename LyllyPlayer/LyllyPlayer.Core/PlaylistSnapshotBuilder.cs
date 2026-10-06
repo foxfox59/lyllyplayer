@@ -9,14 +9,23 @@ namespace LyllyPlayer.Services;
 public static class PlaylistSnapshotBuilder
 {
     public static SavedPlaylist FromEntries(string name, string sourceType, string source, IReadOnlyList<PlaylistEntry> entries) =>
-        FromEntries(name, sourceType, source, entries, originInfoByVideoId: null);
+        FromEntries(name, sourceType, source, entries, originInfoByVideoId: null, baseOrderVideoIds: null);
 
     public static SavedPlaylist FromEntries(
         string name,
         string sourceType,
         string source,
         IReadOnlyList<PlaylistEntry> entries,
-        IReadOnlyDictionary<string, SavedPlaylistOrigin>? originInfoByVideoId)
+        IReadOnlyDictionary<string, SavedPlaylistOrigin>? originInfoByVideoId) =>
+        FromEntries(name, sourceType, source, entries, originInfoByVideoId, baseOrderVideoIds: null);
+
+    public static SavedPlaylist FromEntries(
+        string name,
+        string sourceType,
+        string source,
+        IReadOnlyList<PlaylistEntry> entries,
+        IReadOnlyDictionary<string, SavedPlaylistOrigin>? originInfoByVideoId,
+        IReadOnlyList<string>? baseOrderVideoIds)
     {
         name = string.IsNullOrWhiteSpace(name) ? "Playlist" : name.Trim();
         source = string.IsNullOrWhiteSpace(source) ? "" : source.Trim();
@@ -65,6 +74,36 @@ public static class PlaylistSnapshotBuilder
             originInfos = null;
         }
 
+        IReadOnlyList<string>? baseIds = null;
+        try
+        {
+            if (baseOrderVideoIds is not null && baseOrderVideoIds.Count > 0)
+            {
+                var present = new HashSet<string>(list.Select(e => e.VideoId), StringComparer.OrdinalIgnoreCase);
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var ids = new List<string>(baseOrderVideoIds.Count);
+                foreach (var id0 in baseOrderVideoIds)
+                {
+                    if (string.IsNullOrWhiteSpace(id0) || !present.Contains(id0) || !seen.Add(id0))
+                        continue;
+                    ids.Add(id0);
+                }
+                foreach (var e in list)
+                {
+                    if (!seen.Add(e.VideoId))
+                        continue;
+                    ids.Add(e.VideoId);
+                }
+                // Only persist when it differs from current Entries order, or always when provided —
+                // always persist so None can restore after a sorted Entries list is saved.
+                baseIds = ids.Count > 0 ? ids : null;
+            }
+        }
+        catch
+        {
+            baseIds = null;
+        }
+
         return new SavedPlaylist(
             Id: id,
             Name: name ?? "Playlist",
@@ -73,7 +112,8 @@ public static class PlaylistSnapshotBuilder
             Source: source ?? "",
             Entries: list,
             OriginByVideoId: null,
-            OriginInfoByVideoId: originInfos
+            OriginInfoByVideoId: originInfos,
+            BaseOrderVideoIds: baseIds
         );
     }
 

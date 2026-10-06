@@ -21,7 +21,12 @@ public sealed record SavedPlaylist(
     /// Optional per-item origin info (label + source ID/URL/path). Keyed by VideoId.
     /// Missing keys imply (<see cref="Name"/>, <see cref="Source"/>).
     /// </summary>
-    IReadOnlyDictionary<string, SavedPlaylistOrigin>? OriginInfoByVideoId = null
+    IReadOnlyDictionary<string, SavedPlaylistOrigin>? OriginInfoByVideoId = null,
+    /// <summary>
+    /// Stable import/load order (VideoIds). When present, UI sort can return to this via Sort mode None.
+    /// Legacy snapshots omit this; callers should treat <see cref="Entries"/> order as the base.
+    /// </summary>
+    IReadOnlyList<string>? BaseOrderVideoIds = null
 );
 
 public sealed record SavedPlaylistEntry(

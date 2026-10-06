@@ -277,7 +277,12 @@ public partial class MainWindow : Window
                 _playlistSourceText = path;
                 _playlistWindow?.SetSourceText(path);
 
-                await LoadPlaylistFromEntriesAsync(entries, title: title, sourceKey: path, isStartupAutoLoad: false).ConfigureAwait(true);
+                await LoadPlaylistFromEntriesAsync(
+                    entries,
+                    title: title,
+                    sourceKey: path,
+                    isStartupAutoLoad: false,
+                    baseOrderVideoIds: pl.BaseOrderVideoIds).ConfigureAwait(true);
                 ApplySavedPlaylistOriginsIfAny(pl, entries);
                 UpdateRefreshEnabled();
                 UpdatePlaylistTitleDisplayForNowPlaying();
@@ -866,6 +871,11 @@ public partial class MainWindow : Window
 
     private DispatcherTimer? _snapRestoreDebounceTimer;
     private DispatcherTimer? _auxSnapSyncDebounceTimer;
+    private string? _pendingPlaylistSortModePersist;
+    private string? _pendingPlaylistSortDirectionPersist;
+    private DateTime _displayTopologySettlingUntilUtc;
+    private DispatcherTimer? _displayTopologySettleTimer;
+    private EventHandler? _displaySettingsChangedHandler;
     private int _auxSnapSyncRequestId;
     private int _auxSnapSyncFrameQueued;
 
@@ -1552,6 +1562,7 @@ public partial class MainWindow : Window
             SyncAuxWindowsMinimizeStateWithMain();
             OnMainWindowMovedOrSized();
         };
+        try { AttachDisplayTopologyChangeHandling(); } catch { /* ignore */ }
         Activated += (_, _) =>
         {
             ApplyMainWindowShellIntegration();
@@ -1677,6 +1688,7 @@ public partial class MainWindow : Window
             try { if (_playlistWindow is not null) _playlistWindow.Topmost = false; } catch { /* ignore */ }
             try { if (_optionsWindow is not null) _optionsWindow.Topmost = false; } catch { /* ignore */ }
             DetachMainWindowShellStyleHook();
+            try { DetachDisplayTopologyChangeHandling(); } catch { /* ignore */ }
             _isShuttingDown = true;
             try { EnsurePlaybackShutdownBestEffort(); } catch { /* ignore */ }
             try { _persistTimer.Stop(); } catch { /* ignore */ }
@@ -5404,6 +5416,8 @@ public partial class MainWindow : Window
             try { SetPlaylistTitle(plName ?? src); } catch { /* ignore */ }
             try { SetStatusMessage("INFO", $"Imported playlist: {(string.IsNullOrWhiteSpace(plName) ? src : $"\"{plName}\"")} ({imported.Count} items)."); } catch { /* ignore */ }
             RebuildPerItemPlaylistOriginsForCurrentPlaylist(plName ?? src, src);
+            // Fresh import: clear leftover sort mode so restart does not re-sort away from yt-dlp order.
+            try { ResetPlaylistSortUiToNone(); } catch { /* ignore */ }
         }
         else
         {
@@ -5584,11 +5598,27 @@ public partial class MainWindow : Window
         cancellationToken.ThrowIfCancellationRequested();
 
         var mode = spec.Mode;
-        if (mode == PlaylistSortMode.None || _playlistCore.Entries.Count <= 1)
+        if (_playlistCore.Entries.Count <= 1)
             return Task.CompletedTask;
 
-        var isYoutubePlaylist = IsYoutubeLikeSource(_lastPlaylistSourceType);
         var curId = _engine.GetCurrent()?.VideoId;
+
+        if (mode == PlaylistSortMode.None)
+        {
+            if (!_playlistCore.TryRestoreBaseOrder())
+                return Task.CompletedTask;
+
+            var restoreStart = FindIndexByVideoId(_playlistCore.Entries, curId);
+            _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : (restoreStart >= 0 ? restoreStart : 0), raiseNowPlayingChanged: false);
+            var restoreDisplay = GetOriginalIndexByVideoId(curId) ?? 0;
+            // Force a full UI rebuild — same Entries list instance is mutated in place.
+            SyncPlaylistUiFromCoreEntries(_playlistCore.Entries.Count == 0 ? -1 : restoreDisplay);
+            MarkLastPlaylistSnapshotDirty();
+            RequestPersistSnapshot();
+            return Task.CompletedTask;
+        }
+
+        var isYoutubePlaylist = IsYoutubeLikeSource(_lastPlaylistSourceType);
 
         string LocalPathOrUrl(PlaylistEntry e)
         {
@@ -5885,7 +5915,8 @@ public partial class MainWindow : Window
 
         var sorted = ordered.ToList();
 
-        _playlistCore.ReplaceEntries(sorted);
+        // Sort only reorders the catalog; keep import/load base order so None can restore it.
+        _playlistCore.ReorderEntries(sorted);
         //_currentEntries = BuildEffectivePlayOrder(_engine.GetCurrent(), _shuffleEnabled).ToList();
         var startIndex = FindIndexByVideoId(_playlistCore.Entries, curId);
         _engine.SetQueue(_playlistCore.Entries, startIndex: _playlistCore.Entries.Count == 0 ? -1 : (startIndex >= 0 ? startIndex : 0), raiseNowPlayingChanged: false);
@@ -6090,6 +6121,51 @@ public partial class MainWindow : Window
         if (winW <= 1 || winH <= 1)
             return (left, top);
 
+        // Prefer keeping exact snap adjacency when the flush position is already sufficiently visible.
+        // Clamping away from the snapped edge is what creates the visible gap after monitor/topology changes.
+        try
+        {
+            Rect? preferredWork = null;
+            try
+            {
+                var mc = new System.Windows.Point(main.Left + main.Width / 2.0, main.Top + main.Height / 2.0);
+                preferredWork = works.FirstOrDefault(w => w.Contains(mc));
+                if (preferredWork is null || preferredWork.Value.IsEmpty)
+                {
+                    preferredWork = works
+                        .OrderByDescending(w =>
+                        {
+                            var i = Rect.Intersect(w, main);
+                            return i.IsEmpty ? 0 : Math.Max(0, i.Width) * Math.Max(0, i.Height);
+                        })
+                        .FirstOrDefault();
+                }
+            }
+            catch { preferredWork = null; }
+
+            if (preferredWork is Rect pw && pw.Width > 1 && pw.Height > 1)
+            {
+                var flush = new Rect(left, top, winW, winH);
+                var inter = Rect.Intersect(flush, pw);
+                if (!inter.IsEmpty &&
+                    inter.Width >= Math.Min(winW, minVisible) &&
+                    inter.Height >= Math.Min(winH, minVisible))
+                {
+                    var stillAdjacent = snap switch
+                    {
+                        SnapSide.Right => Math.Abs(left - (main.Right + SnapGapPx)) <= 1.0,
+                        SnapSide.Left => Math.Abs(left - (main.Left - winW - SnapGapPx)) <= 1.0,
+                        SnapSide.Bottom => Math.Abs(top - (main.Bottom + SnapGapPx)) <= 1.0,
+                        SnapSide.Top => Math.Abs(top - (main.Top - winH - SnapGapPx)) <= 1.0,
+                        _ => true
+                    };
+                    if (stillAdjacent)
+                        return (left, top);
+                }
+            }
+        }
+        catch { /* fall through to normal clamp */ }
+
         // Candidate placements. Prefer the snapped intent; if it would overlap main due to lack of space,
         // try the opposite side (still adjacent), then above/below within the work area.
         var gap = SnapGapPx;
@@ -6179,9 +6255,9 @@ public partial class MainWindow : Window
         }
         catch { preferred = null; }
 
-        if (preferred is Rect pw && works.Count > 1)
+        if (preferred is Rect pw2 && works.Count > 1)
         {
-            var bestPreferred = Evaluate(new[] { pw });
+            var bestPreferred = Evaluate(new[] { pw2 });
             if (bestPreferred.visible > 0)
                 return (bestPreferred.l, bestPreferred.t);
         }
@@ -6308,6 +6384,83 @@ public partial class MainWindow : Window
         }
 
         // If not snapped, do nothing. Snapping is only initiated by moving the secondary window near the main window.
+    }
+
+    private bool IsDisplayTopologySettling
+        => DateTime.UtcNow < _displayTopologySettlingUntilUtc;
+
+    private void AttachDisplayTopologyChangeHandling()
+    {
+        if (_displaySettingsChangedHandler is not null)
+            return;
+
+        _displaySettingsChangedHandler = (_, _) =>
+        {
+            try
+            {
+                // SystemEvents callbacks are not on the UI thread.
+                Dispatcher.BeginInvoke(new Action(OnDisplayTopologyChangedBestEffort), DispatcherPriority.Send);
+            }
+            catch { /* ignore */ }
+        };
+        SystemEvents.DisplaySettingsChanged += _displaySettingsChangedHandler;
+    }
+
+    private void DetachDisplayTopologyChangeHandling()
+    {
+        try { _displayTopologySettleTimer?.Stop(); } catch { /* ignore */ }
+        _displayTopologySettleTimer = null;
+        if (_displaySettingsChangedHandler is null)
+            return;
+        try { SystemEvents.DisplaySettingsChanged -= _displaySettingsChangedHandler; } catch { /* ignore */ }
+        _displaySettingsChangedHandler = null;
+    }
+
+    private void OnDisplayTopologyChangedBestEffort()
+    {
+        if (_isShuttingDown)
+            return;
+
+        // Keep snap flags alive while Windows/WPF reshuffle window positions after resolution/topology changes.
+        _displayTopologySettlingUntilUtc = DateTime.UtcNow.AddMilliseconds(900);
+
+        try { _displayTopologySettleTimer?.Stop(); } catch { /* ignore */ }
+        _displayTopologySettleTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(250),
+        };
+        var passes = 0;
+        _displayTopologySettleTimer.Tick += (_, _) =>
+        {
+            passes++;
+            try { RedockSnappedAuxWindowsAfterDisplayChangeBestEffort(); } catch { /* ignore */ }
+            if (passes >= 3 || !IsDisplayTopologySettling)
+            {
+                try { _displayTopologySettleTimer?.Stop(); } catch { /* ignore */ }
+                _displayTopologySettleTimer = null;
+                // Extend slightly so late LocationChanged events still prefer re-dock over unsnap.
+                _displayTopologySettlingUntilUtc = DateTime.UtcNow.AddMilliseconds(400);
+            }
+        };
+        _displayTopologySettleTimer.Start();
+
+        try { RedockSnappedAuxWindowsAfterDisplayChangeBestEffort(); } catch { /* ignore */ }
+    }
+
+    private void RedockSnappedAuxWindowsAfterDisplayChangeBestEffort()
+    {
+        try
+        {
+            if (WindowSnapService.AnyWindowDragging)
+                return;
+        }
+        catch { /* ignore */ }
+
+        try { SyncPlaylistWindowToMain(); } catch { /* ignore */ }
+        try { SyncOptionsWindowToMain(); } catch { /* ignore */ }
+        try { SyncLyricsWindowToMain(); } catch { /* ignore */ }
+        try { WindowCoordinator.RestoreLatchRelationsFromCurrentPositionsBestEffort(); } catch { /* ignore */ }
+        try { WindowSnapService.SettleLatchedRelationsBestEffort(); } catch { /* ignore */ }
     }
 
     private void QueueAuxSnapSyncAfterLayout()
@@ -7192,6 +7345,10 @@ public partial class MainWindow : Window
                 return;
             }
 
+            // During display topology/DPI churn, adjacency can briefly fail; keep snap so Sync* can re-dock.
+            if (IsDisplayTopologySettling && _playlistSnapped && _playlistSnapEdge != PlaylistSnapEdge.None)
+                return;
+
             _playlistSnapped = false;
             _playlistSnapEdge = PlaylistSnapEdge.None;
         }
@@ -7221,6 +7378,9 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (IsDisplayTopologySettling && _lyricsSnapped && _lyricsSnapEdge != LyricsSnapEdge.None)
+                return;
+
             _lyricsSnapped = false;
             _lyricsSnapEdge = LyricsSnapEdge.None;
         }
@@ -7249,6 +7409,9 @@ public partial class MainWindow : Window
                 _optionsDockYOffset = r.DockYOffset;
                 return;
             }
+
+            if (IsDisplayTopologySettling && _optionsSnapped && _optionsSnapEdge != OptionsSnapEdge.None)
+                return;
 
             _optionsSnapped = false;
             _optionsSnapEdge = OptionsSnapEdge.None;
@@ -7628,7 +7791,14 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task LoadPlaylistFromEntriesAsync(IReadOnlyList<PlaylistEntry> entries, string? title, string sourceKey, bool isStartupAutoLoad, CancellationToken cancellationToken = default, bool deferNowPlayingChanged = false)
+    private async Task LoadPlaylistFromEntriesAsync(
+        IReadOnlyList<PlaylistEntry> entries,
+        string? title,
+        string sourceKey,
+        bool isStartupAutoLoad,
+        CancellationToken cancellationToken = default,
+        bool deferNowPlayingChanged = false,
+        IReadOnlyList<string>? baseOrderVideoIds = null)
     {
         try
         {
@@ -7667,6 +7837,16 @@ public partial class MainWindow : Window
             }
 
             _playlistCore.ReplaceEntries(list);
+            if (baseOrderVideoIds is { Count: > 0 })
+            {
+                try { _playlistCore.SetBaseOrderVideoIds(baseOrderVideoIds); } catch { /* ignore */ }
+            }
+
+            // New replace-load: keep catalog in source order and clear leftover sort mode.
+            if (!isStartupAutoLoad)
+            {
+                try { ResetPlaylistSortUiToNone(); } catch { /* ignore */ }
+            }
 
             // Populate shuffle buffer so the first "Next" click has tracks ready
             if (_shuffleEnabled)
@@ -7997,7 +8177,8 @@ public partial class MainWindow : Window
             title: snap.Name,
             sourceKey: string.IsNullOrWhiteSpace(_playlistSourceText) ? "snapshot" : _playlistSourceText,
             isStartupAutoLoad: true,
-            deferNowPlayingChanged: true
+            deferNowPlayingChanged: true,
+            baseOrderVideoIds: snap.BaseOrderVideoIds
             );
 
             // Apply per-item origins — same path as "Load playlist" in EnsurePlaylistWindowOpen
@@ -10516,6 +10697,29 @@ public partial class MainWindow : Window
             _playlistIsCompound = distinct.Count > 1;
         }
         catch { /* ignore */ }
+    }
+
+    private void ApplySavedPlaylistBaseOrderIfAny(SavedPlaylist? pl)
+    {
+        try
+        {
+            if (pl?.BaseOrderVideoIds is { Count: > 0 })
+                _playlistCore.SetBaseOrderVideoIds(pl.BaseOrderVideoIds);
+        }
+        catch { /* ignore */ }
+    }
+
+    private void ResetPlaylistSortUiToNone()
+    {
+        try
+        {
+            _playlistWindow?.SetSortSpec(new PlaylistSortSpec(PlaylistSortMode.None, PlaylistSortDirection.Asc));
+        }
+        catch { /* ignore */ }
+
+        _pendingPlaylistSortModePersist = "None";
+        _pendingPlaylistSortDirectionPersist = "Asc";
+        try { RequestPersistSnapshot(); } catch { /* ignore */ }
     }
 
     private static ScrollViewer? FindListBoxScrollViewer(System.Windows.Controls.ListBox listBox)

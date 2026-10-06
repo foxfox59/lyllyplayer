@@ -196,8 +196,10 @@ public partial class MainWindow
             PlaylistWindowFilter: _playlistWindow is not null && _playlistWindow.IsVisible
                 ? NormalizePersistedPlaylistFilter(_playlistWindow.GetPlaylistFilterText())
                 : cur.PlaylistWindowFilter,
-            PlaylistWindowSortMode: _playlistWindow is not null && _playlistWindow.IsVisible ? _playlistWindow.GetSortSpec().Mode.ToString() : cur.PlaylistWindowSortMode,
-            PlaylistWindowSortDirection: _playlistWindow is not null && _playlistWindow.IsVisible ? _playlistWindow.GetSortSpec().Direction.ToString() : cur.PlaylistWindowSortDirection,
+            PlaylistWindowSortMode: _pendingPlaylistSortModePersist
+                ?? (_playlistWindow is not null && _playlistWindow.IsVisible ? _playlistWindow.GetSortSpec().Mode.ToString() : cur.PlaylistWindowSortMode),
+            PlaylistWindowSortDirection: _pendingPlaylistSortDirectionPersist
+                ?? (_playlistWindow is not null && _playlistWindow.IsVisible ? _playlistWindow.GetSortSpec().Direction.ToString() : cur.PlaylistWindowSortDirection),
             OptionsWindowLeft: optionsSnappedNow ? null : (FiniteOrNull(saveOBounds.Left) ?? cur.OptionsWindowLeft),
             OptionsWindowTop: optionsSnappedNow ? null : (FiniteOrNull(saveOBounds.Top) ?? cur.OptionsWindowTop),
             OptionsWindowWidth: FiniteOrNull(saveOBounds.Width) ?? cur.OptionsWindowWidth,
@@ -279,6 +281,9 @@ public partial class MainWindow
             Mp3ExportReplacePlaylistEntryAfterExport: _mp3ExportReplacePlaylistEntryAfterExport,
             LastSavedByAppVersion: AppVersion.Current
         ));
+
+        _pendingPlaylistSortModePersist = null;
+        _pendingPlaylistSortDirectionPersist = null;
     }
 
     private void RequestPersistSnapshot()
