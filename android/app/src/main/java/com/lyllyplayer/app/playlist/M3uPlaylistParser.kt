@@ -12,9 +12,16 @@ import java.util.Locale
  * Relative paths resolve against the playlist's parent DocumentFile when available.
  */
 object M3uPlaylistParser {
-    private val supportedAudioExt = setOf(
+    val supportedAudioExt: Set<String> = setOf(
         ".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif", ".aifc",
     )
+
+    fun isSupportedAudioFileName(name: String): Boolean {
+        val lower = name.lowercase(Locale.ROOT)
+        val dot = lower.lastIndexOf('.')
+        if (dot < 0) return false
+        return lower.substring(dot) in supportedAudioExt
+    }
 
     fun parse(
         context: Context,
@@ -106,10 +113,6 @@ object M3uPlaylistParser {
 
         val name = trimmed.substringAfterLast('/').substringAfterLast('\\')
         if (name.isBlank()) return null
-        val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-        if (ext.isNotEmpty() && ".${ext}" !in supportedAudioExt && !supportedAudioExt.contains(ext)) {
-            // still allow; extension filter is soft for relative names
-        }
 
         val child = parent?.findFile(name) ?: return null
         return child.uri.toString()

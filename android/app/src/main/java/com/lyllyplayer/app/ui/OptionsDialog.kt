@@ -22,6 +22,8 @@ import com.lyllyplayer.app.playlist.PlaylistOpenMode
 fun OptionsDialog(
     openMode: PlaylistOpenMode,
     onOpenModeChange: (PlaylistOpenMode) -> Unit,
+    includeSubfolders: Boolean,
+    onIncludeSubfoldersChange: (Boolean) -> Unit,
     spectrumEnabled: Boolean,
     onSpectrumEnabledChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
@@ -51,6 +53,23 @@ fun OptionsDialog(
                     label = "Append",
                     selected = openMode == PlaylistOpenMode.Append,
                     onClick = { onOpenModeChange(PlaylistOpenMode.Append) },
+                )
+
+                Text(
+                    text = "Local folder import",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
+                )
+                OpenModeRow(
+                    label = "Include subfolders",
+                    selected = includeSubfolders,
+                    onClick = { onIncludeSubfoldersChange(true) },
+                )
+                OpenModeRow(
+                    label = "Top folder only",
+                    selected = !includeSubfolders,
+                    onClick = { onIncludeSubfoldersChange(false) },
                 )
 
                 Text(

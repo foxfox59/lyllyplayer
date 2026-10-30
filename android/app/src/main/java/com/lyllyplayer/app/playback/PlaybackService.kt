@@ -56,9 +56,13 @@ class PlaybackService : MediaSessionService() {
     private var warmJob: Job? = null
     private var playJob: Job? = null
     private var foregroundStarted: Boolean = false
+    private var audioFocus: PlaybackAudioFocus? = null
 
     /** Ignore ENDED while we are swapping media / preparing a new track. */
     @Volatile private var suppressEnded: Boolean = false
+
+    /** True while a playEntry job is resolving/preparing the next item. */
+    @Volatile private var trackChangeInFlight: Boolean = false
 
     /** One automatic re-resolve after a mid-stream YouTube failure. */
     private var youtubeRetryId: String? = null
@@ -89,22 +93,25 @@ class PlaybackService : MediaSessionService() {
                     }
                 },
             )
+            // handleAudioFocus=false: we duck on notification/transient loss instead of pausing.
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
                     .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                     .build(),
-                true,
+                /* handleAudioFocus = */ false,
             )
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
 
+        audioFocus = PlaybackAudioFocus(this) { player }
+
         bridge.spectrumSink.enabled = bridge.ui.value.spectrumEnabled
 
         exo.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED && !suppressEnded) {
+                if (playbackState == Player.STATE_ENDED && !suppressEnded && !trackChangeInFlight) {
                     handleUnexpectedOrNaturalEnd()
                 }
                 refreshNotification()
@@ -207,8 +214,22 @@ class PlaybackService : MediaSessionService() {
         return result
     }
 
-    /** Notification swipe / Media3 dismiss — stop audio and end the service. */
+    /**
+     * Media3 calls this when it thinks the session is idle / notification dismissed.
+     * During track changes we are briefly not "playing" while resolving the next URL —
+     * ignore those so long sessions don't die mid-skip.
+     */
     override fun pauseAllPlayersAndStopSelf() {
+        if (trackChangeInFlight || playJob?.isActive == true) {
+            Log.i(TAG, "Ignoring pauseAllPlayersAndStopSelf during track change")
+            return
+        }
+        val p = player
+        if (p != null && (p.playWhenReady || p.isPlaying)) {
+            Log.i(TAG, "Ignoring pauseAllPlayersAndStopSelf — playback still wanted")
+            refreshNotification(forceForeground = true)
+            return
+        }
         shutdownPlayback("pauseAllPlayersAndStopSelf")
     }
 
@@ -226,6 +247,9 @@ class PlaybackService : MediaSessionService() {
         }
         warmJob?.cancel()
         playJob?.cancel()
+        trackChangeInFlight = false
+        try { audioFocus?.abandon() } catch (_: Throwable) { /* ignore */ }
+        audioFocus = null
         bridge.clearPlaybackHandlers()
         bridge.detachPlayer()
         clearNotification()
@@ -246,11 +270,13 @@ class PlaybackService : MediaSessionService() {
     private fun shutdownPlayback(reason: String) {
         Log.i(TAG, "Shutdown playback ($reason)")
         playbackShuttingDown = true
+        trackChangeInFlight = false
         // Capture seek before stop/clear — clearing media makes ExoPlayer report 0.
         bridge.capturePositionFromPlayer()
         bridge.persistSession(force = true, commit = true)
         playJob?.cancel()
         warmJob?.cancel()
+        try { audioFocus?.abandon() } catch (_: Throwable) { /* ignore */ }
         try {
             player?.playWhenReady = false
             player?.stop()
@@ -430,6 +456,7 @@ class PlaybackService : MediaSessionService() {
         when {
             forcePause || (!forcePlay && p.isPlaying) -> {
                 p.pause()
+                try { audioFocus?.abandon() } catch (_: Throwable) { /* ignore */ }
                 bridge.persistSession(force = true)
                 refreshNotification()
             }
@@ -443,11 +470,13 @@ class PlaybackService : MediaSessionService() {
                 playEntry(target, start, playWhenReady = true)
             }
             p.playbackState == Player.STATE_ENDED -> {
+                audioFocus?.request()
                 p.seekTo(0)
                 p.play()
                 refreshNotification()
             }
             else -> {
+                audioFocus?.request()
                 p.play()
                 refreshNotification()
             }
@@ -502,11 +531,13 @@ class PlaybackService : MediaSessionService() {
     private fun tryRecoverYoutube(error: PlaybackException): Boolean {
         val entry = bridge.currentEntry ?: return false
         if (entry.kind != EntryKind.Youtube) return false
+        if (trackChangeInFlight) return false
         if (youtubeRetryId == entry.id) return false
         if (!isRecoverableIoError(error)) return false
         youtubeRetryId = entry.id
         val pos = player?.currentPosition?.coerceAtLeast(0L) ?: bridge.ui.value.positionMs
         Log.w(TAG, "Recoverable YouTube error (${error.errorCodeName}) — re-resolving at ${pos}ms")
+        // Drop any stale prefetch; the CDN URL likely expired mid-session.
         bridge.youtube.cancelPrefetch()
         bridge.setError(null)
         playEntry(entry, pos, playWhenReady = true)
@@ -568,24 +599,47 @@ class PlaybackService : MediaSessionService() {
         warmJob?.cancel()
         playJob = scope.launch {
             suppressEnded = true
+            trackChangeInFlight = true
             bridge.setError(null)
             bridge.setCurrent(entry)
             bridge.setPositionMs(startPositionMs.coerceAtLeast(0L))
             bridge.resolver.onNowPlayingChanged(entry, bridge.entries.size)
+
+            val p = player
+            if (p != null) {
+                // Stop the previous track immediately so Next doesn't keep the old audio
+                // while YouTube resolve / prepare runs (can take seconds).
+                try {
+                    p.playWhenReady = false
+                    p.stop()
+                    p.clearMediaItems()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Error stopping previous item before switch", t)
+                }
+            }
+            // Keep the media notification / FGS alive across the resolve gap.
+            if (playWhenReady) {
+                refreshNotification(forceForeground = true)
+            }
+
             try {
                 val mediaItem = withContext(Dispatchers.IO) { buildMediaItem(entry) }
-                val p = player ?: return@launch
+                val playerNow = player ?: return@launch
                 val startAt = startPositionMs.coerceAtLeast(0L)
-                // Pass start position into setMediaItem — seekTo right after prepare is flaky.
-                p.setMediaItem(mediaItem, startAt)
-                p.prepare()
-                p.playWhenReady = playWhenReady
                 if (playWhenReady) {
-                    p.play()
+                    audioFocus?.request()
+                }
+                // Pass start position into setMediaItem — seekTo right after prepare is flaky.
+                playerNow.setMediaItem(mediaItem, startAt)
+                playerNow.prepare()
+                playerNow.playWhenReady = playWhenReady
+                if (playWhenReady) {
+                    playerNow.play()
                 }
                 // Keep UI / prefs on the intended offset (player may still be buffering at 0).
                 bridge.setPositionMs(startAt)
                 suppressEnded = false
+                trackChangeInFlight = false
                 if (playWhenReady) {
                     youtubeRetryId = null
                     unplayableSkipCascade = 0
@@ -596,14 +650,17 @@ class PlaybackService : MediaSessionService() {
                     scheduleWarmPrefetch()
                 }
             } catch (t: CancellationException) {
+                // A newer playEntry cancelled us — leave trackChangeInFlight to that job.
                 throw t
             } catch (t: Throwable) {
                 suppressEnded = false
+                trackChangeInFlight = false
                 if (playWhenReady && looksLikeUnavailable(t) && trySkipUnplayable(entry, t)) {
                     return@launch
                 }
                 Log.e(TAG, "Failed to play ${entry.id}: ${t.message}", t)
                 bridge.setError(t.message ?: "Failed to play")
+                refreshNotification()
                 // Do not auto-advance — leave the row selected so the error is visible.
             }
         }

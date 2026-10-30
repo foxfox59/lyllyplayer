@@ -11,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import com.lyllyplayer.app.playback.PlaybackService
+import com.lyllyplayer.app.playlist.PlaylistEntry
 import com.lyllyplayer.app.playlist.PlaylistOpenMode
 import com.lyllyplayer.app.ui.PlayerScreen
 import com.lyllyplayer.app.ui.theme.LyllyPlayerTheme
@@ -24,25 +25,47 @@ class MainActivity : ComponentActivity() {
         if (uri == null) return@registerForActivityResult
         val result = bridge.repository.loadFromUri(uri)
         result.onSuccess { entries ->
-            ensureService()
-            when (bridge.repository.getPlaylistOpenMode()) {
-                PlaylistOpenMode.Append -> {
-                    val hadCurrent = bridge.ui.value.current != null || bridge.entries.isNotEmpty()
-                    bridge.appendPlaylist(entries, bridge.repository.playlistName)
-                    if (!hadCurrent) {
-                        bridge.repository.clearTrackPosition()
-                        entries.firstOrNull()?.let { bridge.playEntry(it, playWhenReady = true) }
-                    }
-                }
-                PlaylistOpenMode.Replace -> {
-                    bridge.setPlaylist(entries, bridge.repository.playlistName)
-                    bridge.repository.clearTrackPosition()
-                    entries.firstOrNull()?.let { bridge.playEntry(it, playWhenReady = true) }
-                }
-            }
+            applyImportedEntries(entries, bridge.repository.playlistName)
         }.onFailure { e ->
             bridge.setError(e.message ?: "Failed to load playlist")
         }
+    }
+
+    private val openLocalFiles = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isNullOrEmpty()) return@registerForActivityResult
+        bridge.repository.importLocalDocuments(uris)
+            .onSuccess { result ->
+                applyImportedEntries(result.entries, result.name)
+            }
+            .onFailure { e ->
+                bridge.setError(e.message ?: "Failed to import local files")
+            }
+    }
+
+    private val openLocalFolder = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        // Persistable tree grants need both read flag and (sometimes) write on older APIs.
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        try {
+            contentResolver.takePersistableUriPermission(uri, flags)
+        } catch (_: SecurityException) {
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: SecurityException) {
+                // Transient access only for this session.
+            }
+        }
+        bridge.repository.importLocalFolder(uri)
+            .onSuccess { result ->
+                applyImportedEntries(result.entries, result.name)
+            }
+            .onFailure { e ->
+                bridge.setError(e.message ?: "Failed to import folder")
+            }
     }
 
     private val requestNotif = registerForActivityResult(
@@ -76,6 +99,12 @@ class MainActivity : ComponentActivity() {
                             ),
                         )
                     },
+                    onImportLocalFiles = {
+                        openLocalFiles.launch(arrayOf("audio/*", "*/*"))
+                    },
+                    onImportLocalFolder = {
+                        openLocalFolder.launch(null)
+                    },
                     onQuit = {
                         bridge.capturePositionFromPlayer()
                         bridge.persistSession(force = true, commit = true)
@@ -97,6 +126,25 @@ class MainActivity : ComponentActivity() {
         bridge.capturePositionFromPlayer()
         bridge.persistSession(force = true, commit = true)
         super.onStop()
+    }
+
+    private fun applyImportedEntries(entries: List<PlaylistEntry>, name: String) {
+        ensureService()
+        when (bridge.repository.getPlaylistOpenMode()) {
+            PlaylistOpenMode.Append -> {
+                val hadCurrent = bridge.ui.value.current != null || bridge.entries.isNotEmpty()
+                bridge.appendPlaylist(entries, name)
+                if (!hadCurrent) {
+                    bridge.repository.clearTrackPosition()
+                    entries.firstOrNull()?.let { bridge.playEntry(it, playWhenReady = true) }
+                }
+            }
+            PlaylistOpenMode.Replace -> {
+                bridge.setPlaylist(entries, name)
+                bridge.repository.clearTrackPosition()
+                entries.firstOrNull()?.let { bridge.playEntry(it, playWhenReady = true) }
+            }
+        }
     }
 
     private fun restoreLastSession() {

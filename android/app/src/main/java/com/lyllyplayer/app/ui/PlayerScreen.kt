@@ -81,6 +81,8 @@ private data class ProgressUiSnapshot(
 fun PlayerScreen(
     bridge: PlayerBridge,
     onLoadPlaylist: () -> Unit,
+    onImportLocalFiles: () -> Unit,
+    onImportLocalFolder: () -> Unit,
     onQuit: () -> Unit,
 ) {
     val playlist by remember {
@@ -159,6 +161,8 @@ fun PlayerScreen(
             menuOpen = menuOpen,
             onMenuOpenChange = { menuOpen = it },
             onLoadPlaylist = onLoadPlaylist,
+            onImportLocalFiles = onImportLocalFiles,
+            onImportLocalFolder = onImportLocalFolder,
             onOpenOptions = {
                 openMode = bridge.repository.getPlaylistOpenMode()
                 optionsOpen = true
@@ -204,11 +208,19 @@ fun PlayerScreen(
     }
 
     if (optionsOpen) {
+        var includeSubfolders by remember {
+            mutableStateOf(bridge.repository.isIncludeSubfoldersOnFolderLoad())
+        }
         OptionsDialog(
             openMode = openMode,
             onOpenModeChange = { mode ->
                 openMode = mode
                 bridge.repository.setPlaylistOpenMode(mode)
+            },
+            includeSubfolders = includeSubfolders,
+            onIncludeSubfoldersChange = { enabled ->
+                includeSubfolders = enabled
+                bridge.repository.setIncludeSubfoldersOnFolderLoad(enabled)
             },
             spectrumEnabled = playlist.spectrumEnabled,
             onSpectrumEnabledChange = { enabled ->
@@ -228,6 +240,8 @@ private fun TransportBarHost(
     menuOpen: Boolean,
     onMenuOpenChange: (Boolean) -> Unit,
     onLoadPlaylist: () -> Unit,
+    onImportLocalFiles: () -> Unit,
+    onImportLocalFolder: () -> Unit,
     onOpenOptions: () -> Unit,
     onQuit: () -> Unit,
 ) {
@@ -243,6 +257,8 @@ private fun TransportBarHost(
         menuOpen = menuOpen,
         onMenuOpenChange = onMenuOpenChange,
         onLoadPlaylist = onLoadPlaylist,
+        onImportLocalFiles = onImportLocalFiles,
+        onImportLocalFolder = onImportLocalFolder,
         onOpenOptions = onOpenOptions,
         onQuit = onQuit,
         onPrevious = remember(bridge) { { bridge.previous() } },
@@ -286,6 +302,8 @@ private fun TransportBar(
     menuOpen: Boolean,
     onMenuOpenChange: (Boolean) -> Unit,
     onLoadPlaylist: () -> Unit,
+    onImportLocalFiles: () -> Unit,
+    onImportLocalFolder: () -> Unit,
     onOpenOptions: () -> Unit,
     onQuit: () -> Unit,
     onPrevious: () -> Unit,
@@ -314,6 +332,20 @@ private fun TransportBar(
                     onClick = {
                         onMenuOpenChange(false)
                         onLoadPlaylist()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Import local files") },
+                    onClick = {
+                        onMenuOpenChange(false)
+                        onImportLocalFiles()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Import local folder") },
+                    onClick = {
+                        onMenuOpenChange(false)
+                        onImportLocalFolder()
                     },
                 )
                 DropdownMenuItem(
